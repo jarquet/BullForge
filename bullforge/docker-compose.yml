@@ -1,4 +1,52 @@
-# Placeholder - will be filled in Task 11
-version: "3.9"
+version: "3.8"
 
-services: {}
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_USER: bullforge
+      POSTGRES_PASSWORD: bullforge_dev
+      POSTGRES_DB: bullforge
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bullforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  data_pipeline:
+    build:
+      context: .
+      dockerfile: services/data_pipeline/Dockerfile
+    env_file:
+      - .env
+    environment:
+      TIMESCALEDB_HOST: timescaledb
+      REDIS_HOST: redis
+    ports:
+      - "8080:8080"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  timescaledb_data:
+  redis_data:
