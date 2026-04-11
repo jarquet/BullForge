@@ -3,7 +3,9 @@ import pytest
 from shared.config import Settings
 
 
-def test_settings_loads_defaults():
+def test_settings_loads_defaults(monkeypatch):
+    monkeypatch.delenv("TIMESCALEDB_HOST", raising=False)
+    monkeypatch.delenv("REDIS_HOST", raising=False)
     settings = Settings()
     assert settings.timescaledb_host == "timescaledb"
     assert settings.timescaledb_port == 5432
