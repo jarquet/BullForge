@@ -5,6 +5,7 @@ from typing import AsyncIterator, List, Optional
 
 from alpaca.data.historical import StockHistoricalDataClient, CryptoHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest, CryptoBarsRequest
+from alpaca.data.enums import DataFeed
 from alpaca.data.timeframe import TimeFrame
 from alpaca.data.live import StockDataStream, CryptoDataStream
 
@@ -70,6 +71,7 @@ class AlpacaClient:
                 timeframe=tf,
                 start=start,
                 end=end,
+                feed=DataFeed.IEX,
             )
             barset = self._stock_historical.get_stock_bars(request)
 
@@ -82,6 +84,7 @@ class AlpacaClient:
         self._stock_stream = StockDataStream(
             api_key=self._settings.alpaca_api_key,
             secret_key=self._settings.alpaca_secret_key,
+            feed=DataFeed.IEX,
         )
         return self._stock_stream
 
