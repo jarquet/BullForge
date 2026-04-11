@@ -94,6 +94,9 @@ async def main() -> None:
             asyncio.get_event_loop().run_in_executor(None, crypto_stream.run)
         )
 
+    # Start consumer task on main loop to process bars from stream threads
+    consumer_task = asyncio.create_task(streamer.consume())
+
     logger.info("Data pipeline running. Press Ctrl+C to stop.")
 
     try:
@@ -102,6 +105,11 @@ async def main() -> None:
         pass
     finally:
         logger.info("Shutting down...")
+        consumer_task.cancel()
+        try:
+            await consumer_task
+        except asyncio.CancelledError:
+            pass
         await runner.cleanup()
         await redis_client.disconnect()
         await db.disconnect()
