@@ -72,7 +72,7 @@ Uses cross-instrument features (SPY trend, broad momentum) to classify current r
 
 ### Approach
 
-7 Docker Compose services (lean services), not 22+ microservices. Each service is a well-bounded container with a clear responsibility. Services split out only when there's a real reason.
+7 Docker Compose services (lean services). Each service is a well-bounded container with a clear responsibility. Services split out only when there's a real reason.
 
 ### Infrastructure
 
@@ -80,7 +80,8 @@ Uses cross-instrument features (SPY trend, broad momentum) to classify current r
 - **Database:** TimescaleDB for time-series data (bars, features, trades).
 - **Messaging:** Redis pub/sub for inter-service real-time events.
 - **Model storage:** Shared volume between nodes (simpler than a registry for now).
-- **Language:** Python primary. Rust via PyO3 bindings for compute-heavy bottlenecks (deferred until profiling shows need).
+- **Language:** Python primary (async wherever possible via asyncio/aiohttp). Rust via PyO3 bindings for compute-heavy bottlenecks (deferred until profiling shows need; Rust code should also be async/concurrent where applicable). Python concurrency (threading/multiprocessing) is acceptable where async is not feasible, but these cases should be flagged as candidates for future Rust optimization.
+- **Timestamps:** All timestamps system-wide are UTC. No timezone conversions except in the Dashboard UI (deferred — not needed for MVP).
 
 ### Node Assignment
 
@@ -173,14 +174,22 @@ Uses cross-instrument features (SPY trend, broad momentum) to classify current r
 
 ```
 Direction: LONG
-  Model L1: target +0.3%, stop -0.2%
-  Model L2: target +0.5%, stop -0.3%
-  Model L3: target +1.0%, stop -0.5%
+  Model L1: target +0.1%, stop -0.1%
+  Model L2: target +0.2%, stop -0.2%
+  Model L3: target +0.25%, stop -0.3%
+  Model L4: target +0.3%, stop -0.2%
+  Model L5: target +0.5%, stop -0.3%
+  Model L6: target +1.0%, stop -0.5%
+  Model L7: target +1.25%, stop -0.75%
 
 Direction: SHORT
-  Model S1: target +0.3%, stop -0.2%
-  Model S2: target +0.5%, stop -0.3%
-  Model S3: target +1.0%, stop -0.5%
+  Model S1: target +0.1%, stop -0.1%
+  Model S2: target +0.2%, stop -0.2%
+  Model S3: target +0.25%, stop -0.3%
+  Model S4: target +0.3%, stop -0.2%
+  Model S5: target +0.5%, stop -0.3%
+  Model S6: target +1.0%, stop -0.5%
+  Model S7: target +1.25%, stop -0.75%
 ```
 
 Target/stop values are configurable. The above are initial defaults.
@@ -285,7 +294,7 @@ Backtester applies the same trading rules as live (blackout windows, no shorts o
 
 - Uses `alpaca-py` SDK.
 - Paper trading mode by default; configurable switch to live.
-- Polls order status for fill confirmation (websocket optimization later).
+- Alpaca websocket for real-time order fill confirmation (not polling).
 - Idempotency via unique client_order_id per signal.
 
 **Trade outcome record:**
@@ -463,4 +472,4 @@ Destructive actions (Full Halt) require a confirmation prompt before executing. 
 | DGX Spark 2 | node-2 | GPU training workloads, backtesting |
 | Raspberry Pi 4 (x2) | TBD | Deferred — potential monitoring display or backup alerting |
 
-Nodes connected via NVIDIA ConnectX-7 NICs and local home WiFi.
+Nodes connected via NVIDIA ConnectX-7 NICs and local home ethernet.
