@@ -73,3 +73,15 @@ def test_label_direction_values():
             forward_return=0.0025,
             direction=2,
         )
+
+
+def test_label_rejects_non_positive_horizon():
+    with pytest.raises(ValueError, match="horizon_minutes"):
+        Label(
+            symbol="SPY",
+            timestamp=datetime(2026, 4, 10, 15, 30, 0, tzinfo=timezone.utc),
+            timeframe="1m",
+            horizon_minutes=0,
+            forward_return=0.0025,
+            direction=1,
+        )

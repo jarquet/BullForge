@@ -43,7 +43,7 @@ class FeatureRow:
     symbol: str
     timestamp: datetime
     timeframe: str  # "1m", "1d"
-    features: dict  # {"sma_20": 420.5, "rsi_14": 55.3, ...}
+    features: dict[str, float]  # {"sma_20": 420.5, "rsi_14": 55.3, ...}
 
     def __post_init__(self):
         if self.timestamp.tzinfo is None or self.timestamp.tzinfo != timezone.utc:
@@ -67,6 +67,10 @@ class Label:
         if self.timestamp.tzinfo is None or self.timestamp.tzinfo != timezone.utc:
             raise ValueError(
                 f"Label timestamp must be UTC, got tzinfo={self.timestamp.tzinfo}"
+            )
+        if self.horizon_minutes <= 0:
+            raise ValueError(
+                f"horizon_minutes must be positive, got {self.horizon_minutes}"
             )
         if self.direction not in (-1, 0, 1):
             raise ValueError(
