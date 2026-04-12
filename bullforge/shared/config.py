@@ -94,3 +94,23 @@ class Settings:
     model_min_samples: int = field(
         default_factory=lambda: int(os.getenv("MODEL_MIN_SAMPLES", "500"))
     )
+
+    # Execution service
+    execution_max_position_value: float = field(
+        default_factory=lambda: float(os.getenv("EXECUTION_MAX_POSITION_VALUE", "10000.0"))
+    )
+    execution_max_positions: int = field(
+        default_factory=lambda: int(os.getenv("EXECUTION_MAX_POSITIONS", "5"))
+    )
+    execution_max_exposure: float = field(
+        default_factory=lambda: float(os.getenv("EXECUTION_MAX_EXPOSURE", "0.5"))
+    )
+    execution_min_signal_strength: float = field(
+        default_factory=lambda: float(os.getenv("EXECUTION_MIN_SIGNAL_STRENGTH", "0.5"))
+    )
+    execution_min_confidence: float = field(
+        default_factory=lambda: float(os.getenv("EXECUTION_MIN_CONFIDENCE", "0.6"))
+    )
+    execution_min_agreement: int = field(
+        default_factory=lambda: int(os.getenv("EXECUTION_MIN_AGREEMENT", "2"))
+    )

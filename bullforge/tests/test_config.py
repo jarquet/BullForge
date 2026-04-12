@@ -51,3 +51,29 @@ def test_model_service_env_override(monkeypatch):
     s = Settings()
     assert s.model_artifacts_dir == "/tmp/models"
     assert s.model_min_samples == 1000
+
+
+def test_execution_defaults(settings):
+    assert settings.execution_max_position_value == 10000.0
+    assert settings.execution_max_positions == 5
+    assert settings.execution_max_exposure == 0.5
+    assert settings.execution_min_signal_strength == 0.5
+    assert settings.execution_min_confidence == 0.6
+    assert settings.execution_min_agreement == 2
+
+
+def test_execution_env_override(monkeypatch):
+    monkeypatch.setenv("EXECUTION_MAX_POSITION_VALUE", "20000.0")
+    monkeypatch.setenv("EXECUTION_MAX_POSITIONS", "10")
+    monkeypatch.setenv("EXECUTION_MAX_EXPOSURE", "0.8")
+    monkeypatch.setenv("EXECUTION_MIN_SIGNAL_STRENGTH", "0.7")
+    monkeypatch.setenv("EXECUTION_MIN_CONFIDENCE", "0.75")
+    monkeypatch.setenv("EXECUTION_MIN_AGREEMENT", "3")
+    from shared.config import Settings
+    s = Settings()
+    assert s.execution_max_position_value == 20000.0
+    assert s.execution_max_positions == 10
+    assert s.execution_max_exposure == 0.8
+    assert s.execution_min_signal_strength == 0.7
+    assert s.execution_min_confidence == 0.75
+    assert s.execution_min_agreement == 3
