@@ -37,3 +37,17 @@ def test_settings_parses_trading_window(monkeypatch):
     assert settings.trading_window_start.minute == 30
     assert settings.trading_window_end.hour == 14
     assert settings.trading_window_end.minute == 0
+
+
+def test_model_service_defaults(settings):
+    assert settings.model_artifacts_dir == "/app/models/artifacts"
+    assert settings.model_min_samples == 500
+
+
+def test_model_service_env_override(monkeypatch):
+    monkeypatch.setenv("MODEL_ARTIFACTS_DIR", "/tmp/models")
+    monkeypatch.setenv("MODEL_MIN_SAMPLES", "1000")
+    from shared.config import Settings
+    s = Settings()
+    assert s.model_artifacts_dir == "/tmp/models"
+    assert s.model_min_samples == 1000

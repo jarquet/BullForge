@@ -86,3 +86,11 @@ class Settings:
     trading_window_end: time = field(
         default_factory=lambda: _parse_time("TRADING_WINDOW_END", "14:00")
     )
+
+    # Model service
+    model_artifacts_dir: str = field(
+        default_factory=lambda: os.getenv("MODEL_ARTIFACTS_DIR", "/app/models/artifacts")
+    )
+    model_min_samples: int = field(
+        default_factory=lambda: int(os.getenv("MODEL_MIN_SAMPLES", "500"))
+    )
