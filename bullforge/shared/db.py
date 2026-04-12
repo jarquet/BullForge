@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import List, Optional
@@ -7,7 +8,7 @@ from typing import List, Optional
 import asyncpg
 
 from shared.config import Settings
-from shared.models import Bar
+from shared.models import Bar, FeatureRow, Label
 
 
 class Database:
@@ -109,6 +110,140 @@ class Database:
                 close=r["close"],
                 volume=r["volume"],
                 timeframe=timeframe,
+            )
+            for r in rows
+        ]
+
+    async def insert_feature_row(self, row: FeatureRow) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO features (symbol, timestamp, timeframe, features)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (symbol, timestamp, timeframe)
+                DO UPDATE SET features = $4
+                """,
+                row.symbol,
+                row.timestamp,
+                row.timeframe,
+                json.dumps(row.features),
+            )
+
+    async def insert_feature_rows(self, rows: List[FeatureRow]) -> None:
+        if not rows:
+            return
+        async with self.pool.acquire() as conn:
+            await conn.executemany(
+                """
+                INSERT INTO features (symbol, timestamp, timeframe, features)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (symbol, timestamp, timeframe)
+                DO UPDATE SET features = $4
+                """,
+                [
+                    (r.symbol, r.timestamp, r.timeframe, json.dumps(r.features))
+                    for r in rows
+                ],
+            )
+
+    async def query_feature_rows(
+        self,
+        symbol: str,
+        timeframe: str,
+        limit: int = 100,
+    ) -> List[FeatureRow]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT symbol, timestamp, timeframe, features
+                FROM features
+                WHERE symbol = $1 AND timeframe = $2
+                ORDER BY timestamp DESC
+                LIMIT $3
+                """,
+                symbol,
+                timeframe,
+                limit,
+            )
+        return [
+            FeatureRow(
+                symbol=r["symbol"],
+                timestamp=r["timestamp"],
+                timeframe=r["timeframe"],
+                features=json.loads(r["features"]),
+            )
+            for r in rows
+        ]
+
+    async def insert_label(self, label: Label) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO labels (symbol, timestamp, timeframe, horizon_minutes,
+                                    forward_return, direction)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (symbol, timestamp, timeframe, horizon_minutes)
+                DO UPDATE SET forward_return = $5, direction = $6
+                """,
+                label.symbol,
+                label.timestamp,
+                label.timeframe,
+                label.horizon_minutes,
+                label.forward_return,
+                label.direction,
+            )
+
+    async def insert_labels(self, labels: List[Label]) -> None:
+        if not labels:
+            return
+        async with self.pool.acquire() as conn:
+            await conn.executemany(
+                """
+                INSERT INTO labels (symbol, timestamp, timeframe, horizon_minutes,
+                                    forward_return, direction)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (symbol, timestamp, timeframe, horizon_minutes)
+                DO UPDATE SET forward_return = $5, direction = $6
+                """,
+                [
+                    (
+                        l.symbol, l.timestamp, l.timeframe,
+                        l.horizon_minutes, l.forward_return, l.direction,
+                    )
+                    for l in labels
+                ],
+            )
+
+    async def query_labels(
+        self,
+        symbol: str,
+        timeframe: str,
+        horizon_minutes: int,
+        limit: int = 100,
+    ) -> List[Label]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT symbol, timestamp, timeframe, horizon_minutes,
+                       forward_return, direction
+                FROM labels
+                WHERE symbol = $1 AND timeframe = $2 AND horizon_minutes = $3
+                ORDER BY timestamp DESC
+                LIMIT $4
+                """,
+                symbol,
+                timeframe,
+                horizon_minutes,
+                limit,
+            )
+        return [
+            Label(
+                symbol=r["symbol"],
+                timestamp=r["timestamp"],
+                timeframe=r["timeframe"],
+                horizon_minutes=r["horizon_minutes"],
+                forward_return=r["forward_return"],
+                direction=r["direction"],
             )
             for r in rows
         ]
