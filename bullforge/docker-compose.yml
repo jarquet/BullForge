@@ -63,6 +63,30 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  model_service:
+    build:
+      context: .
+      dockerfile: services/model_service/Dockerfile
+    env_file:
+      - .env
+    environment:
+      TIMESCALEDB_HOST: timescaledb
+      REDIS_HOST: redis
+      MODEL_ARTIFACTS_DIR: /app/models/artifacts
+    ports:
+      - "18081:8081"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      feature_engine:
+        condition: service_started
+    volumes:
+      - model_artifacts:/app/models/artifacts
+    restart: unless-stopped
+
 volumes:
   timescaledb_data:
   redis_data:
+  model_artifacts:
