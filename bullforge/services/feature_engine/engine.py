@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
 import logging
 from datetime import timezone
-from typing import List
+from typing import List, Optional as OptionalType
 
 import numpy as np
 import pandas as pd
@@ -10,6 +11,7 @@ import pandas as pd
 from shared.config import Settings
 from shared.db import Database
 from shared.models import Bar, FeatureRow, Label
+from shared.redis import RedisClient
 from services.feature_engine.registry import FeatureRegistry
 from services.feature_engine.labels import compute_forward_return_labels
 
@@ -25,6 +27,7 @@ class FeatureEngine:
         label_horizons: List[int],
         label_threshold: float = 0.0,
         min_bars: int = 50,
+        redis_client: OptionalType[RedisClient] = None,
     ):
         self._settings = settings
         self._db = db
@@ -32,6 +35,7 @@ class FeatureEngine:
         self._label_horizons = label_horizons
         self._label_threshold = label_threshold
         self._min_bars = min_bars
+        self._redis_client = redis_client
 
     def _bars_to_dataframe(self, bars: List[Bar]) -> pd.DataFrame:
         if not bars:
@@ -88,6 +92,12 @@ class FeatureEngine:
             "Computed %d feature rows for %s %s",
             len(feature_rows), symbol, timeframe,
         )
+
+        if self._redis_client:
+            await self._redis_client.publish(
+                "feature:updates",
+                json.dumps({"symbol": symbol, "timeframe": timeframe}),
+            )
 
     async def compute_labels_for_symbol(
         self, symbol: str, timeframe: str

@@ -50,6 +50,7 @@ async def main() -> None:
         label_horizons=[5, 10, 30],
         label_threshold=0.001,
         min_bars=50,
+        redis_client=redis_client,
     )
 
     # Run initial full computation

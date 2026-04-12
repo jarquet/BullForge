@@ -145,3 +145,41 @@ async def test_compute_skips_insufficient_bars(mock_settings, simple_registry):
 
     # Should not insert anything with insufficient bars
     mock_db.insert_feature_rows.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_compute_features_publishes_update(mock_settings, mock_db, simple_registry):
+    mock_redis = AsyncMock()
+    mock_redis.publish = AsyncMock()
+
+    engine = FeatureEngine(
+        settings=mock_settings,
+        db=mock_db,
+        registry=simple_registry,
+        label_horizons=[5],
+        redis_client=mock_redis,
+    )
+
+    await engine.compute_features_for_symbol("SPY", "1m")
+
+    mock_redis.publish.assert_called_once()
+    call_args = mock_redis.publish.call_args
+    assert call_args[0][0] == "feature:updates"
+    import json
+    payload = json.loads(call_args[0][1])
+    assert payload["symbol"] == "SPY"
+    assert payload["timeframe"] == "1m"
+
+
+@pytest.mark.asyncio
+async def test_compute_features_no_publish_without_redis(mock_settings, mock_db, simple_registry):
+    engine = FeatureEngine(
+        settings=mock_settings,
+        db=mock_db,
+        registry=simple_registry,
+        label_horizons=[5],
+    )
+
+    # Should not raise even without redis_client
+    await engine.compute_features_for_symbol("SPY", "1m")
+    mock_db.insert_feature_rows.assert_called_once()
