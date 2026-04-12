@@ -76,3 +76,56 @@ class Label:
             raise ValueError(
                 f"Label direction must be -1, 0, or 1, got {self.direction}"
             )
+
+
+@dataclass(frozen=True)
+class ModelMetadata:
+    symbol: str
+    timeframe: str  # "1m", "1d"
+    horizon_minutes: int
+    model_type: str  # "gradient_boost", "logistic_regression"
+    artifact_path: str
+    metrics: dict[str, float]
+    feature_columns: list[str]
+    trained_at: datetime
+    train_samples: int
+    test_samples: int
+    is_active: bool = True
+    id: Optional[int] = None
+
+    def __post_init__(self):
+        if self.trained_at.tzinfo is None or self.trained_at.tzinfo != timezone.utc:
+            raise ValueError(
+                f"ModelMetadata trained_at must be UTC, got tzinfo={self.trained_at.tzinfo}"
+            )
+        if self.horizon_minutes <= 0:
+            raise ValueError(
+                f"horizon_minutes must be positive, got {self.horizon_minutes}"
+            )
+        if not self.feature_columns:
+            raise ValueError("feature_columns must not be empty")
+
+
+@dataclass(frozen=True)
+class Prediction:
+    symbol: str
+    timestamp: datetime
+    timeframe: str  # "1m", "1d"
+    horizon_minutes: int
+    model_id: int
+    predicted_direction: int  # -1 = down, 0 = flat, 1 = up
+    confidence: float  # probability of predicted class, 0.0–1.0
+
+    def __post_init__(self):
+        if self.timestamp.tzinfo is None or self.timestamp.tzinfo != timezone.utc:
+            raise ValueError(
+                f"Prediction timestamp must be UTC, got tzinfo={self.timestamp.tzinfo}"
+            )
+        if self.predicted_direction not in (-1, 0, 1):
+            raise ValueError(
+                f"predicted_direction must be -1, 0, or 1, got {self.predicted_direction}"
+            )
+        if not (0.0 <= self.confidence <= 1.0):
+            raise ValueError(
+                f"confidence must be between 0.0 and 1.0, got {self.confidence}"
+            )
