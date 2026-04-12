@@ -45,6 +45,24 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  feature_engine:
+    build:
+      context: .
+      dockerfile: services/feature_engine/Dockerfile
+    env_file:
+      - .env
+    environment:
+      TIMESCALEDB_HOST: timescaledb
+      REDIS_HOST: redis
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      data_pipeline:
+        condition: service_started
+    restart: unless-stopped
+
 volumes:
   timescaledb_data:
   redis_data:
