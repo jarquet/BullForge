@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class DatasetBuilder:
-    def __init__(self, db: Database, min_samples: int = 50):
+    def __init__(self, db: Database, min_samples: int = 500):
         self._db = db
         self._min_samples = min_samples
 

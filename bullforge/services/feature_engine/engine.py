@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import timezone
-from typing import List, Optional as OptionalType
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
@@ -27,7 +27,7 @@ class FeatureEngine:
         label_horizons: List[int],
         label_threshold: float = 0.0,
         min_bars: int = 50,
-        redis_client: OptionalType[RedisClient] = None,
+        redis_client: Optional[RedisClient] = None,
     ):
         self._settings = settings
         self._db = db

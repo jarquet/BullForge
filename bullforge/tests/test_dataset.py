@@ -35,7 +35,7 @@ async def test_dataset_builder_builds_dataframe():
     mock_db = AsyncMock()
     mock_db.query_training_data = AsyncMock(return_value=_make_training_rows(100))
 
-    builder = DatasetBuilder(mock_db)
+    builder = DatasetBuilder(mock_db, min_samples=50)
     result = await builder.build("SPY", "1m", 5, limit=1000)
 
     assert result is not None
@@ -67,7 +67,7 @@ async def test_dataset_builder_returns_none_empty():
     mock_db = AsyncMock()
     mock_db.query_training_data = AsyncMock(return_value=[])
 
-    builder = DatasetBuilder(mock_db)
+    builder = DatasetBuilder(mock_db, min_samples=500)
     result = await builder.build("SPY", "1m", 5)
 
     assert result is None

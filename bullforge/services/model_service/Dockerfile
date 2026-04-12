@@ -5,7 +5,6 @@ WORKDIR /app
 # Install dependencies
 COPY services/model_service/requirements.txt /app/services/model_service/requirements.txt
 RUN pip install --no-cache-dir -r services/model_service/requirements.txt
-RUN pip install --no-cache-dir asyncpg redis
 
 # Copy shared code and service code
 COPY shared/ /app/shared/
