@@ -8,7 +8,7 @@ from typing import List, Optional
 import asyncpg
 
 from shared.config import Settings
-from shared.models import Bar, FeatureRow, Label
+from shared.models import Bar, FeatureRow, Label, ModelMetadata, Prediction
 
 
 class Database:
@@ -244,6 +244,224 @@ class Database:
                 horizon_minutes=r["horizon_minutes"],
                 forward_return=r["forward_return"],
                 direction=r["direction"],
+            )
+            for r in rows
+        ]
+
+    async def query_training_data(
+        self,
+        symbol: str,
+        timeframe: str,
+        horizon_minutes: int,
+        limit: int = 10000,
+    ) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT f.timestamp, f.features, l.direction, l.forward_return
+                FROM features f
+                INNER JOIN labels l
+                    ON f.symbol = l.symbol
+                    AND f.timestamp = l.timestamp
+                    AND f.timeframe = l.timeframe
+                WHERE f.symbol = $1 AND f.timeframe = $2 AND l.horizon_minutes = $3
+                ORDER BY f.timestamp ASC
+                LIMIT $4
+                """,
+                symbol,
+                timeframe,
+                horizon_minutes,
+                limit,
+            )
+        return [dict(r) for r in rows]
+
+    async def insert_model_metadata(self, meta: ModelMetadata) -> int:
+        async with self.pool.acquire() as conn:
+            row_id = await conn.fetchval(
+                """
+                INSERT INTO model_registry
+                    (symbol, timeframe, horizon_minutes, model_type, artifact_path,
+                     metrics, feature_columns, trained_at, train_samples, test_samples,
+                     is_active)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                RETURNING id
+                """,
+                meta.symbol,
+                meta.timeframe,
+                meta.horizon_minutes,
+                meta.model_type,
+                meta.artifact_path,
+                json.dumps(meta.metrics),
+                json.dumps(meta.feature_columns),
+                meta.trained_at,
+                meta.train_samples,
+                meta.test_samples,
+                meta.is_active,
+            )
+        return row_id
+
+    async def query_active_model(
+        self,
+        symbol: str,
+        timeframe: str,
+        horizon_minutes: int,
+    ) -> Optional[ModelMetadata]:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id, symbol, timeframe, horizon_minutes, model_type,
+                       artifact_path, metrics, feature_columns, trained_at,
+                       train_samples, test_samples, is_active
+                FROM model_registry
+                WHERE symbol = $1 AND timeframe = $2
+                    AND horizon_minutes = $3 AND is_active = TRUE
+                ORDER BY trained_at DESC
+                LIMIT 1
+                """,
+                symbol,
+                timeframe,
+                horizon_minutes,
+            )
+        if row is None:
+            return None
+        return ModelMetadata(
+            id=row["id"],
+            symbol=row["symbol"],
+            timeframe=row["timeframe"],
+            horizon_minutes=row["horizon_minutes"],
+            model_type=row["model_type"],
+            artifact_path=row["artifact_path"],
+            metrics=json.loads(row["metrics"]),
+            feature_columns=json.loads(row["feature_columns"]),
+            trained_at=row["trained_at"],
+            train_samples=row["train_samples"],
+            test_samples=row["test_samples"],
+            is_active=row["is_active"],
+        )
+
+    async def query_all_active_models(self) -> List[ModelMetadata]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, symbol, timeframe, horizon_minutes, model_type,
+                       artifact_path, metrics, feature_columns, trained_at,
+                       train_samples, test_samples, is_active
+                FROM model_registry
+                WHERE is_active = TRUE
+                ORDER BY symbol, timeframe, horizon_minutes
+                """
+            )
+        return [
+            ModelMetadata(
+                id=r["id"],
+                symbol=r["symbol"],
+                timeframe=r["timeframe"],
+                horizon_minutes=r["horizon_minutes"],
+                model_type=r["model_type"],
+                artifact_path=r["artifact_path"],
+                metrics=json.loads(r["metrics"]),
+                feature_columns=json.loads(r["feature_columns"]),
+                trained_at=r["trained_at"],
+                train_samples=r["train_samples"],
+                test_samples=r["test_samples"],
+                is_active=r["is_active"],
+            )
+            for r in rows
+        ]
+
+    async def deactivate_models(
+        self,
+        symbol: str,
+        timeframe: str,
+        horizon_minutes: int,
+    ) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE model_registry
+                SET is_active = FALSE
+                WHERE symbol = $1 AND timeframe = $2
+                    AND horizon_minutes = $3 AND is_active = TRUE
+                """,
+                symbol,
+                timeframe,
+                horizon_minutes,
+            )
+
+    async def insert_prediction(self, pred: Prediction) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO predictions
+                    (symbol, timestamp, timeframe, horizon_minutes,
+                     model_id, predicted_direction, confidence)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (symbol, timestamp, timeframe, horizon_minutes)
+                DO UPDATE SET model_id = $5, predicted_direction = $6, confidence = $7
+                """,
+                pred.symbol,
+                pred.timestamp,
+                pred.timeframe,
+                pred.horizon_minutes,
+                pred.model_id,
+                pred.predicted_direction,
+                pred.confidence,
+            )
+
+    async def insert_predictions(self, preds: List[Prediction]) -> None:
+        if not preds:
+            return
+        async with self.pool.acquire() as conn:
+            await conn.executemany(
+                """
+                INSERT INTO predictions
+                    (symbol, timestamp, timeframe, horizon_minutes,
+                     model_id, predicted_direction, confidence)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (symbol, timestamp, timeframe, horizon_minutes)
+                DO UPDATE SET model_id = $5, predicted_direction = $6, confidence = $7
+                """,
+                [
+                    (
+                        p.symbol, p.timestamp, p.timeframe,
+                        p.horizon_minutes, p.model_id,
+                        p.predicted_direction, p.confidence,
+                    )
+                    for p in preds
+                ],
+            )
+
+    async def query_predictions(
+        self,
+        symbol: str,
+        timeframe: str,
+        horizon_minutes: int,
+        limit: int = 100,
+    ) -> List[Prediction]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT symbol, timestamp, timeframe, horizon_minutes,
+                       model_id, predicted_direction, confidence
+                FROM predictions
+                WHERE symbol = $1 AND timeframe = $2 AND horizon_minutes = $3
+                ORDER BY timestamp DESC
+                LIMIT $4
+                """,
+                symbol,
+                timeframe,
+                horizon_minutes,
+                limit,
+            )
+        return [
+            Prediction(
+                symbol=r["symbol"],
+                timestamp=r["timestamp"],
+                timeframe=r["timeframe"],
+                horizon_minutes=r["horizon_minutes"],
+                model_id=r["model_id"],
+                predicted_direction=r["predicted_direction"],
+                confidence=r["confidence"],
             )
             for r in rows
         ]
