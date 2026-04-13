@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+echo "Stopping and removing test containers..."
+docker compose -f docker-compose.yml -f docker-compose.test.yml rm -fsv timescaledb-test redis-test test-runner 2>/dev/null || true
+
+echo "Removing test volumes..."
+docker volume rm bullforge_timescaledb_test_data bullforge_redis_test_data 2>/dev/null || true
+
+echo "Removing test runner image..."
+docker image rm bullforge-test-runner 2>/dev/null || true
+
+echo "Test infrastructure pruned."
