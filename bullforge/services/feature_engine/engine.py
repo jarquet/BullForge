@@ -53,9 +53,9 @@ class FeatureEngine:
         })
 
     async def compute_features_for_symbol(
-        self, symbol: str, timeframe: str
+        self, symbol: str, timeframe: str, limit: int = 500
     ) -> None:
-        bars = await self._db.query_bars(symbol, timeframe, limit=500)
+        bars = await self._db.query_bars(symbol, timeframe, limit=limit)
         if len(bars) < self._min_bars:
             logger.warning(
                 "Insufficient bars for %s %s: %d < %d",
@@ -100,9 +100,9 @@ class FeatureEngine:
             )
 
     async def compute_labels_for_symbol(
-        self, symbol: str, timeframe: str
+        self, symbol: str, timeframe: str, limit: int = 500
     ) -> None:
-        bars = await self._db.query_bars(symbol, timeframe, limit=500)
+        bars = await self._db.query_bars(symbol, timeframe, limit=limit)
         if len(bars) < self._min_bars:
             logger.warning(
                 "Insufficient bars for labels %s %s: %d < %d",
@@ -144,9 +144,17 @@ class FeatureEngine:
             + self._settings.trading_symbols_crypto
         )
 
+        # Use a large limit for initial bulk computation to process all
+        # available historical bars, not just the last 500.
+        bulk_limit = 300_000
+
         for symbol in all_symbols:
             for timeframe in ["1m", "1d"]:
-                await self.compute_features_for_symbol(symbol, timeframe)
-                await self.compute_labels_for_symbol(symbol, timeframe)
+                await self.compute_features_for_symbol(
+                    symbol, timeframe, limit=bulk_limit,
+                )
+                await self.compute_labels_for_symbol(
+                    symbol, timeframe, limit=bulk_limit,
+                )
 
         logger.info("Feature engine compute_all complete")
