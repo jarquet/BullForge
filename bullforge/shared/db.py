@@ -522,8 +522,11 @@ class Database:
         symbol: Optional[str] = None,
         status: Optional[str] = None,
         limit: int = 100,
-    ) -> list[dict]:
-        query = "SELECT * FROM orders WHERE TRUE"
+    ) -> list[Order]:
+        query = """SELECT id, symbol, side, quantity, order_type, submitted_at,
+                          signal_strength, alpaca_order_id, status,
+                          filled_at, filled_price, filled_quantity, limit_price
+                   FROM orders WHERE TRUE"""
         args: list = []
         idx = 1
 
@@ -542,4 +545,21 @@ class Database:
 
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(query, *args)
-        return [dict(r) for r in rows]
+        return [
+            Order(
+                id=r["id"],
+                symbol=r["symbol"],
+                side=r["side"],
+                quantity=r["quantity"],
+                order_type=r["order_type"],
+                submitted_at=r["submitted_at"],
+                signal_strength=r["signal_strength"],
+                alpaca_order_id=r["alpaca_order_id"],
+                status=r["status"],
+                filled_at=r["filled_at"],
+                filled_price=r["filled_price"],
+                filled_quantity=r["filled_quantity"],
+                limit_price=r["limit_price"],
+            )
+            for r in rows
+        ]

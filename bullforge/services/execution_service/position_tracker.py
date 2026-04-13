@@ -25,7 +25,8 @@ class PositionTracker:
         return dict(self._positions)
 
     def get_position(self, symbol: str) -> Optional[dict]:
-        return self._positions.get(symbol)
+        pos = self._positions.get(symbol)
+        return dict(pos) if pos is not None else None
 
     def has_position(self, symbol: str) -> bool:
         return symbol in self._positions

@@ -88,9 +88,10 @@ class AlpacaBroker:
             filled_at = order.filled_at
             if filled_at.tzinfo is None:
                 filled_at = filled_at.replace(tzinfo=timezone.utc)
+        status = order.status.value if hasattr(order.status, "value") else str(order.status)
         return {
             "id": str(order.id),
-            "status": str(order.status),
+            "status": status,
             "filled_qty": float(order.filled_qty) if order.filled_qty else None,
             "filled_avg_price": float(order.filled_avg_price) if order.filled_avg_price else None,
             "filled_at": filled_at,

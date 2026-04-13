@@ -1,7 +1,6 @@
 import pytest
-import pytest_asyncio
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 from services.execution_service.alpaca_broker import AlpacaBroker
 
 
@@ -141,3 +140,21 @@ async def test_close_position_fails(broker, mock_client):
     result = await broker.close_position("SPY")
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_order_handles_enum_status(broker, mock_client):
+    mock_order = MagicMock()
+    mock_order.id = "order-abc-123"
+    mock_status = MagicMock()
+    mock_status.value = "partially_filled"
+    mock_order.status = mock_status
+    mock_order.filled_qty = "5"
+    mock_order.filled_avg_price = "421.00"
+    mock_order.filled_at = datetime(2026, 4, 12, 14, 0, 2, tzinfo=timezone.utc)
+    mock_client.get_order_by_id.return_value = mock_order
+
+    result = await broker.get_order("order-abc-123")
+
+    assert result["status"] == "partially_filled"
+    assert result["filled_qty"] == 5.0

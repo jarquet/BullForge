@@ -1,7 +1,5 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from aiohttp import web
-from aiohttp.test_utils import AioHTTPTestCase, unittest_run_loop
 from services.execution_service.health import create_health_app
 
 

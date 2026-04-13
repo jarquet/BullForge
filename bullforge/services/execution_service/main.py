@@ -57,33 +57,36 @@ async def main() -> None:
     )
 
     async def on_prediction(message: str) -> None:
-        data = json.loads(message)
-        symbol = data["symbol"]
-        timeframe = data["timeframe"]
-        predictions = data["predictions"]
+        try:
+            data = json.loads(message)
+            symbol = data["symbol"]
+            timeframe = data["timeframe"]
+            predictions = data["predictions"]
 
-        signal_obj = aggregator.aggregate(
-            symbol=symbol,
-            timestamp=datetime.now(timezone.utc),
-            predictions=predictions,
-        )
-        if signal_obj is None:
-            logger.debug("No actionable signal for %s %s", symbol, timeframe)
-            return
-
-        bars = await db.query_bars(symbol, "1m", limit=1)
-        if not bars:
-            logger.warning("No price data for %s", symbol)
-            return
-        current_price = bars[0].close
-
-        order = await executor.process_signal(signal_obj, current_price)
-        if order:
-            logger.info(
-                "Executed: %s %s %s qty=%.1f status=%s",
-                order.side, order.symbol, order.order_type,
-                order.quantity, order.status,
+            signal_obj = aggregator.aggregate(
+                symbol=symbol,
+                timestamp=datetime.now(timezone.utc),
+                predictions=predictions,
             )
+            if signal_obj is None:
+                logger.debug("No actionable signal for %s %s", symbol, timeframe)
+                return
+
+            bars = await db.query_bars(symbol, "1m", limit=1)
+            if not bars:
+                logger.warning("No price data for %s", symbol)
+                return
+            current_price = bars[0].close
+
+            order = await executor.process_signal(signal_obj, current_price)
+            if order:
+                logger.info(
+                    "Executed: %s %s %s qty=%.1f status=%s",
+                    order.side, order.symbol, order.order_type,
+                    order.quantity, order.status,
+                )
+        except Exception:
+            logger.exception("Error processing prediction message")
 
     await redis_client.subscribe("model:predictions", on_prediction)
     logger.info("Subscribed to model:predictions")

@@ -26,6 +26,7 @@ class OrderExecutor:
         db: Database,
         redis_client: Optional[RedisClient] = None,
         fill_check_delay: float = 1.0,
+        fill_check_retries: int = 3,
     ):
         self._broker = broker
         self._risk = risk_manager
@@ -33,6 +34,7 @@ class OrderExecutor:
         self._db = db
         self._redis = redis_client
         self._fill_check_delay = fill_check_delay
+        self._fill_check_retries = fill_check_retries
 
     async def process_signal(
         self, signal: TradingSignal, current_price: float,
@@ -63,11 +65,15 @@ class OrderExecutor:
 
     async def _execute_open(
         self, signal: TradingSignal, qty: int,
-    ) -> Order:
+    ) -> Optional[Order]:
         side = "buy" if signal.direction == 1 else "sell"
-        alpaca_id = await self._broker.submit_market_order(
-            signal.symbol, qty, side,
-        )
+        try:
+            alpaca_id = await self._broker.submit_market_order(
+                signal.symbol, qty, side,
+            )
+        except Exception as e:
+            logger.error("Failed to submit order for %s: %s", signal.symbol, e)
+            return None
 
         now = datetime.now(timezone.utc)
         order = Order(
@@ -115,29 +121,47 @@ class OrderExecutor:
         return filled_order
 
     async def _check_fill(self, order: Order, order_id: int) -> Order:
-        if self._fill_check_delay > 0:
-            await asyncio.sleep(self._fill_check_delay)
+        for attempt in range(self._fill_check_retries):
+            if self._fill_check_delay > 0:
+                await asyncio.sleep(self._fill_check_delay)
 
-        alpaca_order = await self._broker.get_order(order.alpaca_order_id)
-        status = alpaca_order["status"]
+            try:
+                alpaca_order = await self._broker.get_order(order.alpaca_order_id)
+            except Exception as e:
+                logger.warning(
+                    "Fill check failed for %s (attempt %d/%d): %s",
+                    order.alpaca_order_id, attempt + 1,
+                    self._fill_check_retries, e,
+                )
+                continue
 
-        if status in ("filled", "partially_filled"):
-            await self._db.update_order_status(
-                order_id,
-                status=status,
-                filled_at=alpaca_order.get("filled_at"),
-                filled_price=alpaca_order.get("filled_avg_price"),
-                filled_quantity=alpaca_order.get("filled_qty"),
-            )
-            return dataclasses.replace(
-                order,
-                status=status,
-                filled_at=alpaca_order.get("filled_at"),
-                filled_price=alpaca_order.get("filled_avg_price"),
-                filled_quantity=alpaca_order.get("filled_qty"),
-                id=order_id,
-            )
+            status = alpaca_order["status"]
 
+            if status in ("filled", "partially_filled"):
+                await self._db.update_order_status(
+                    order_id,
+                    status=status,
+                    filled_at=alpaca_order.get("filled_at"),
+                    filled_price=alpaca_order.get("filled_avg_price"),
+                    filled_quantity=alpaca_order.get("filled_qty"),
+                )
+                return dataclasses.replace(
+                    order,
+                    status=status,
+                    filled_at=alpaca_order.get("filled_at"),
+                    filled_price=alpaca_order.get("filled_avg_price"),
+                    filled_quantity=alpaca_order.get("filled_qty"),
+                    id=order_id,
+                )
+
+            if status in ("cancelled", "rejected"):
+                await self._db.update_order_status(order_id, status=status)
+                return dataclasses.replace(order, status=status, id=order_id)
+
+        logger.warning(
+            "Fill check exhausted %d retries for %s",
+            self._fill_check_retries, order.alpaca_order_id,
+        )
         return dataclasses.replace(order, id=order_id)
 
     async def _publish_order_event(self, order: Order) -> None:

@@ -1,5 +1,4 @@
 import pytest
-import pytest_asyncio
 from unittest.mock import AsyncMock
 from services.execution_service.position_tracker import PositionTracker
 

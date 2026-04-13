@@ -1,7 +1,6 @@
 import pytest
-import pytest_asyncio
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from shared.models import TradingSignal, Order
 from services.execution_service.order_executor import OrderExecutor
 
@@ -157,3 +156,126 @@ async def test_process_signal_no_action_same_direction(
 
     assert order is None
     mock_broker.submit_market_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_broker_failure_returns_none(
+    mock_broker, mock_risk, mock_tracker, mock_db,
+):
+    mock_broker.submit_market_order = AsyncMock(
+        side_effect=Exception("connection refused"),
+    )
+    executor = OrderExecutor(
+        broker=mock_broker,
+        risk_manager=mock_risk,
+        position_tracker=mock_tracker,
+        db=mock_db,
+        fill_check_delay=0,
+    )
+
+    order = await executor.process_signal(_signal(), current_price=420.0)
+
+    assert order is None
+    mock_db.insert_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fill_check_retries_until_filled(
+    mock_broker, mock_risk, mock_tracker, mock_db,
+):
+    mock_broker.get_order = AsyncMock(side_effect=[
+        {"id": "alp-order-123", "status": "submitted",
+         "filled_qty": None, "filled_avg_price": None, "filled_at": None},
+        {"id": "alp-order-123", "status": "filled",
+         "filled_qty": 10.0, "filled_avg_price": 420.50,
+         "filled_at": datetime(2026, 4, 12, 14, 0, 1, tzinfo=timezone.utc)},
+    ])
+    executor = OrderExecutor(
+        broker=mock_broker,
+        risk_manager=mock_risk,
+        position_tracker=mock_tracker,
+        db=mock_db,
+        fill_check_delay=0,
+        fill_check_retries=3,
+    )
+
+    order = await executor.process_signal(_signal(), current_price=420.0)
+
+    assert order is not None
+    assert order.status == "filled"
+    assert mock_broker.get_order.call_count == 2
+    mock_db.update_order_status.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_fill_check_gives_up_after_retries(
+    mock_broker, mock_risk, mock_tracker, mock_db,
+):
+    mock_broker.get_order = AsyncMock(return_value={
+        "id": "alp-order-123", "status": "submitted",
+        "filled_qty": None, "filled_avg_price": None, "filled_at": None,
+    })
+    executor = OrderExecutor(
+        broker=mock_broker,
+        risk_manager=mock_risk,
+        position_tracker=mock_tracker,
+        db=mock_db,
+        fill_check_delay=0,
+        fill_check_retries=2,
+    )
+
+    order = await executor.process_signal(_signal(), current_price=420.0)
+
+    assert order is not None
+    assert order.status == "submitted"
+    assert mock_broker.get_order.call_count == 2
+    mock_db.update_order_status.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fill_check_handles_cancelled(
+    mock_broker, mock_risk, mock_tracker, mock_db,
+):
+    mock_broker.get_order = AsyncMock(return_value={
+        "id": "alp-order-123", "status": "cancelled",
+        "filled_qty": None, "filled_avg_price": None, "filled_at": None,
+    })
+    executor = OrderExecutor(
+        broker=mock_broker,
+        risk_manager=mock_risk,
+        position_tracker=mock_tracker,
+        db=mock_db,
+        fill_check_delay=0,
+    )
+
+    order = await executor.process_signal(_signal(), current_price=420.0)
+
+    assert order is not None
+    assert order.status == "cancelled"
+    mock_db.update_order_status.assert_called_once_with(42, status="cancelled")
+
+
+@pytest.mark.asyncio
+async def test_fill_check_retries_on_broker_error(
+    mock_broker, mock_risk, mock_tracker, mock_db,
+):
+    mock_broker.get_order = AsyncMock(side_effect=[
+        Exception("timeout"),
+        {"id": "alp-order-123", "status": "filled",
+         "filled_qty": 10.0, "filled_avg_price": 420.50,
+         "filled_at": datetime(2026, 4, 12, 14, 0, 1, tzinfo=timezone.utc)},
+    ])
+    executor = OrderExecutor(
+        broker=mock_broker,
+        risk_manager=mock_risk,
+        position_tracker=mock_tracker,
+        db=mock_db,
+        fill_check_delay=0,
+        fill_check_retries=3,
+    )
+
+    order = await executor.process_signal(_signal(), current_price=420.0)
+
+    assert order is not None
+    assert order.status == "filled"
+    assert mock_broker.get_order.call_count == 2

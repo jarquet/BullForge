@@ -1,7 +1,5 @@
-import json
 import pytest
-import pytest_asyncio
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 from shared.models import Order
 
@@ -102,8 +100,10 @@ async def test_query_orders_by_symbol(settings, mock_pool):
     orders = await db.query_orders(symbol="SPY", limit=10)
 
     assert len(orders) == 1
-    assert orders[0]["symbol"] == "SPY"
-    assert orders[0]["status"] == "filled"
+    assert isinstance(orders[0], Order)
+    assert orders[0].symbol == "SPY"
+    assert orders[0].status == "filled"
+    assert orders[0].id == 1
 
 
 @pytest.mark.asyncio
