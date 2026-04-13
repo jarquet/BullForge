@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+PSQL="docker compose exec -T timescaledb psql -U bullforge -d bullforge --no-align --tuples-only"
+
+section() {
+  echo ""
+  echo "═══════════════════════════════════════════════════════════"
+  echo "  $1"
+  echo "═══════════════════════════════════════════════════════════"
+}
+
+section "CONTAINER STATUS"
+docker compose ps
+
+section "HEALTH ENDPOINTS"
+for svc in "data_pipeline:18080" "execution_service:18082" "monitoring_service:18083"; do
+  name="${svc%%:*}"
+  port="${svc##*:}"
+  printf "  %-22s " "$name"
+  curl -s -o /dev/null -w "%{http_code}" "http://localhost:$port/health" 2>/dev/null || echo "unreachable"
+  echo ""
+done
+
+section "LATEST BARS"
+$PSQL -c "
+  SELECT symbol, COUNT(*) AS bars, MAX(timestamp) AS latest
+  FROM bars_1m GROUP BY symbol ORDER BY latest DESC LIMIT 10;
+" 2>/dev/null | column -t -s'|' || echo "  (no data or DB unavailable)"
+
+section "FEATURES"
+$PSQL -c "
+  SELECT symbol, COUNT(*) AS rows, MAX(timestamp) AS latest
+  FROM features GROUP BY symbol ORDER BY latest DESC LIMIT 10;
+" 2>/dev/null | column -t -s'|' || echo "  (no data)"
+
+section "LABELS"
+$PSQL -c "
+  SELECT symbol, COUNT(*) AS rows, MAX(timestamp) AS latest
+  FROM labels GROUP BY symbol ORDER BY latest DESC LIMIT 10;
+" 2>/dev/null | column -t -s'|' || echo "  (no data)"
+
+section "MODELS"
+$PSQL -c "
+  SELECT id, symbol, model_type, is_active, created_at
+  FROM model_registry ORDER BY created_at DESC LIMIT 10;
+" 2>/dev/null | column -t -s'|' || echo "  (no data)"
+
+section "PREDICTIONS"
+$PSQL -c "
+  SELECT model_id, symbol, COUNT(*) AS predictions, MAX(timestamp) AS latest
+  FROM predictions GROUP BY model_id, symbol ORDER BY latest DESC LIMIT 10;
+" 2>/dev/null | column -t -s'|' || echo "  (no data)"
+
+section "TRADES"
+$PSQL -c "
+  SELECT symbol, side, COUNT(*) AS trades, COALESCE(SUM(pnl)::TEXT, 'open') AS total_pnl
+  FROM trades GROUP BY symbol, side ORDER BY COUNT(*) DESC LIMIT 10;
+" 2>/dev/null | column -t -s'|' || echo "  (no data)"
+
+section "MONITORING METRICS"
+$PSQL -c "
+  SELECT category, scope, \"window\", COUNT(*) AS snapshots, MAX(timestamp) AS latest
+  FROM metric_snapshots GROUP BY category, scope, \"window\" ORDER BY latest DESC LIMIT 10;
+" 2>/dev/null | column -t -s'|' || echo "  (no data)"
+
+section "MODEL STATUS"
+$PSQL -c "
+  SELECT model_id, status, reason, updated_at
+  FROM model_status ORDER BY updated_at DESC LIMIT 10;
+" 2>/dev/null | column -t -s'|' || echo "  (no data)"
+
+section "ACTIVE HALTS"
+$PSQL -c "
+  SELECT id, tier, reason, direction, activated_at
+  FROM halt_events WHERE resolved_at IS NULL ORDER BY activated_at DESC LIMIT 10;
+" 2>/dev/null | column -t -s'|' || echo "  (none)"
+
+echo ""
+echo "Done."
