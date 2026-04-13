@@ -38,7 +38,7 @@ async def main() -> None:
     # Run backfill on startup
     backfiller = Backfiller(settings=settings, db=db, alpaca_client=alpaca_client)
     logger.info("Running initial backfill...")
-    await backfiller.backfill_all(days_1m=14, days_daily=365)
+    await backfiller.backfill_all(days_1m=730, days_daily=365)
 
     # Start live tick streaming
     streamer = TickStreamer(
