@@ -86,3 +86,8 @@ def test_monitoring_settings_defaults(settings):
     assert settings.fidelity_critical_margin == 0.10
     assert settings.fidelity_min_trades == 20
     assert settings.drawdown_halt_threshold == 0.10
+
+
+def test_telegram_settings_defaults(settings):
+    assert settings.telegram_bot_token == ""
+    assert settings.telegram_chat_id == ""
