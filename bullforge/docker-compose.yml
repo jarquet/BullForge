@@ -121,6 +121,8 @@ services:
     environment:
       TIMESCALEDB_HOST: timescaledb
       REDIS_HOST: redis
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     ports:
       - "18083:8083"
     depends_on:
