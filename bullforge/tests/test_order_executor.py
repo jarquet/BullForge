@@ -53,6 +53,9 @@ def mock_db():
     db = AsyncMock()
     db.insert_order = AsyncMock(return_value=42)
     db.update_order_status = AsyncMock()
+    db.insert_trade = AsyncMock(return_value=1)
+    db.update_trade_exit = AsyncMock()
+    db.get_open_trade = AsyncMock(return_value=None)
     return db
 
 
@@ -279,3 +282,87 @@ async def test_fill_check_retries_on_broker_error(
     assert order is not None
     assert order.status == "filled"
     assert mock_broker.get_order.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_execute_open_records_trade(executor, mock_broker, mock_db):
+    order = await executor.process_signal(_signal(), current_price=420.0)
+
+    assert order is not None
+    mock_db.insert_trade.assert_called_once()
+    trade_arg = mock_db.insert_trade.call_args[0][0]
+    assert trade_arg.symbol == "SPY"
+    assert trade_arg.side == "long"
+    assert trade_arg.entry_price == 420.50
+    assert trade_arg.quantity == 10.0
+    assert trade_arg.entry_order_id == 42
+
+
+@pytest.mark.asyncio
+async def test_execute_open_no_trade_on_unfilled(
+    mock_broker, mock_risk, mock_tracker, mock_db,
+):
+    mock_broker.get_order = AsyncMock(return_value={
+        "id": "alp-order-123", "status": "submitted",
+        "filled_qty": None, "filled_avg_price": None, "filled_at": None,
+    })
+    executor = OrderExecutor(
+        broker=mock_broker,
+        risk_manager=mock_risk,
+        position_tracker=mock_tracker,
+        db=mock_db,
+        fill_check_delay=0,
+        fill_check_retries=1,
+    )
+
+    order = await executor.process_signal(_signal(), current_price=420.0)
+
+    assert order is not None
+    assert order.status == "submitted"
+    mock_db.insert_trade.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_execute_close_updates_trade(
+    executor, mock_broker, mock_db, mock_risk, mock_tracker,
+):
+    mock_tracker.get_position = MagicMock(
+        return_value={"symbol": "SPY", "qty": 10.0, "market_value": 4200.0},
+    )
+    mock_risk.check_exit = MagicMock(return_value=(True, "Opposing signal"))
+    mock_db.get_open_trade = AsyncMock(return_value=MagicMock(
+        id=1,
+        entry_price=420.0,
+        entry_time=datetime(2026, 4, 12, 14, 0, 0, tzinfo=timezone.utc),
+        side="long",
+        quantity=10.0,
+    ))
+
+    order = await executor.process_signal(
+        _signal(direction=-1), current_price=425.0,
+    )
+
+    assert order is not None
+    assert order.side == "sell"
+    mock_db.update_trade_exit.assert_called_once()
+    call_kwargs = mock_db.update_trade_exit.call_args
+    assert call_kwargs[1]["trade_id"] == 1
+    assert call_kwargs[1]["exit_price"] == 420.50
+
+
+@pytest.mark.asyncio
+async def test_execute_close_no_trade_update_when_no_open_trade(
+    executor, mock_broker, mock_db, mock_risk, mock_tracker,
+):
+    mock_tracker.get_position = MagicMock(
+        return_value={"symbol": "SPY", "qty": 10.0, "market_value": 4200.0},
+    )
+    mock_risk.check_exit = MagicMock(return_value=(True, "Opposing signal"))
+    mock_db.get_open_trade = AsyncMock(return_value=None)
+
+    order = await executor.process_signal(
+        _signal(direction=-1), current_price=425.0,
+    )
+
+    assert order is not None
+    mock_db.update_trade_exit.assert_not_called()

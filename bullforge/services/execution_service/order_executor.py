@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from shared.db import Database
-from shared.models import Order, TradingSignal
+from shared.models import Order, Trade, TradingSignal
 from shared.redis import RedisClient
 from services.execution_service.alpaca_broker import AlpacaBroker
 from services.execution_service.risk_manager import RiskManager
@@ -89,6 +89,19 @@ class OrderExecutor:
         order_id = await self._db.insert_order(order)
 
         filled_order = await self._check_fill(order, order_id)
+
+        if filled_order.status == "filled" and filled_order.filled_price is not None:
+            trade_side = "long" if side == "buy" else "short"
+            trade = Trade(
+                symbol=signal.symbol,
+                side=trade_side,
+                entry_time=filled_order.filled_at or now,
+                entry_price=filled_order.filled_price,
+                quantity=filled_order.filled_quantity or float(qty),
+                entry_order_id=order_id,
+            )
+            await self._db.insert_trade(trade)
+
         await self._publish_order_event(filled_order)
         return filled_order
 
@@ -117,6 +130,24 @@ class OrderExecutor:
         order_id = await self._db.insert_order(order)
 
         filled_order = await self._check_fill(order, order_id)
+
+        if filled_order.status == "filled" and filled_order.filled_price is not None:
+            open_trade = await self._db.get_open_trade(signal.symbol)
+            if open_trade:
+                pnl = (filled_order.filled_price - open_trade.entry_price) * open_trade.quantity
+                if open_trade.side == "short":
+                    pnl = -pnl
+                fill_time = filled_order.filled_at or now
+                hold_secs = int((fill_time - open_trade.entry_time).total_seconds())
+                await self._db.update_trade_exit(
+                    trade_id=open_trade.id,
+                    exit_time=fill_time,
+                    exit_price=filled_order.filled_price,
+                    exit_order_id=order_id,
+                    pnl=pnl,
+                    hold_duration_seconds=hold_secs,
+                )
+
         await self._publish_order_event(filled_order)
         return filled_order
 
