@@ -87,3 +87,52 @@ def test_aggregate_all_below_confidence(aggregator):
     ]
     signal = aggregator.aggregate("SPY", _ts(), predictions)
     assert signal is None
+
+
+def test_aggregate_filters_disabled_models():
+    agg = SignalAggregator(min_confidence=0.6, min_agreement=2)
+    agg.update_disabled_models({2})
+
+    predictions = [
+        {"direction": 1, "confidence": 0.8, "model_id": 1},
+        {"direction": 1, "confidence": 0.7, "model_id": 2},  # disabled
+        {"direction": 1, "confidence": 0.9, "model_id": 3},
+    ]
+
+    result = agg.aggregate("SPY", datetime.now(timezone.utc), predictions)
+
+    # Model 2 filtered out, but models 1 and 3 still meet min_agreement=2
+    assert result is not None
+    assert result.contributing_predictions == 2
+
+
+def test_aggregate_disabled_models_cause_no_signal():
+    agg = SignalAggregator(min_confidence=0.6, min_agreement=2)
+    agg.update_disabled_models({1, 2})
+
+    predictions = [
+        {"direction": 1, "confidence": 0.8, "model_id": 1},  # disabled
+        {"direction": 1, "confidence": 0.7, "model_id": 2},  # disabled
+        {"direction": 1, "confidence": 0.9, "model_id": 3},
+    ]
+
+    result = agg.aggregate("SPY", datetime.now(timezone.utc), predictions)
+
+    # Only 1 active prediction, below min_agreement=2
+    assert result is None
+
+
+def test_aggregate_no_model_id_not_filtered():
+    agg = SignalAggregator(min_confidence=0.6, min_agreement=2)
+    agg.update_disabled_models({99})
+
+    # Predictions without model_id (backward compatibility)
+    predictions = [
+        {"direction": 1, "confidence": 0.8},
+        {"direction": 1, "confidence": 0.7},
+    ]
+
+    result = agg.aggregate("SPY", datetime.now(timezone.utc), predictions)
+
+    assert result is not None
+    assert result.contributing_predictions == 2

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Set
 
 from shared.models import TradingSignal
 
@@ -10,6 +10,10 @@ class SignalAggregator:
     def __init__(self, min_confidence: float = 0.6, min_agreement: int = 2):
         self._min_confidence = min_confidence
         self._min_agreement = min_agreement
+        self._disabled_model_ids: Set[int] = set()
+
+    def update_disabled_models(self, disabled_ids: Set[int]) -> None:
+        self._disabled_model_ids = disabled_ids
 
     def aggregate(
         self,
@@ -20,8 +24,14 @@ class SignalAggregator:
         if not predictions:
             return None
 
+        # Filter out predictions from disabled models
+        active_preds = [
+            p for p in predictions
+            if p.get("model_id") not in self._disabled_model_ids
+        ]
+
         confident = [
-            p for p in predictions if p["confidence"] >= self._min_confidence
+            p for p in active_preds if p["confidence"] >= self._min_confidence
         ]
         if len(confident) < self._min_agreement:
             return None

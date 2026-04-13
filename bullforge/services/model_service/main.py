@@ -86,6 +86,7 @@ async def main() -> None:
                             "horizon_minutes": p.horizon_minutes,
                             "direction": p.predicted_direction,
                             "confidence": p.confidence,
+                            "model_id": p.model_id,
                         }
                         for p in predictions
                     ],
