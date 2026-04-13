@@ -77,3 +77,12 @@ def test_execution_env_override(monkeypatch):
     assert s.execution_min_signal_strength == 0.7
     assert s.execution_min_confidence == 0.75
     assert s.execution_min_agreement == 3
+
+
+def test_monitoring_settings_defaults(settings):
+    assert settings.monitoring_port == 8083
+    assert settings.monitoring_interval == 60
+    assert settings.fidelity_warning_margin == 0.05
+    assert settings.fidelity_critical_margin == 0.10
+    assert settings.fidelity_min_trades == 20
+    assert settings.drawdown_halt_threshold == 0.10

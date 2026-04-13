@@ -114,3 +114,23 @@ class Settings:
     execution_min_agreement: int = field(
         default_factory=lambda: int(os.getenv("EXECUTION_MIN_AGREEMENT", "2"))
     )
+
+    # Monitoring service
+    monitoring_port: int = field(
+        default_factory=lambda: int(os.getenv("MONITORING_PORT", "8083"))
+    )
+    monitoring_interval: int = field(
+        default_factory=lambda: int(os.getenv("MONITORING_INTERVAL", "60"))
+    )
+    fidelity_warning_margin: float = field(
+        default_factory=lambda: float(os.getenv("FIDELITY_WARNING_MARGIN", "0.05"))
+    )
+    fidelity_critical_margin: float = field(
+        default_factory=lambda: float(os.getenv("FIDELITY_CRITICAL_MARGIN", "0.10"))
+    )
+    fidelity_min_trades: int = field(
+        default_factory=lambda: int(os.getenv("FIDELITY_MIN_TRADES", "20"))
+    )
+    drawdown_halt_threshold: float = field(
+        default_factory=lambda: float(os.getenv("DRAWDOWN_HALT_THRESHOLD", "0.10"))
+    )
