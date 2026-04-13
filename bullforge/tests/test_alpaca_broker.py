@@ -1,0 +1,143 @@
+import pytest
+import pytest_asyncio
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch, AsyncMock
+from services.execution_service.alpaca_broker import AlpacaBroker
+
+
+@pytest.fixture
+def mock_settings():
+    s = MagicMock()
+    s.alpaca_api_key = "test_key"
+    s.alpaca_secret_key = "test_secret"
+    return s
+
+
+@pytest.fixture
+def mock_client():
+    return MagicMock()
+
+
+@pytest.fixture
+def broker(mock_settings, mock_client):
+    with patch(
+        "services.execution_service.alpaca_broker.TradingClient",
+        return_value=mock_client,
+    ):
+        return AlpacaBroker(mock_settings)
+
+
+@pytest.mark.asyncio
+async def test_get_account(broker, mock_client):
+    mock_account = MagicMock()
+    mock_account.equity = "100000.00"
+    mock_account.buying_power = "200000.00"
+    mock_account.cash = "100000.00"
+    mock_account.portfolio_value = "100000.00"
+    mock_client.get_account.return_value = mock_account
+
+    result = await broker.get_account()
+
+    assert result["equity"] == 100000.0
+    assert result["buying_power"] == 200000.0
+    assert result["cash"] == 100000.0
+    assert result["portfolio_value"] == 100000.0
+
+
+@pytest.mark.asyncio
+async def test_get_positions(broker, mock_client):
+    mock_pos = MagicMock()
+    mock_pos.symbol = "SPY"
+    mock_pos.qty = "10"
+    mock_pos.side = "long"
+    mock_pos.avg_entry_price = "420.00"
+    mock_pos.current_price = "425.00"
+    mock_pos.unrealized_pl = "50.00"
+    mock_pos.market_value = "4250.00"
+    mock_client.get_all_positions.return_value = [mock_pos]
+
+    result = await broker.get_positions()
+
+    assert len(result) == 1
+    assert result[0]["symbol"] == "SPY"
+    assert result[0]["qty"] == 10.0
+    assert result[0]["avg_entry_price"] == 420.0
+    assert result[0]["unrealized_pl"] == 50.0
+
+
+@pytest.mark.asyncio
+async def test_get_position_found(broker, mock_client):
+    mock_pos = MagicMock()
+    mock_pos.symbol = "SPY"
+    mock_pos.qty = "10"
+    mock_pos.side = "long"
+    mock_pos.avg_entry_price = "420.00"
+    mock_pos.current_price = "425.00"
+    mock_pos.unrealized_pl = "50.00"
+    mock_pos.market_value = "4250.00"
+    mock_client.get_open_position.return_value = mock_pos
+
+    result = await broker.get_position("SPY")
+
+    assert result is not None
+    assert result["symbol"] == "SPY"
+
+
+@pytest.mark.asyncio
+async def test_get_position_not_found(broker, mock_client):
+    mock_client.get_open_position.side_effect = Exception("position does not exist")
+
+    result = await broker.get_position("AAPL")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_submit_market_order(broker, mock_client):
+    mock_order = MagicMock()
+    mock_order.id = "order-abc-123"
+    mock_client.submit_order.return_value = mock_order
+
+    result = await broker.submit_market_order("SPY", 10, "buy")
+
+    assert result == "order-abc-123"
+    mock_client.submit_order.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_get_order(broker, mock_client):
+    mock_order = MagicMock()
+    mock_order.id = "order-abc-123"
+    mock_order.status = "filled"
+    mock_order.filled_qty = "10"
+    mock_order.filled_avg_price = "420.50"
+    mock_order.filled_at = datetime(2026, 4, 12, 14, 0, 1, tzinfo=timezone.utc)
+    mock_client.get_order_by_id.return_value = mock_order
+
+    result = await broker.get_order("order-abc-123")
+
+    assert result["id"] == "order-abc-123"
+    assert result["status"] == "filled"
+    assert result["filled_qty"] == 10.0
+    assert result["filled_avg_price"] == 420.50
+    assert result["filled_at"] == datetime(2026, 4, 12, 14, 0, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_close_position(broker, mock_client):
+    mock_order = MagicMock()
+    mock_order.id = "close-order-456"
+    mock_client.close_position.return_value = mock_order
+
+    result = await broker.close_position("SPY")
+
+    assert result == "close-order-456"
+
+
+@pytest.mark.asyncio
+async def test_close_position_fails(broker, mock_client):
+    mock_client.close_position.side_effect = Exception("no position")
+
+    result = await broker.close_position("SPY")
+
+    assert result is None
