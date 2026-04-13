@@ -8,7 +8,9 @@ from typing import List, Optional
 import asyncpg
 
 from shared.config import Settings
-from shared.models import Bar, FeatureRow, Label, ModelMetadata, Prediction, Order
+from datetime import datetime
+
+from shared.models import Bar, FeatureRow, Label, ModelMetadata, Prediction, Order, Trade, ModelStatus
 
 
 class Database:
@@ -563,3 +565,269 @@ class Database:
             )
             for r in rows
         ]
+
+    # ── Trade methods ──────────────────────────────────────────────
+
+    async def insert_trade(self, trade: Trade) -> int:
+        async with self.pool.acquire() as conn:
+            row_id = await conn.fetchval(
+                """
+                INSERT INTO trades
+                    (symbol, side, entry_time, exit_time, entry_price, exit_price,
+                     quantity, pnl, hold_duration_seconds, entry_order_id, exit_order_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                RETURNING id
+                """,
+                trade.symbol,
+                trade.side,
+                trade.entry_time,
+                trade.exit_time,
+                trade.entry_price,
+                trade.exit_price,
+                trade.quantity,
+                trade.pnl,
+                trade.hold_duration_seconds,
+                trade.entry_order_id,
+                trade.exit_order_id,
+            )
+        return row_id
+
+    async def update_trade_exit(
+        self,
+        trade_id: int,
+        exit_time: datetime,
+        exit_price: float,
+        exit_order_id: int,
+        pnl: float,
+        hold_duration_seconds: int,
+    ) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE trades
+                SET exit_time = $2, exit_price = $3, exit_order_id = $4,
+                    pnl = $5, hold_duration_seconds = $6
+                WHERE id = $1
+                """,
+                trade_id,
+                exit_time,
+                exit_price,
+                exit_order_id,
+                pnl,
+                hold_duration_seconds,
+            )
+
+    async def get_open_trade(self, symbol: str) -> Optional[Trade]:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id, symbol, side, entry_time, exit_time, entry_price,
+                       exit_price, quantity, pnl, hold_duration_seconds,
+                       entry_order_id, exit_order_id
+                FROM trades
+                WHERE symbol = $1 AND exit_time IS NULL
+                ORDER BY entry_time DESC
+                LIMIT 1
+                """,
+                symbol,
+            )
+        if row is None:
+            return None
+        return Trade(
+            id=row["id"],
+            symbol=row["symbol"],
+            side=row["side"],
+            entry_time=row["entry_time"],
+            exit_time=row["exit_time"],
+            entry_price=row["entry_price"],
+            exit_price=row["exit_price"],
+            quantity=row["quantity"],
+            pnl=row["pnl"],
+            hold_duration_seconds=row["hold_duration_seconds"],
+            entry_order_id=row["entry_order_id"],
+            exit_order_id=row["exit_order_id"],
+        )
+
+    async def query_closed_trades(
+        self,
+        symbol: Optional[str] = None,
+        since: Optional[datetime] = None,
+        limit: int = 100,
+    ) -> list[Trade]:
+        query = """SELECT id, symbol, side, entry_time, exit_time, entry_price,
+                          exit_price, quantity, pnl, hold_duration_seconds,
+                          entry_order_id, exit_order_id
+                   FROM trades WHERE exit_time IS NOT NULL"""
+        args: list = []
+        idx = 1
+
+        if symbol is not None:
+            query += f" AND symbol = ${idx}"
+            args.append(symbol)
+            idx += 1
+
+        if since is not None:
+            query += f" AND exit_time >= ${idx}"
+            args.append(since)
+            idx += 1
+
+        query += f" ORDER BY exit_time DESC LIMIT ${idx}"
+        args.append(limit)
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(query, *args)
+        return [
+            Trade(
+                id=r["id"],
+                symbol=r["symbol"],
+                side=r["side"],
+                entry_time=r["entry_time"],
+                exit_time=r["exit_time"],
+                entry_price=r["entry_price"],
+                exit_price=r["exit_price"],
+                quantity=r["quantity"],
+                pnl=r["pnl"],
+                hold_duration_seconds=r["hold_duration_seconds"],
+                entry_order_id=r["entry_order_id"],
+                exit_order_id=r["exit_order_id"],
+            )
+            for r in rows
+        ]
+
+    # ── Model status methods ───────────────────────────────────────
+
+    async def upsert_model_status(
+        self, model_id: int, status: str, reason: str,
+    ) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO model_status (model_id, status, reason, updated_at)
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT (model_id)
+                DO UPDATE SET status = $2, reason = $3, updated_at = NOW()
+                """,
+                model_id,
+                status,
+                reason,
+            )
+
+    async def get_all_model_statuses(self) -> list[ModelStatus]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT model_id, status, reason, updated_at
+                FROM model_status
+                ORDER BY model_id
+                """
+            )
+        return [
+            ModelStatus(
+                model_id=r["model_id"],
+                status=r["status"],
+                reason=r["reason"] or "",
+                updated_at=r["updated_at"],
+            )
+            for r in rows
+        ]
+
+    # ── Prediction outcome methods ─────────────────────────────────
+
+    async def query_prediction_outcomes(
+        self, model_id: int, limit: int = 100,
+    ) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    p.predicted_direction,
+                    p.confidence,
+                    b_exit.close - b_entry.close AS price_move,
+                    CASE
+                        WHEN p.predicted_direction = 1
+                             AND b_exit.close > b_entry.close THEN TRUE
+                        WHEN p.predicted_direction = -1
+                             AND b_exit.close < b_entry.close THEN TRUE
+                        WHEN p.predicted_direction = 0
+                             AND ABS(b_exit.close - b_entry.close)
+                                 / NULLIF(b_entry.close, 0) < 0.001 THEN TRUE
+                        ELSE FALSE
+                    END AS is_correct
+                FROM predictions p
+                JOIN bars_1m b_entry
+                    ON b_entry.symbol = p.symbol
+                    AND b_entry.timestamp = p.timestamp
+                JOIN bars_1m b_exit
+                    ON b_exit.symbol = p.symbol
+                    AND b_exit.timestamp = p.timestamp
+                        + (p.horizon_minutes * interval '1 minute')
+                WHERE p.model_id = $1
+                ORDER BY p.timestamp DESC
+                LIMIT $2
+                """,
+                model_id,
+                limit,
+            )
+        return [dict(r) for r in rows]
+
+    # ── Halt event methods ─────────────────────────────────────────
+
+    async def insert_halt_event(
+        self, tier: int, reason: str, direction: Optional[str] = None,
+    ) -> int:
+        async with self.pool.acquire() as conn:
+            row_id = await conn.fetchval(
+                """
+                INSERT INTO halt_events (tier, reason, direction)
+                VALUES ($1, $2, $3)
+                RETURNING id
+                """,
+                tier,
+                reason,
+                direction,
+            )
+        return row_id
+
+    async def get_active_halts(self) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, tier, reason, direction, activated_at
+                FROM halt_events
+                WHERE resolved_at IS NULL
+                ORDER BY activated_at DESC
+                """
+            )
+        return [dict(r) for r in rows]
+
+    async def resolve_halt_event(self, halt_id: int) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE halt_events
+                SET resolved_at = NOW()
+                WHERE id = $1
+                """,
+                halt_id,
+            )
+
+    # ── Metric snapshot methods ────────────────────────────────────
+
+    async def insert_metric_snapshot(
+        self,
+        category: str,
+        scope: str,
+        window: str,
+        metrics: dict,
+    ) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO metric_snapshots (category, scope, window, metrics)
+                VALUES ($1, $2, $3, $4)
+                """,
+                category,
+                scope,
+                window,
+                json.dumps(metrics),
+            )
