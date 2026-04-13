@@ -823,7 +823,7 @@ class Database:
         async with self.pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO metric_snapshots (category, scope, window, metrics)
+                INSERT INTO metric_snapshots (category, scope, "window", metrics)
                 VALUES ($1, $2, $3, $4)
                 """,
                 category,

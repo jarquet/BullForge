@@ -22,12 +22,12 @@ CREATE TABLE IF NOT EXISTS metric_snapshots (
     timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     category TEXT NOT NULL,
     scope TEXT NOT NULL DEFAULT '',
-    window TEXT NOT NULL DEFAULT 'all',
+    "window" TEXT NOT NULL DEFAULT 'all',
     metrics JSONB NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_metric_snapshots_lookup
-    ON metric_snapshots(category, scope, window, timestamp DESC);
+    ON metric_snapshots(category, scope, "window", timestamp DESC);
 
 -- Index for fidelity tracker queries on predictions table
 CREATE INDEX IF NOT EXISTS idx_predictions_model_id ON predictions(model_id);
