@@ -43,10 +43,37 @@ async def main() -> None:
     )
     inference_engine = InferenceEngine(db=db, model_store=model_store)
 
-    # Train models on startup (skip if active model already exists)
+    # Wait for feature engine to produce enough data before training
     all_symbols = (
         settings.trading_symbols_equity + settings.trading_symbols_crypto
     )
+    logger.info(
+        "Waiting for feature engine to produce >= %d samples...",
+        settings.model_min_samples,
+    )
+    max_wait = 600  # 10 minutes
+    poll_interval = 15
+    waited = 0
+    while waited < max_wait:
+        rows = await db.query_training_data(
+            all_symbols[0], "1m", HORIZONS[0], limit=settings.model_min_samples,
+        )
+        if len(rows) >= settings.model_min_samples:
+            logger.info("Feature data ready (%d rows), proceeding with training", len(rows))
+            break
+        logger.info(
+            "Feature data not ready yet (%d/%d rows), retrying in %ds...",
+            len(rows), settings.model_min_samples, poll_interval,
+        )
+        await asyncio.sleep(poll_interval)
+        waited += poll_interval
+    else:
+        logger.warning(
+            "Timed out waiting for feature data after %ds, training with available data",
+            max_wait,
+        )
+
+    # Train models on startup (skip if active model already exists)
     for symbol in all_symbols:
         for timeframe in ["1m", "1d"]:
             for horizon in HORIZONS:

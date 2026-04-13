@@ -69,8 +69,8 @@ class FeatureEngine:
             logger.warning("No features computed for %s %s", symbol, timeframe)
             return
 
-        # Drop rows where all features are NaN (warmup period)
-        valid_mask = features_df.notna().any(axis=1)
+        # Drop rows where any feature is NaN (warmup period)
+        valid_mask = features_df.notna().all(axis=1)
         valid_df = features_df[valid_mask]
         valid_timestamps = df.loc[valid_mask, "timestamp"]
 

@@ -46,6 +46,25 @@ class DatasetBuilder:
 
         X = pd.DataFrame(records)
         y = pd.Series(directions, name="direction")
+
+        # Drop rows with NaN features (from warmup period)
+        nan_mask = X.notna().all(axis=1)
+        if not nan_mask.all():
+            logger.info(
+                "Dropping %d rows with NaN features for %s %s %dm",
+                (~nan_mask).sum(), symbol, timeframe, horizon_minutes,
+            )
+            X = X.loc[nan_mask].reset_index(drop=True)
+            y = y.loc[nan_mask].reset_index(drop=True)
+
+        if len(X) < self._min_samples:
+            logger.warning(
+                "Insufficient training data after NaN cleanup for %s %s %dm: %d < %d",
+                symbol, timeframe, horizon_minutes,
+                len(X), self._min_samples,
+            )
+            return None
+
         return X, y
 
 
