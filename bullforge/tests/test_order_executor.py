@@ -1,0 +1,159 @@
+import pytest
+import pytest_asyncio
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+from shared.models import TradingSignal, Order
+from services.execution_service.order_executor import OrderExecutor
+
+
+def _signal(direction=1, strength=0.8, symbol="SPY"):
+    return TradingSignal(
+        symbol=symbol,
+        timestamp=datetime(2026, 4, 12, 14, 0, 0, tzinfo=timezone.utc),
+        direction=direction,
+        strength=strength,
+        contributing_predictions=3,
+    )
+
+
+@pytest.fixture
+def mock_broker():
+    broker = AsyncMock()
+    broker.submit_market_order = AsyncMock(return_value="alp-order-123")
+    broker.get_order = AsyncMock(return_value={
+        "id": "alp-order-123",
+        "status": "filled",
+        "filled_qty": 10.0,
+        "filled_avg_price": 420.50,
+        "filled_at": datetime(2026, 4, 12, 14, 0, 1, tzinfo=timezone.utc),
+    })
+    broker.close_position = AsyncMock(return_value="alp-close-456")
+    return broker
+
+
+@pytest.fixture
+def mock_risk():
+    risk = MagicMock()
+    risk.check_entry = MagicMock(return_value=(True, "Approved", 10))
+    risk.check_exit = MagicMock(return_value=(False, "Signal matches position"))
+    return risk
+
+
+@pytest.fixture
+def mock_tracker():
+    tracker = AsyncMock()
+    tracker.refresh = AsyncMock()
+    tracker.account = {"equity": 100000.0, "buying_power": 200000.0}
+    tracker.positions = {}
+    tracker.get_position = MagicMock(return_value=None)
+    return tracker
+
+
+@pytest.fixture
+def mock_db():
+    db = AsyncMock()
+    db.insert_order = AsyncMock(return_value=42)
+    db.update_order_status = AsyncMock()
+    return db
+
+
+@pytest.fixture
+def executor(mock_broker, mock_risk, mock_tracker, mock_db):
+    return OrderExecutor(
+        broker=mock_broker,
+        risk_manager=mock_risk,
+        position_tracker=mock_tracker,
+        db=mock_db,
+        fill_check_delay=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_process_signal_enters_long(executor, mock_broker, mock_db):
+    order = await executor.process_signal(_signal(), current_price=420.0)
+
+    assert order is not None
+    assert order.side == "buy"
+    assert order.symbol == "SPY"
+    assert order.status == "filled"
+    assert order.filled_price == 420.50
+    assert order.id == 42
+    mock_broker.submit_market_order.assert_called_once_with("SPY", 10, "buy")
+    mock_db.insert_order.assert_called_once()
+    mock_db.update_order_status.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_process_signal_exits_on_opposing(
+    executor, mock_broker, mock_db, mock_risk, mock_tracker,
+):
+    mock_tracker.get_position = MagicMock(
+        return_value={"symbol": "SPY", "qty": 10.0, "market_value": 4200.0},
+    )
+    mock_risk.check_exit = MagicMock(return_value=(True, "Opposing signal"))
+
+    order = await executor.process_signal(
+        _signal(direction=-1), current_price=420.0,
+    )
+
+    assert order is not None
+    assert order.side == "sell"
+    mock_broker.close_position.assert_called_once_with("SPY")
+
+
+@pytest.mark.asyncio
+async def test_process_signal_exits_on_flat(
+    executor, mock_broker, mock_db, mock_risk, mock_tracker,
+):
+    mock_tracker.get_position = MagicMock(
+        return_value={"symbol": "SPY", "qty": 10.0, "market_value": 4200.0},
+    )
+    mock_risk.check_exit = MagicMock(return_value=(True, "Flat signal"))
+
+    order = await executor.process_signal(
+        _signal(direction=0, strength=0.0), current_price=420.0,
+    )
+
+    assert order is not None
+    assert order.side == "sell"
+
+
+@pytest.mark.asyncio
+async def test_process_signal_rejected_by_risk(
+    executor, mock_broker, mock_risk,
+):
+    mock_risk.check_entry = MagicMock(
+        return_value=(False, "Max positions reached", 0),
+    )
+
+    order = await executor.process_signal(_signal(), current_price=420.0)
+
+    assert order is None
+    mock_broker.submit_market_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_process_signal_no_action_flat_no_position(executor, mock_broker):
+    order = await executor.process_signal(
+        _signal(direction=0, strength=0.0), current_price=420.0,
+    )
+
+    assert order is None
+    mock_broker.submit_market_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_process_signal_no_action_same_direction(
+    executor, mock_broker, mock_risk, mock_tracker,
+):
+    mock_tracker.get_position = MagicMock(
+        return_value={"symbol": "SPY", "qty": 10.0, "market_value": 4200.0},
+    )
+    mock_risk.check_exit = MagicMock(
+        return_value=(False, "Signal matches position"),
+    )
+
+    order = await executor.process_signal(_signal(), current_price=420.0)
+
+    assert order is None
+    mock_broker.submit_market_order.assert_not_called()
