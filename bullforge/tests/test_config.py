@@ -91,3 +91,7 @@ def test_monitoring_settings_defaults(settings):
 def test_telegram_settings_defaults(settings):
     assert settings.telegram_bot_token == ""
     assert settings.telegram_chat_id == ""
+
+
+def test_dashboard_settings_defaults(settings):
+    assert settings.dashboard_port == 8084

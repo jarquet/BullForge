@@ -135,6 +135,11 @@ class Settings:
         default_factory=lambda: float(os.getenv("DRAWDOWN_HALT_THRESHOLD", "0.10"))
     )
 
+    # Dashboard service
+    dashboard_port: int = field(
+        default_factory=lambda: int(os.getenv("DASHBOARD_PORT", "8084"))
+    )
+
     # Telegram bot
     telegram_bot_token: str = field(
         default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN", "")
