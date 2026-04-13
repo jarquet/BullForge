@@ -831,3 +831,79 @@ class Database:
                 window,
                 json.dumps(metrics),
             )
+
+    async def query_latest_metric_snapshot(
+        self,
+        category: str,
+        scope: str,
+        window: str,
+    ) -> Optional[dict]:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id, timestamp, category, scope, "window", metrics
+                FROM metric_snapshots
+                WHERE category = $1 AND scope = $2 AND "window" = $3
+                ORDER BY timestamp DESC
+                LIMIT 1
+                """,
+                category,
+                scope,
+                window,
+            )
+        if row is None:
+            return None
+        return {
+            "id": row["id"],
+            "timestamp": row["timestamp"],
+            "category": row["category"],
+            "scope": row["scope"],
+            "window": row["window"],
+            "metrics": json.loads(row["metrics"]),
+        }
+
+    async def query_metric_snapshots(
+        self,
+        category: str,
+        scope: str,
+        window: str,
+        limit: int = 60,
+    ) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, timestamp, category, scope, "window", metrics
+                FROM metric_snapshots
+                WHERE category = $1 AND scope = $2 AND "window" = $3
+                ORDER BY timestamp DESC
+                LIMIT $4
+                """,
+                category,
+                scope,
+                window,
+                limit,
+            )
+        return [
+            {
+                "id": r["id"],
+                "timestamp": r["timestamp"],
+                "category": r["category"],
+                "scope": r["scope"],
+                "window": r["window"],
+                "metrics": json.loads(r["metrics"]),
+            }
+            for r in rows
+        ]
+
+    async def query_halt_history(self, limit: int = 50) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, tier, reason, direction, activated_at, resolved_at
+                FROM halt_events
+                ORDER BY activated_at DESC
+                LIMIT $1
+                """,
+                limit,
+            )
+        return [dict(r) for r in rows]
