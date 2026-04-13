@@ -91,6 +91,24 @@ async def main() -> None:
     await redis_client.subscribe("model:predictions", on_prediction)
     logger.info("Subscribed to model:predictions")
 
+    async def on_model_status(message: str) -> None:
+        try:
+            statuses = json.loads(message)
+            disabled_ids = {
+                int(model_id)
+                for model_id, status in statuses.items()
+                if status == "disabled"
+            }
+            aggregator.update_disabled_models(disabled_ids)
+            logger.info(
+                "Updated model status: %d disabled models", len(disabled_ids),
+            )
+        except Exception:
+            logger.exception("Error processing model status update")
+
+    await redis_client.subscribe("models:status", on_model_status)
+    logger.info("Subscribed to models:status")
+
     health_app = create_health_app(db, redis_client, broker)
     runner = web.AppRunner(health_app)
     await runner.setup()
