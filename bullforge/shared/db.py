@@ -8,7 +8,7 @@ from typing import List, Optional
 import asyncpg
 
 from shared.config import Settings
-from shared.models import Bar, FeatureRow, Label, ModelMetadata, Prediction
+from shared.models import Bar, FeatureRow, Label, ModelMetadata, Prediction, Order
 
 
 class Database:
@@ -465,3 +465,81 @@ class Database:
             )
             for r in rows
         ]
+
+    async def insert_order(self, order: Order) -> int:
+        async with self.pool.acquire() as conn:
+            row_id = await conn.fetchval(
+                """
+                INSERT INTO orders
+                    (symbol, side, quantity, order_type, submitted_at,
+                     signal_strength, alpaca_order_id, status,
+                     filled_at, filled_price, filled_quantity, limit_price)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                RETURNING id
+                """,
+                order.symbol,
+                order.side,
+                order.quantity,
+                order.order_type,
+                order.submitted_at,
+                order.signal_strength,
+                order.alpaca_order_id,
+                order.status,
+                order.filled_at,
+                order.filled_price,
+                order.filled_quantity,
+                order.limit_price,
+            )
+        return row_id
+
+    async def update_order_status(
+        self,
+        order_id: int,
+        status: str,
+        filled_at: Optional[datetime] = None,
+        filled_price: Optional[float] = None,
+        filled_quantity: Optional[float] = None,
+    ) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE orders
+                SET status = $2,
+                    filled_at = COALESCE($3, filled_at),
+                    filled_price = COALESCE($4, filled_price),
+                    filled_quantity = COALESCE($5, filled_quantity)
+                WHERE id = $1
+                """,
+                order_id,
+                status,
+                filled_at,
+                filled_price,
+                filled_quantity,
+            )
+
+    async def query_orders(
+        self,
+        symbol: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        query = "SELECT * FROM orders WHERE TRUE"
+        args: list = []
+        idx = 1
+
+        if symbol is not None:
+            query += f" AND symbol = ${idx}"
+            args.append(symbol)
+            idx += 1
+
+        if status is not None:
+            query += f" AND status = ${idx}"
+            args.append(status)
+            idx += 1
+
+        query += f" ORDER BY submitted_at DESC LIMIT ${idx}"
+        args.append(limit)
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(query, *args)
+        return [dict(r) for r in rows]
