@@ -99,6 +99,19 @@ class HaltManager:
 
         return alerts
 
+    async def trigger_halt(self, reason: str) -> None:
+        self._full_halt = True
+        await self._db.insert_halt_event(4, reason)
+        logger.critical("MANUAL HALT: %s", reason)
+        await self._redis.publish("models:status", json.dumps({"_halt": "full"}))
+
+    async def resolve_halt(self) -> None:
+        self._full_halt = False
+        halts = await self._db.get_active_halts()
+        for h in halts:
+            await self._db.resolve_halt_event(h["id"])
+        logger.info("Halt resolved — %d events cleared", len(halts))
+
     async def publish_status(self, statuses: List[ModelStatus]) -> None:
         payload = {
             str(m.model_id): m.status

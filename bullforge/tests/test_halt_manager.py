@@ -1,6 +1,6 @@
 import pytest
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from shared.models import ModelStatus
 from services.monitoring_service.halt_manager import HaltManager
 
@@ -124,3 +124,47 @@ async def test_is_halted(manager):
     await manager.evaluate(statuses, current_drawdown=0.15)
 
     assert manager.is_halted is True
+
+
+@pytest.mark.asyncio
+async def test_trigger_halt(manager, mock_db, mock_redis):
+    assert manager.is_halted is False
+
+    await manager.trigger_halt("Manual halt via Telegram")
+
+    assert manager.is_halted is True
+    mock_db.insert_halt_event.assert_called_once_with(
+        4, "Manual halt via Telegram",
+    )
+    mock_redis.publish.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_resolve_halt(manager, mock_db):
+    # First halt, then resolve
+    manager._full_halt = True
+    mock_db.get_active_halts = AsyncMock(return_value=[
+        {"id": 1, "tier": 4, "reason": "test", "direction": None,
+         "activated_at": datetime(2026, 4, 12, 14, 0, 0, tzinfo=timezone.utc)},
+    ])
+
+    await manager.resolve_halt()
+
+    assert manager.is_halted is False
+    mock_db.resolve_halt_event.assert_called_once_with(1)
+
+
+@pytest.mark.asyncio
+async def test_resolve_halt_multiple_events(manager, mock_db):
+    manager._full_halt = True
+    mock_db.get_active_halts = AsyncMock(return_value=[
+        {"id": 1, "tier": 4, "reason": "test1", "direction": None,
+         "activated_at": datetime(2026, 4, 12, 14, 0, 0, tzinfo=timezone.utc)},
+        {"id": 2, "tier": 3, "reason": "test2", "direction": "long",
+         "activated_at": datetime(2026, 4, 12, 13, 0, 0, tzinfo=timezone.utc)},
+    ])
+
+    await manager.resolve_halt()
+
+    assert manager.is_halted is False
+    assert mock_db.resolve_halt_event.call_count == 2
