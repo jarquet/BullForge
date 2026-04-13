@@ -1,0 +1,49 @@
+services:
+  timescaledb-test:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_USER: bullforge
+      POSTGRES_PASSWORD: bullforge_dev
+      POSTGRES_DB: bullforge_test
+    volumes:
+      - timescaledb_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bullforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis-test:
+    image: redis:7-alpine
+    volumes:
+      - redis_test_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    environment:
+      TIMESCALEDB_HOST: timescaledb-test
+      TIMESCALEDB_PORT: "5432"
+      REDIS_HOST: redis-test
+      REDIS_PORT: "6379"
+      TIMESCALEDB_USER: bullforge
+      TIMESCALEDB_PASSWORD: bullforge_dev
+      TIMESCALEDB_DB: bullforge_test
+      ALPACA_API_KEY: "fake"
+      ALPACA_SECRET_KEY: "fake"
+      ALPACA_BASE_URL: "https://paper-api.alpaca.markets"
+    depends_on:
+      timescaledb-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+
+volumes:
+  timescaledb_test_data:
+  redis_test_data:

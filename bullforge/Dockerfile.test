@@ -1,0 +1,31 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install all service dependencies (union of all requirements.txt)
+COPY services/data_pipeline/requirements.txt /tmp/req-data.txt
+COPY services/feature_engine/requirements.txt /tmp/req-feature.txt
+COPY services/model_service/requirements.txt /tmp/req-model.txt
+COPY services/execution_service/requirements.txt /tmp/req-execution.txt
+COPY services/monitoring_service/requirements.txt /tmp/req-monitoring.txt
+
+RUN cat /tmp/req-*.txt | sort -u > /tmp/requirements-all.txt && \
+    pip install --no-cache-dir -r /tmp/requirements-all.txt
+
+# Install test dependencies
+RUN pip install --no-cache-dir \
+    pytest \
+    pytest-asyncio \
+    pytest-aiohttp \
+    aiohttp
+
+# Copy entire project
+COPY . /app/
+
+ENV PYTHONPATH=/app
+ENV TIMESCALEDB_HOST=timescaledb
+ENV TIMESCALEDB_PORT=5432
+ENV REDIS_HOST=redis
+ENV REDIS_PORT=6379
+
+CMD ["python", "-m", "pytest", "tests/", "-v"]
