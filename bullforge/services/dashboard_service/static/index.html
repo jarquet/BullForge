@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BullForge Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header>
+        <h1>BullForge</h1>
+        <div id="system-status" class="status-badge status-unknown">Loading...</div>
+        <div id="last-updated" class="last-updated"></div>
+    </header>
+
+    <nav>
+        <button class="tab active" data-tab="overview">Overview</button>
+        <button class="tab" data-tab="trading">Trading</button>
+        <button class="tab" data-tab="models">Models</button>
+        <button class="tab" data-tab="trades">Trades</button>
+        <button class="tab" data-tab="orders">Orders</button>
+        <button class="tab" data-tab="halts">Halts</button>
+    </nav>
+
+    <!-- Overview Tab -->
+    <section id="tab-overview" class="tab-content active">
+        <div class="card-grid">
+            <div class="card">
+                <h3>Equity</h3>
+                <div id="ov-equity" class="metric-value">--</div>
+            </div>
+            <div class="card">
+                <h3>Buying Power</h3>
+                <div id="ov-buying-power" class="metric-value">--</div>
+            </div>
+            <div class="card">
+                <h3>Drawdown</h3>
+                <div id="ov-drawdown" class="metric-value">--</div>
+            </div>
+            <div class="card">
+                <h3>Max Drawdown</h3>
+                <div id="ov-max-drawdown" class="metric-value">--</div>
+            </div>
+        </div>
+
+        <div class="card-grid">
+            <div class="card">
+                <h3>Total Trades</h3>
+                <div id="ov-total-trades" class="metric-value">--</div>
+            </div>
+            <div class="card">
+                <h3>Win Rate</h3>
+                <div id="ov-win-rate" class="metric-value">--</div>
+            </div>
+            <div class="card">
+                <h3>Total P&amp;L</h3>
+                <div id="ov-total-pnl" class="metric-value">--</div>
+            </div>
+            <div class="card">
+                <h3>Profit Factor</h3>
+                <div id="ov-profit-factor" class="metric-value">--</div>
+            </div>
+        </div>
+
+        <h2>Active Halts</h2>
+        <div id="ov-halts" class="halt-list">
+            <p class="empty-state">No active halts</p>
+        </div>
+
+        <h2>Model Status</h2>
+        <table id="ov-models" class="data-table">
+            <thead>
+                <tr>
+                    <th>Model ID</th>
+                    <th>Status</th>
+                    <th>Reason</th>
+                    <th>Updated</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </section>
+
+    <!-- Trading Tab -->
+    <section id="tab-trading" class="tab-content">
+        <div class="window-selector">
+            <button class="window-btn active" data-window="all">All Time</button>
+            <button class="window-btn" data-window="last_50">Last 50</button>
+            <button class="window-btn" data-window="last_20">Last 20</button>
+        </div>
+
+        <div class="card-grid">
+            <div class="card">
+                <h3>Total Trades</h3>
+                <div id="tr-total-trades" class="metric-value">--</div>
+            </div>
+            <div class="card">
+                <h3>Win Rate</h3>
+                <div id="tr-win-rate" class="metric-value">--</div>
+            </div>
+            <div class="card">
+                <h3>Total P&amp;L</h3>
+                <div id="tr-total-pnl" class="metric-value">--</div>
+            </div>
+            <div class="card">
+                <h3>Profit Factor</h3>
+                <div id="tr-profit-factor" class="metric-value">--</div>
+            </div>
+            <div class="card">
+                <h3>Sharpe Ratio</h3>
+                <div id="tr-sharpe" class="metric-value">--</div>
+            </div>
+            <div class="card">
+                <h3>Avg Win</h3>
+                <div id="tr-avg-win" class="metric-value">--</div>
+            </div>
+            <div class="card">
+                <h3>Avg Loss</h3>
+                <div id="tr-avg-loss" class="metric-value">--</div>
+            </div>
+            <div class="card">
+                <h3>Avg Hold Time</h3>
+                <div id="tr-avg-hold" class="metric-value">--</div>
+            </div>
+        </div>
+
+        <h2>Per-Symbol Breakdown</h2>
+        <div id="tr-symbols" class="symbol-grid"></div>
+    </section>
+
+    <!-- Models Tab -->
+    <section id="tab-models" class="tab-content">
+        <table id="models-table" class="data-table">
+            <thead>
+                <tr>
+                    <th>Model ID</th>
+                    <th>Status</th>
+                    <th>Reason</th>
+                    <th>Updated</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </section>
+
+    <!-- Trades Tab -->
+    <section id="tab-trades" class="tab-content">
+        <table id="trades-table" class="data-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Symbol</th>
+                    <th>Side</th>
+                    <th>Entry</th>
+                    <th>Exit</th>
+                    <th>Qty</th>
+                    <th>P&amp;L</th>
+                    <th>Duration</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </section>
+
+    <!-- Orders Tab -->
+    <section id="tab-orders" class="tab-content">
+        <table id="orders-table" class="data-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Symbol</th>
+                    <th>Side</th>
+                    <th>Qty</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th>Signal</th>
+                    <th>Filled Price</th>
+                    <th>Submitted</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </section>
+
+    <!-- Halts Tab -->
+    <section id="tab-halts" class="tab-content">
+        <h2>Active Halts</h2>
+        <div id="halts-active" class="halt-list">
+            <p class="empty-state">No active halts</p>
+        </div>
+
+        <h2>Halt History</h2>
+        <table id="halts-table" class="data-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Tier</th>
+                    <th>Reason</th>
+                    <th>Direction</th>
+                    <th>Activated</th>
+                    <th>Resolved</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </section>
+
+    <script src="/static/dashboard.js"></script>
+</body>
+</html>
