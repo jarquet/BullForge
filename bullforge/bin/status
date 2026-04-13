@@ -16,7 +16,7 @@ section "CONTAINER STATUS"
 docker compose ps
 
 section "HEALTH ENDPOINTS"
-for svc in "data_pipeline:18080" "execution_service:18082" "monitoring_service:18083"; do
+for svc in "data_pipeline:18080" "execution_service:18082" "monitoring_service:18083" "dashboard_service:18084"; do
   name="${svc%%:*}"
   port="${svc##*:}"
   printf "  %-22s " "$name"

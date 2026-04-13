@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+echo "Pulling latest images..."
+docker compose pull --ignore-buildable
+
+echo "Rebuilding all service images..."
+docker compose build "$@"
+
+echo ""
+echo "Build complete. Run bin/up to start services."
