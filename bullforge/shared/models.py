@@ -214,3 +214,61 @@ class Order:
             raise ValueError(
                 f"filled_at must be UTC when provided, got tzinfo={self.filled_at.tzinfo}"
             )
+
+
+VALID_TRADE_SIDES = {"long", "short"}
+VALID_MODEL_STATUSES = {"active", "warned", "disabled"}
+
+
+@dataclass(frozen=True)
+class Trade:
+    symbol: str
+    side: str  # "long" or "short"
+    entry_time: datetime
+    entry_price: float
+    quantity: float
+    entry_order_id: int
+    exit_time: Optional[datetime] = None
+    exit_price: Optional[float] = None
+    pnl: Optional[float] = None
+    hold_duration_seconds: Optional[int] = None
+    exit_order_id: Optional[int] = None
+    id: Optional[int] = None
+
+    def __post_init__(self):
+        if self.entry_time.tzinfo is None or self.entry_time.tzinfo != timezone.utc:
+            raise ValueError(
+                f"entry_time must be UTC, got tzinfo={self.entry_time.tzinfo}"
+            )
+        if self.side not in VALID_TRADE_SIDES:
+            raise ValueError(
+                f"side must be one of {VALID_TRADE_SIDES}, got {self.side!r}"
+            )
+        if self.quantity <= 0:
+            raise ValueError(
+                f"quantity must be positive, got {self.quantity}"
+            )
+        if self.exit_time is not None and (
+            self.exit_time.tzinfo is None or self.exit_time.tzinfo != timezone.utc
+        ):
+            raise ValueError(
+                f"exit_time must be UTC when provided, got tzinfo={self.exit_time.tzinfo}"
+            )
+
+
+@dataclass(frozen=True)
+class ModelStatus:
+    model_id: int
+    status: str  # "active", "warned", "disabled"
+    reason: str
+    updated_at: datetime
+
+    def __post_init__(self):
+        if self.updated_at.tzinfo is None or self.updated_at.tzinfo != timezone.utc:
+            raise ValueError(
+                f"updated_at must be UTC, got tzinfo={self.updated_at.tzinfo}"
+            )
+        if self.status not in VALID_MODEL_STATUSES:
+            raise ValueError(
+                f"status must be one of {VALID_MODEL_STATUSES}, got {self.status!r}"
+            )
