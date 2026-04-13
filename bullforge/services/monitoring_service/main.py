@@ -17,6 +17,7 @@ from services.monitoring_service.health import create_health_app
 from services.monitoring_service.metrics import MetricsComputer
 from services.monitoring_service.fidelity import FidelityTracker
 from services.monitoring_service.halt_manager import HaltManager
+from services.monitoring_service.telegram_bot import TelegramBot
 
 logging.basicConfig(
     level=logging.INFO,
@@ -150,6 +151,15 @@ async def main() -> None:
     fidelity_tracker = FidelityTracker(db, settings)
     halt_manager = HaltManager(db, redis_client, settings)
 
+    # Start Telegram bot (optional — only if token is configured)
+    telegram_bot = None
+    if settings.telegram_bot_token and settings.telegram_chat_id:
+        telegram_bot = TelegramBot(settings, db, halt_manager, redis_client)
+        await telegram_bot.start()
+        logger.info("Telegram bot started")
+    else:
+        logger.info("Telegram bot disabled (no token configured)")
+
     # Start health check server
     health_app = create_health_app(db, redis_client)
     runner = web.AppRunner(health_app)
@@ -184,6 +194,8 @@ async def main() -> None:
     )
 
     logger.info("Shutting down...")
+    if telegram_bot:
+        await telegram_bot.stop()
     await runner.cleanup()
     await redis_client.disconnect()
     await db.disconnect()
