@@ -2,12 +2,32 @@ const REFRESH_INTERVAL = 30000; // 30 seconds
 
 // -- Tab switching --------------------------------------------------------
 
+const _loadedFragments = new Set();
+
+async function _loadFragment(section) {
+    if (_loadedFragments.has(section.id)) return;
+    const url = section.dataset.fragment;
+    if (!url) return;
+    const resp = await fetch(url);
+    const html = await resp.text();
+    section.innerHTML = html;
+    _loadedFragments.add(section.id);
+    // Execute any <script> tags in the injected fragment.
+    section.querySelectorAll('script').forEach(old => {
+        const s = document.createElement('script');
+        if (old.src) s.src = old.src; else s.textContent = old.textContent;
+        old.parentNode.replaceChild(s, old);
+    });
+}
+
 document.querySelectorAll('.tab').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
         document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
         document.querySelectorAll('.tab-content').forEach(s => s.classList.remove('active'));
         btn.classList.add('active');
-        document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+        const section = document.getElementById('tab-' + btn.dataset.tab);
+        section.classList.add('active');
+        await _loadFragment(section);
     });
 });
 

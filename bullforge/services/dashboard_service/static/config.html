@@ -1,0 +1,55 @@
+<div id="config-editor">
+  <h2>Runtime Configuration</h2>
+  <div id="config-list">Loading&hellip;</div>
+</div>
+<script>
+(async function () {
+  const resp = await fetch("/api/config");
+  const { values, schema } = await resp.json();
+  const container = document.getElementById("config-list");
+  container.innerHTML = "";
+  for (const [key, meta] of Object.entries(schema)) {
+    if (key === "last_retrain_time") continue;
+    const row = document.createElement("div");
+    row.className = "config-row";
+    const inputType =
+      meta.type === "float" || meta.type === "int" ? "number" : "text";
+    let displayValue = values[key];
+    if (meta.type === "json") {
+      displayValue = JSON.stringify(displayValue);
+    }
+    row.innerHTML = `
+      <label>${meta.label}</label>
+      <input type="${inputType}"
+             step="${meta.type === 'float' ? 'any' : '1'}"
+             min="${meta.min ?? ''}" max="${meta.max ?? ''}"
+             id="cfg-${key}" value="${displayValue}" />
+      <button data-key="${key}">Save</button>
+      <p class="description">${meta.description}
+        ${meta.reference ? `<a href="${meta.reference}" target="_blank">Learn more &rarr;</a>` : ""}
+      </p>
+      <div class="save-status" id="status-${key}"></div>
+    `;
+    container.appendChild(row);
+  }
+  container.addEventListener("click", async (e) => {
+    if (e.target.tagName !== "BUTTON") return;
+    const key = e.target.dataset.key;
+    const input = document.getElementById(`cfg-${key}`);
+    const status = document.getElementById(`status-${key}`);
+    let value = input.value;
+    if (schema[key].type === "int") value = parseInt(value, 10);
+    else if (schema[key].type === "float") value = parseFloat(value);
+    else if (schema[key].type === "json") value = JSON.parse(value);
+    const r = await fetch(`/api/config/${key}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value }),
+    });
+    const body = await r.json();
+    status.textContent = r.ok ? "Saved \u2713" : `Error: ${body.error}`;
+    status.style.color = r.ok ? "green" : "red";
+    setTimeout(() => { status.textContent = ""; }, 3000);
+  });
+})();
+</script>

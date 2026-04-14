@@ -20,6 +20,9 @@
         <button class="tab" data-tab="trades">Trades</button>
         <button class="tab" data-tab="orders">Orders</button>
         <button class="tab" data-tab="halts">Halts</button>
+        <button class="tab" data-tab="symbols">Symbols</button>
+        <button class="tab" data-tab="freshness">Freshness</button>
+        <button class="tab" data-tab="config">Config</button>
     </nav>
 
     <!-- Overview Tab -->
@@ -204,6 +207,15 @@
             <tbody></tbody>
         </table>
     </section>
+
+    <!-- Symbols Tab (content loaded from /static/symbols.html) -->
+    <section id="tab-symbols" class="tab-content" data-fragment="/static/symbols.html"></section>
+
+    <!-- Freshness Tab (content loaded from /static/freshness.html) -->
+    <section id="tab-freshness" class="tab-content" data-fragment="/static/freshness.html"></section>
+
+    <!-- Config Tab (content loaded from /static/config.html) -->
+    <section id="tab-config" class="tab-content" data-fragment="/static/config.html"></section>
 
     <script src="/static/dashboard.js"></script>
 </body>

@@ -9,7 +9,10 @@ from aiohttp import web
 
 from shared.config import Settings
 from shared.db import Database
+from shared.redis import RedisClient
+from shared.runtime_config import RuntimeConfig
 from services.dashboard_service.api import create_api_app
+from services.dashboard_service.config_api import register_config_routes
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,12 +27,20 @@ STATIC_DIR = Path(__file__).parent / "static"
 async def main() -> None:
     settings = Settings()
     db = Database(settings)
+    redis_client = RedisClient(settings)
 
     logger.info("Connecting to TimescaleDB...")
     await db.connect()
+    logger.info("Connecting to Redis...")
+    await redis_client.connect()
+
+    runtime_config = RuntimeConfig(redis_client)
 
     # Build the aiohttp app with API routes
     app = create_api_app(db)
+    app["redis_client"] = redis_client
+    app["runtime_config"] = runtime_config
+    register_config_routes(app)
 
     # Health check
     async def health_handler(request: web.Request) -> web.Response:
@@ -77,6 +88,7 @@ async def main() -> None:
 
     logger.info("Shutting down...")
     await runner.cleanup()
+    await redis_client.disconnect()
     await db.disconnect()
     logger.info("Shutdown complete")
 
