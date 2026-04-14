@@ -53,6 +53,12 @@ CONFIG_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Number of training samples processed together in each gradient update.",
         "reference": "https://en.wikipedia.org/wiki/Stochastic_gradient_descent#Mini-batch_gradient_descent",
     },
+    "last_retrain_time": {
+        "default": "", "type": "str",
+        "label": "Last Retrain Time (UTC ISO)",
+        "description": "ISO-8601 UTC timestamp of the most recent completed retrain cycle. Read-only from user perspective; written by the scheduler.",
+        "reference": "https://en.wikipedia.org/wiki/ISO_8601",
+    },
 }
 
 
