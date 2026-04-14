@@ -81,3 +81,29 @@ def test_logistic_regression_predict_proba():
     proba = model.predict_proba(X)
     assert proba.shape == (len(X), 3)
     np.testing.assert_allclose(proba.sum(axis=1), 1.0, atol=1e-6)
+
+
+def test_supported_models_includes_lstm():
+    assert "lstm" in SUPPORTED_MODELS
+
+
+def test_create_lstm_default_config():
+    from services.model_service.lstm_model import LSTMClassifier
+    m = create_model("lstm")
+    assert isinstance(m, LSTMClassifier)
+    assert m.hidden_size == 64
+    assert m.sequence_length == 30
+    assert m.epochs == 50
+
+
+def test_create_lstm_runtime_config_override():
+    cfg = {
+        "lstm_hidden_size": 128, "lstm_sequence_length": 20,
+        "lstm_learning_rate": 0.005, "lstm_epochs": 10, "lstm_batch_size": 32,
+    }
+    m = create_model("lstm", runtime_config=cfg)
+    assert m.hidden_size == 128
+    assert m.sequence_length == 20
+    assert m.lr == 0.005
+    assert m.epochs == 10
+    assert m.batch_size == 32
