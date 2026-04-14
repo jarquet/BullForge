@@ -50,11 +50,13 @@ async def main() -> None:
         min_confidence=settings.execution_min_confidence,
         min_agreement=settings.execution_min_agreement,
     )
+    runtime_config = RuntimeConfig(redis_client)
     risk_manager = RiskManager(
         max_position_value=settings.execution_max_position_value,
         max_total_positions=settings.execution_max_positions,
         max_portfolio_exposure=settings.execution_max_exposure,
         min_signal_strength=settings.execution_min_signal_strength,
+        runtime_config=runtime_config,
     )
     position_tracker = PositionTracker(broker)
     executor = OrderExecutor(

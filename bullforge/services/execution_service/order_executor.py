@@ -53,7 +53,7 @@ class OrderExecutor:
 
         account = self._tracker.account
         positions = list(self._tracker.positions.values())
-        approved, reason, qty = self._risk.check_entry(
+        approved, reason, qty = await self._risk.check_entry(
             signal, account, positions, current_price,
         )
 
