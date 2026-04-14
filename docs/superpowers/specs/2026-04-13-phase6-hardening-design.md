@@ -554,6 +554,74 @@ Data source: `db.query_model_details()` (same join query from 6B). Grouped by st
 
 ---
 
+## Sub-project 6D: Trading Window Enforcement
+
+### Overview
+
+Currently, the execution service has no trading-window enforcement — signals are processed regardless of time of day or asset class. Phase 6 adds window enforcement that distinguishes equity from crypto:
+
+- **Equities:** Trade only within 1 hour after market open through 1 hour before market close. NYSE market hours are 9:30 AM - 4:00 PM ET, so the equity trading window is **10:30 AM - 3:00 PM ET** (was previously documented as 11:30 AM - 2:00 PM ET; this design widens it to a 1-hour blackout on each side).
+- **Crypto:** Trade 24/7 with no window restriction.
+
+### Config changes
+
+Add to `RuntimeConfig` CONFIG_SCHEMA:
+
+```python
+"equity_window_open_buffer_minutes": {
+    "default": 60,
+    "type": "int", "min": 0, "max": 240,
+    "label": "Equity Open Buffer (minutes)",
+    "description": "Minutes after NYSE open (9:30 ET) before equity trading begins. 60 = trade from 10:30 ET onward.",
+    "reference": "https://en.wikipedia.org/wiki/Opening_Bell",
+},
+"equity_window_close_buffer_minutes": {
+    "default": 60,
+    "type": "int", "min": 0, "max": 240,
+    "label": "Equity Close Buffer (minutes)",
+    "description": "Minutes before NYSE close (16:00 ET) to stop equity trading. 60 = stop at 15:00 ET.",
+    "reference": "https://en.wikipedia.org/wiki/Closing_Bell",
+},
+```
+
+Existing ENV-based `trading_window_start` / `trading_window_end` in `Settings` are retained for backfill/tests only, but runtime decisions use the buffer-driven computation below.
+
+### Symbol classification
+
+Classification is derived from the symbol string: `is_crypto(symbol) = "/" in symbol` (matches "BTC/USD", "ETH/USD"). Equity symbols never contain a slash. This function lives in `shared/symbol_utils.py`.
+
+### Window check
+
+A new `shared/trading_window.py` module exposes:
+
+```python
+def is_trading_allowed(symbol: str, now_utc: datetime, open_buffer_min: int, close_buffer_min: int) -> tuple[bool, str]:
+    """Returns (allowed, reason)."""
+```
+
+Logic:
+1. If `is_crypto(symbol)`: return `(True, "crypto 24/7")`
+2. Convert `now_utc` to US/Eastern. If day of week ∉ weekdays, return `(False, "weekend")`
+3. Market open = 9:30 ET, close = 16:00 ET. Compute effective window: `[09:30 + open_buffer, 16:00 - close_buffer]`
+4. If current ET time is inside window: `(True, "within window")`; else `(False, f"outside {effective_open}-{effective_close} ET")`
+5. Market holidays are NOT checked here — Alpaca will reject orders on holidays, which the existing broker error handling already logs.
+
+### Integration
+
+`RiskManager.check_entry` (in `services/execution_service/risk_manager.py`) calls `is_trading_allowed(signal.symbol, signal.timestamp, ...)` as its first check. On reject, returns `(False, reason, 0)`. Buffer values are read fresh from RuntimeConfig in `RiskManager`'s init path (or per-check; low cost to read a Redis hash field).
+
+### Tests
+
+- `test_trading_window_crypto_always_allowed` — BTC/USD at 03:00 UTC Sunday → allowed
+- `test_trading_window_equity_outside_hours` — SPY at 05:00 ET → rejected
+- `test_trading_window_equity_within_buffer` — SPY at 10:00 ET (inside open buffer) → rejected
+- `test_trading_window_equity_close_buffer` — SPY at 15:30 ET (inside close buffer) → rejected
+- `test_trading_window_equity_allowed` — SPY at 12:00 ET → allowed
+- `test_trading_window_equity_weekend` — SPY at 12:00 ET Saturday → rejected
+- `test_risk_manager_rejects_out_of_window` — integration test on RiskManager.check_entry
+
+---
+
 ## Cross-Cutting Concerns
 
 ### Service Startup Order
