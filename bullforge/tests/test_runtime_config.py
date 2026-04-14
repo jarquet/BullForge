@@ -79,3 +79,10 @@ def test_schema_has_required_keys():
         assert "label" in meta
         assert "description" in meta
         assert "reference" in meta
+
+
+def test_schema_has_trading_window_buffers():
+    assert "equity_window_open_buffer_minutes" in CONFIG_SCHEMA
+    assert "equity_window_close_buffer_minutes" in CONFIG_SCHEMA
+    assert CONFIG_SCHEMA["equity_window_open_buffer_minutes"]["default"] == 60
+    assert CONFIG_SCHEMA["equity_window_close_buffer_minutes"]["default"] == 60

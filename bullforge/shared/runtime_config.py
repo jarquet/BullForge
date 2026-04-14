@@ -53,6 +53,18 @@ CONFIG_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Number of training samples processed together in each gradient update.",
         "reference": "https://en.wikipedia.org/wiki/Stochastic_gradient_descent#Mini-batch_gradient_descent",
     },
+    "equity_window_open_buffer_minutes": {
+        "default": 60, "type": "int", "min": 0, "max": 240,
+        "label": "Equity Open Buffer (minutes)",
+        "description": "Minutes after NYSE open (9:30 ET) before equity trading begins. 60 = trade from 10:30 ET onward.",
+        "reference": "https://en.wikipedia.org/wiki/Opening_Bell",
+    },
+    "equity_window_close_buffer_minutes": {
+        "default": 60, "type": "int", "min": 0, "max": 240,
+        "label": "Equity Close Buffer (minutes)",
+        "description": "Minutes before NYSE close (16:00 ET) to stop equity trading. 60 = stop at 15:00 ET.",
+        "reference": "https://en.wikipedia.org/wiki/Closing_Bell",
+    },
     "last_retrain_time": {
         "default": "", "type": "str",
         "label": "Last Retrain Time (UTC ISO)",
