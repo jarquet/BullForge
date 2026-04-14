@@ -54,26 +54,37 @@ class InferenceEngine:
         if not matching:
             return []
 
+        # Fetch a window large enough for sequence models (LSTM seq_len=30).
+        # Gradient-boost ignores history; LSTM needs the window.
         feature_rows = await self._db.query_feature_rows(
-            symbol, timeframe, limit=1,
+            symbol, timeframe, limit=60,
         )
         if not feature_rows:
             logger.debug("No features available for %s %s", symbol, timeframe)
             return []
 
-        latest_features = feature_rows[0]
+        # query_feature_rows returns DESC; flip to ascending so the last row is latest.
+        feature_rows = list(reversed(feature_rows))
+        latest_features = feature_rows[-1]
         predictions = []
 
         for key, model, meta in matching:
             horizon = key[2]
-            feature_dict = {
-                col: latest_features.features.get(col, 0.0)
-                for col in meta.feature_columns
-            }
-            X = pd.DataFrame([feature_dict])
+            rows = [
+                {col: fr.features.get(col, 0.0) for col in meta.feature_columns}
+                for fr in feature_rows
+            ]
+            X = pd.DataFrame(rows)
 
-            direction = int(model.predict(X)[0])
-            proba = model.predict_proba(X)[0]
+            try:
+                direction = int(model.predict(X)[-1])
+                proba = model.predict_proba(X)[-1]
+            except ValueError as e:
+                logger.warning(
+                    "Skipping %s %s %dm (id=%d): %s",
+                    symbol, timeframe, horizon, meta.id, e,
+                )
+                continue
             confidence = float(proba.max())
 
             predictions.append(Prediction(

@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Callable, Awaitable, Dict, Optional
 
 import redis.asyncio as aioredis
 
 from shared.config import Settings
+
+logger = logging.getLogger(__name__)
 
 
 class RedisClient:
@@ -65,4 +68,5 @@ class RedisClient:
             except asyncio.CancelledError:
                 break
             except Exception:
+                logger.exception("Error in redis pubsub listener")
                 await asyncio.sleep(0.1)

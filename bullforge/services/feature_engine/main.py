@@ -67,6 +67,22 @@ async def main() -> None:
     await redis_client.subscribe("market:ticks", on_tick)
     logger.info("Subscribed to market:ticks for reactive feature updates")
 
+    async def recompute_daily_features_loop(interval_seconds: int = 3600) -> None:
+        all_symbols = (
+            settings.trading_symbols_equity + settings.trading_symbols_crypto
+        )
+        while True:
+            await asyncio.sleep(interval_seconds)
+            logger.info("Hourly 1d feature recompute starting for %d symbols", len(all_symbols))
+            for symbol in all_symbols:
+                try:
+                    await engine.compute_features_for_symbol(symbol, "1d")
+                except Exception:
+                    logger.exception("Failed 1d recompute for %s", symbol)
+
+    daily_task = asyncio.create_task(recompute_daily_features_loop())
+    logger.info("Hourly 1d feature recompute task started")
+
     # Set up graceful shutdown
     shutdown_event = asyncio.Event()
 
@@ -89,6 +105,11 @@ async def main() -> None:
         pass
     finally:
         logger.info("Shutting down...")
+        daily_task.cancel()
+        try:
+            await daily_task
+        except (asyncio.CancelledError, Exception):
+            pass
         await redis_client.disconnect()
         await db.disconnect()
         logger.info("Shutdown complete")
