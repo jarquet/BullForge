@@ -228,7 +228,11 @@ async def test_query_training_data(settings, mock_pool):
     db = Database(settings)
     db.pool = pool
 
-    rows = await db.query_training_data("SPY", "1m", 5, limit=1000)
+    rows = await db.query_training_data(
+        "SPY", "1m", 5,
+        as_of=datetime(2026, 4, 13, tzinfo=timezone.utc),
+        limit=1000,
+    )
 
     assert len(rows) == 2
     assert rows[0]["direction"] == 1
