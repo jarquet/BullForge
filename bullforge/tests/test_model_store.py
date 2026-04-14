@@ -20,6 +20,19 @@ def test_model_store_creates_directory(tmp_path):
     assert (tmp_path / "models" / "artifacts").exists()
 
 
+def test_save_crypto_symbol_sanitizes_slash(tmp_path):
+    """Crypto symbols like BTC/USD must not create subdirectories."""
+    store = ModelStore(str(tmp_path))
+    model = _make_trained_model()
+
+    path = store.save(model, "BTC/USD", "1m", 5, "gradient_boost")
+
+    assert "/BTC/USD_" not in path
+    assert "BTC-USD" in path
+    loaded = store.load(path)
+    assert loaded is not None
+
+
 def test_save_and_load_model(tmp_path):
     store = ModelStore(str(tmp_path))
     model = _make_trained_model()

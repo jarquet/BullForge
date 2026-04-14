@@ -24,7 +24,8 @@ class ModelStore:
             ext = "pt"
         else:
             ext = "joblib"
-        filename = f"{model_type}_{symbol}_{timeframe}_{horizon_minutes}m_{now}.{ext}"
+        safe_symbol = symbol.replace("/", "-")
+        filename = f"{model_type}_{safe_symbol}_{timeframe}_{horizon_minutes}m_{now}.{ext}"
         path = self._dir / filename
         if isinstance(model, LSTMClassifier):
             torch.save(model, path)
