@@ -38,6 +38,7 @@ class RetrainScheduler:
         timeframes: list[str],
         horizons: list[int],
         min_samples: int,
+        min_samples_1d: int = 84,
         db: Optional[Database] = None,
     ):
         self._db_dsn = db_dsn
@@ -49,6 +50,7 @@ class RetrainScheduler:
         self._timeframes = timeframes
         self._horizons = horizons
         self._min_samples = min_samples
+        self._min_samples_1d = min_samples_1d
         self._db = db
         self._stop = asyncio.Event()
 
@@ -104,7 +106,8 @@ class RetrainScheduler:
                 fut = pool.submit(
                     train_one_job,
                     self._db_dsn, self._artifacts_dir,
-                    symbol, tf, h, mt, as_of, config, self._min_samples,
+                    symbol, tf, h, mt, as_of, config,
+                    self._min_samples, self._min_samples_1d,
                 )
                 futures.append(fut)
             for fut in futures:
@@ -150,7 +153,10 @@ class RetrainScheduler:
         if self._db is None:
             raise RuntimeError("RetrainScheduler needs a Database instance for GPU phase")
         store = ModelStore(self._artifacts_dir)
-        trainer = Trainer(db=self._db, model_store=store, min_samples=self._min_samples)
+        trainer = Trainer(
+            db=self._db, model_store=store,
+            min_samples=self._min_samples, min_samples_1d=self._min_samples_1d,
+        )
         meta = await trainer.train(
             symbol, timeframe, horizon,
             as_of=as_of, model_type="lstm", runtime_config=runtime_config,

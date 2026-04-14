@@ -28,10 +28,13 @@ class Trainer:
         db: Database,
         model_store: ModelStore,
         min_samples: int = 500,
+        min_samples_1d: int = 84,
     ):
         self._db = db
         self._model_store = model_store
-        self._dataset_builder = DatasetBuilder(db, min_samples=min_samples)
+        self._dataset_builder = DatasetBuilder(
+            db, min_samples=min_samples, min_samples_1d=min_samples_1d,
+        )
 
     async def train(
         self,

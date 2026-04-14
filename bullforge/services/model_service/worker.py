@@ -21,6 +21,7 @@ def train_one_job(
     as_of: datetime,
     runtime_config: dict,
     min_samples: int,
+    min_samples_1d: int,
 ) -> dict:
     """
     Run a full training job in a worker process.
@@ -40,7 +41,10 @@ def train_one_job(
         await db.connect()
         try:
             store = ModelStore(artifacts_dir)
-            trainer = Trainer(db=db, model_store=store, min_samples=min_samples)
+            trainer = Trainer(
+                db=db, model_store=store,
+                min_samples=min_samples, min_samples_1d=min_samples_1d,
+            )
             meta = await trainer.train(
                 symbol, timeframe, horizon_minutes,
                 as_of=as_of,

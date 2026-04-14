@@ -1,6 +1,16 @@
 services:
   timescaledb:
     image: timescale/timescaledb:latest-pg16
+    command:
+      - postgres
+      - -c
+      - max_wal_size=4GB
+      - -c
+      - min_wal_size=1GB
+      - -c
+      - checkpoint_timeout=15min
+      - -c
+      - checkpoint_completion_target=0.9
     environment:
       POSTGRES_USER: bullforge
       POSTGRES_PASSWORD: bullforge_dev
@@ -85,6 +95,10 @@ services:
     volumes:
       - model_artifacts:/app/models/artifacts
     restart: unless-stopped
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
     deploy:
       resources:
         reservations:

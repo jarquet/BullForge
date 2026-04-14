@@ -13,9 +13,18 @@ logger = logging.getLogger(__name__)
 
 
 class DatasetBuilder:
-    def __init__(self, db: Database, min_samples: int = 500):
+    def __init__(
+        self,
+        db: Database,
+        min_samples: int = 500,
+        min_samples_1d: int = 84,
+    ):
         self._db = db
         self._min_samples = min_samples
+        self._min_samples_1d = min_samples_1d
+
+    def _threshold(self, timeframe: str) -> int:
+        return self._min_samples_1d if timeframe == "1d" else self._min_samples
 
     async def build(
         self,
@@ -30,11 +39,12 @@ class DatasetBuilder:
             symbol, timeframe, horizon_minutes, as_of=as_of, limit=limit,
         )
 
-        if len(rows) < self._min_samples:
+        threshold = self._threshold(timeframe)
+        if len(rows) < threshold:
             logger.warning(
                 "Insufficient training data for %s %s %dm: %d < %d",
                 symbol, timeframe, horizon_minutes,
-                len(rows), self._min_samples,
+                len(rows), threshold,
             )
             return None
 
@@ -60,11 +70,11 @@ class DatasetBuilder:
             X = X.loc[nan_mask].reset_index(drop=True)
             y = y.loc[nan_mask].reset_index(drop=True)
 
-        if len(X) < self._min_samples:
+        if len(X) < threshold:
             logger.warning(
                 "Insufficient training data after NaN cleanup for %s %s %dm: %d < %d",
                 symbol, timeframe, horizon_minutes,
-                len(X), self._min_samples,
+                len(X), threshold,
             )
             return None
 

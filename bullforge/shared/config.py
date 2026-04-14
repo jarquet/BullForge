@@ -94,6 +94,9 @@ class Settings:
     model_min_samples: int = field(
         default_factory=lambda: int(os.getenv("MODEL_MIN_SAMPLES", "500"))
     )
+    model_min_samples_1d: int = field(
+        default_factory=lambda: int(os.getenv("MODEL_MIN_SAMPLES_1D", "84"))
+    )
 
     # Execution service
     execution_max_position_value: float = field(

@@ -43,6 +43,7 @@ async def main() -> None:
         db=db,
         model_store=model_store,
         min_samples=settings.model_min_samples,
+        min_samples_1d=settings.model_min_samples_1d,
     )
     inference_engine = InferenceEngine(db=db, model_store=model_store)
     runtime_config = RuntimeConfig(redis_client)
@@ -108,6 +109,7 @@ async def main() -> None:
         timeframes=["1m", "1d"],
         horizons=HORIZONS,
         min_samples=settings.model_min_samples,
+        min_samples_1d=settings.model_min_samples_1d,
         db=db,
     )
     scheduler_task = asyncio.create_task(scheduler.run_forever())
