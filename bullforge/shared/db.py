@@ -934,3 +934,59 @@ class Database:
                 limit,
             )
         return [dict(r) for r in rows]
+
+    # ── Freshness & model-detail queries (Phase 6B) ────────────────
+
+    async def query_latest_bar_timestamps(self) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT symbol, MAX(timestamp) AS last_bar "
+                "FROM bars_1m GROUP BY symbol ORDER BY symbol"
+            )
+        return [dict(r) for r in rows]
+
+    async def query_latest_feature_timestamps(self) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT symbol, MAX(timestamp) AS last_feature "
+                "FROM features GROUP BY symbol ORDER BY symbol"
+            )
+        return [dict(r) for r in rows]
+
+    async def query_symbol_bar_stats(self, symbol: str) -> dict:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT COUNT(*) AS bar_count, MAX(timestamp) AS last_bar "
+                "FROM bars_1m WHERE symbol = $1",
+                symbol,
+            )
+        return {
+            "symbol": symbol,
+            "bar_count": row["bar_count"],
+            "last_bar": row["last_bar"],
+        }
+
+    async def query_model_details(self) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT mr.id AS model_id, mr.symbol, mr.timeframe,
+                       mr.horizon_minutes, mr.model_type, mr.trained_at,
+                       mr.metrics, mr.is_active,
+                       COALESCE(ms.status, 'active') AS status,
+                       COALESCE(ms.reason, '') AS reason,
+                       ms.updated_at AS status_updated_at
+                FROM model_registry mr
+                LEFT JOIN model_status ms ON mr.id = ms.model_id
+                WHERE mr.is_active = TRUE
+                ORDER BY mr.symbol, mr.timeframe, mr.horizon_minutes,
+                         mr.model_type
+                """
+            )
+        result = []
+        for r in rows:
+            d = dict(r)
+            if isinstance(d.get("metrics"), str):
+                d["metrics"] = json.loads(d["metrics"])
+            result.append(d)
+        return result
