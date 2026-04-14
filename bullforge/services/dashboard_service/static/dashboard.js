@@ -212,10 +212,10 @@ async function loadModels() {
     var tbody = $('models-table').querySelector('tbody');
     tbody.innerHTML = models.map(function(m) {
         return '<tr>' +
-            '<td>' + m.model_id + '</td>' +
+            '<td>' + m.label + '</td>' +
             '<td><span class="status-cell ' + m.status + '">' + m.status + '</span></td>' +
             '<td>' + m.reason + '</td>' +
-            '<td>' + fmtTime(m.updated_at) + '</td>' +
+            '<td>' + fmtTime(m.status_updated_at) + '</td>' +
             '</tr>';
     }).join('');
 }

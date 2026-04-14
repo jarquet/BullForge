@@ -156,6 +156,21 @@ async def test_api_metrics_history(client, mock_db):
 
 @pytest.mark.asyncio
 async def test_api_models(client, mock_db):
+    mock_db.query_model_details = AsyncMock(return_value=[{
+        "model_id": 1,
+        "symbol": "SPY",
+        "timeframe": "1m",
+        "horizon_minutes": 5,
+        "model_type": "gradient_boost",
+        "trained_at": datetime(2026, 4, 13, 12, 0, 0, tzinfo=timezone.utc),
+        "metrics": {"accuracy": 0.6, "f1_macro": 0.58},
+        "is_active": True,
+        "status": "active",
+        "reason": "",
+        "status_updated_at": datetime(
+            2026, 4, 13, 14, 0, 0, tzinfo=timezone.utc,
+        ),
+    }])
     resp = await client.get("/api/models")
     assert resp.status == 200
     data = await resp.json()
@@ -163,6 +178,10 @@ async def test_api_models(client, mock_db):
     assert len(data) == 1
     assert data[0]["model_id"] == 1
     assert data[0]["status"] == "active"
+    assert data[0]["label"] == "gradient_boost \u00b7 SPY \u00b7 1m \u00b7 5m"
+    assert data[0]["symbol"] == "SPY"
+    assert data[0]["model_type"] == "gradient_boost"
+    assert data[0]["metrics"]["accuracy"] == 0.6
 
 
 @pytest.mark.asyncio

@@ -137,17 +137,32 @@ async def _handle_metrics_history(request: web.Request) -> web.Response:
 
 async def _handle_models(request: web.Request) -> web.Response:
     db: Database = request.app["db"]
-    models = await db.get_all_model_statuses()
-
-    return web.json_response([
-        {
-            "model_id": m.model_id,
-            "status": m.status,
-            "reason": m.reason,
-            "updated_at": m.updated_at.isoformat(),
-        }
-        for m in models
-    ])
+    details = await db.query_model_details()
+    payload = []
+    for d in details:
+        label = (
+            f"{d['model_type']} \u00b7 {d['symbol']} \u00b7 "
+            f"{d['timeframe']} \u00b7 {d['horizon_minutes']}m"
+        )
+        payload.append({
+            "model_id": d["model_id"],
+            "label": label,
+            "symbol": d["symbol"],
+            "timeframe": d["timeframe"],
+            "horizon_minutes": d["horizon_minutes"],
+            "model_type": d["model_type"],
+            "status": d["status"],
+            "reason": d["reason"],
+            "metrics": d["metrics"],
+            "trained_at": (
+                d["trained_at"].isoformat() if d["trained_at"] else None
+            ),
+            "status_updated_at": (
+                d["status_updated_at"].isoformat()
+                if d.get("status_updated_at") else None
+            ),
+        })
+    return web.json_response(payload)
 
 
 async def _handle_trades(request: web.Request) -> web.Response:
