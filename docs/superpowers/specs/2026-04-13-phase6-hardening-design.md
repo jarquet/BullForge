@@ -12,6 +12,80 @@
 
 ---
 
+## CRITICAL: Data Integrity & Look-Ahead Bias Prevention
+
+This section applies to ALL sub-projects but is especially critical for 6A. Look-ahead bias (also called "data leakage" or "future data contamination") is the #1 killer of trading ML systems — a model that achieves 80% accuracy in training because it peeked at future data will perform at or below random in production. These invariants MUST hold at all times, and MUST be enforced by tests that fail CI if violated.
+
+### Invariant 1: No Same-Bar Feature Contamination
+
+For a feature row at timestamp `T` with timeframe `TF`:
+- Features MUST be computed using ONLY bars with `timestamp < T` (strictly less than)
+- The bar AT time `T` itself must NOT contribute to any feature at time `T`
+- Rationale: In live trading, at time `T` the bar for `T` is not yet closed/final, so features computed from it would be unavailable at prediction time
+
+**Enforcement:** A unit test `test_features_exclude_current_bar` that:
+1. Constructs a synthetic bar stream with a distinctive value (e.g., `close=99999.99`) at timestamp `T`
+2. Computes features for timestamp `T`
+3. Asserts that no feature value equals or depends on the distinctive value
+
+### Invariant 2: No Forward-Label Leakage Into Training Data
+
+For a training row with feature timestamp `T` and horizon `H` minutes:
+- The label `forward_return` MUST be computed from bars at timestamps `(T, T + H]`
+- The training cutoff timestamp `T_cutoff` used for training MUST satisfy `T + H ≤ T_cutoff` for every row included
+- Rationale: A label computed from future bars that haven't yet occurred in production is impossible to generate live
+
+**Enforcement:** A unit test `test_training_data_respects_horizon_cutoff` that:
+1. Queries training data with explicit `as_of` parameter representing "now"
+2. Asserts every returned row has `feature_timestamp + horizon_minutes ≤ as_of`
+3. Asserts no row has a label whose source bars extend past `as_of`
+
+### Invariant 3: No Trade-Outcome Features From Open or Future Trades
+
+If any feature is derived from trade history (e.g., `last_5_trade_pnl`, `win_rate_recent`):
+- The feature at timestamp `T` MUST only reference trades with `exit_time < T`
+- Open trades (no `exit_time`) MUST NOT contribute to features at any timestamp
+- Trades closed at `T` or later MUST NOT contribute to features at `T`
+- Rationale: In live trading at bar `T`, you don't yet know the outcome of trades that will close on or after `T`
+
+**Enforcement:** A unit test `test_trade_features_exclude_open_and_future_trades` that:
+1. Seeds the DB with: one trade closed before `T`, one trade open (no exit), one trade closed after `T`
+2. Computes trade-derived features for timestamp `T`
+3. Asserts only the trade closed before `T` contributes
+4. Note: This test is required even if no trade-outcome features exist today — it serves as a guardrail against future regressions.
+
+### Invariant 4: Training/Test Split Is Strictly Time-Based
+
+- The train/test split MUST be chronological: training data has earlier timestamps than test data
+- No random shuffling before splitting (random splits leak future data into training)
+- Rationale: Market regimes change over time; only a time-based split reflects real-world deployment
+
+**Enforcement:** A unit test `test_time_based_split_is_chronological` that:
+1. Calls `time_based_split()` on a DataFrame with sequential timestamps
+2. Asserts `max(train_timestamps) < min(test_timestamps)`
+
+### Invariant 5: Live Inference Uses Only Closed Bars
+
+At inference time, when processing a `feature:updates` event for timestamp `T`:
+- The feature row at `T` must have been computed AFTER the bar for `T` has closed and been written to the DB
+- The feature engine's `feature:updates` publication happens only after feature computation for a completed bar
+- Rationale: Prevents using partial/incomplete current-bar data in predictions
+
+**Enforcement:** Existing design — feature_engine publishes `feature:updates` only after persisting the feature row for a closed bar. A unit test `test_feature_update_published_only_after_persist` verifies the ordering.
+
+### `query_training_data` Contract Change
+
+The existing `db.query_training_data(symbol, timeframe, horizon_minutes, limit)` method MUST accept a new required parameter `as_of: datetime` representing the training cutoff. The SQL query filters rows where `feature_timestamp + horizon_minutes <= as_of`. The scheduler passes `as_of=datetime.now(timezone.utc)` at retrain time. Tests must cover:
+- Rows with `feature_timestamp + horizon = as_of` are included
+- Rows with `feature_timestamp + horizon > as_of` are excluded
+- Default `as_of` is NOT provided — callers MUST specify it explicitly (no silent bugs from omitted parameter)
+
+### Test File
+
+All these tests live in `bullforge/tests/test_data_integrity.py` and run as part of the standard `pytest` suite. The test file has its own top-level docstring explaining that these tests guard against look-ahead bias and must never be skipped or weakened.
+
+---
+
 ## Sub-project 6A: Nightly Retrain & GPU Model Zoo
 
 ### Overview
@@ -22,6 +96,7 @@ The model_service currently trains all models once at startup and never retrains
 2. **Parallel CPU training** using 15 ProcessPoolExecutor workers to train LightGBM models across all symbol/timeframe/horizon combos simultaneously
 3. A **PyTorch LSTM model** that trains on GPU, registered in the same model_registry, served by the same InferenceEngine
 4. A **RuntimeConfig system** that stores configuration in Redis, editable via the dashboard (built in 6B)
+5. **Data integrity guardrails** (see CRITICAL section above) — `query_training_data` gains a required `as_of` parameter, and the test suite enforces look-ahead bias prevention
 
 ### Runtime Config System
 
@@ -208,16 +283,17 @@ model_service:
 ### Training Sequence (Nightly)
 
 1. Scheduler wakes at `retrain_schedule_hour` UTC
-2. Reads all config from RuntimeConfig (workers, hyperparams, symbols)
-3. Reads symbol list from RuntimeConfig (equity + crypto)
-4. Builds job matrix: symbols × ["1m", "1d"] × [5, 10, 30] × ["gradient_boost", "lstm"]
-5. **CPU phase:** All `gradient_boost` jobs dispatched to ProcessPoolExecutor(15)
-6. **GPU phase:** All `lstm` jobs run sequentially on GPU
-7. Each job: query training data → train → evaluate → save artifact → deactivate old model → register new model in DB
-8. `inference_engine.load_models()` hot-swaps all active models
-9. Publishes `model:retrained` to Redis with summary
-10. Stores `last_retrain_time` in RuntimeConfig
-11. Sleeps until next scheduled hour
+2. **Captures `as_of = datetime.now(timezone.utc)`** — this timestamp is the training cutoff passed to every training job in this cycle. All jobs use the same `as_of` so the training set is deterministic and reproducible for this cycle.
+3. Reads all config from RuntimeConfig (workers, hyperparams, symbols)
+4. Reads symbol list from RuntimeConfig (equity + crypto)
+5. Builds job matrix: symbols × ["1m", "1d"] × [5, 10, 30] × ["gradient_boost", "lstm"]
+6. **CPU phase:** All `gradient_boost` jobs dispatched to ProcessPoolExecutor(15) — each job receives `as_of` and passes it to `query_training_data(symbol, timeframe, horizon, as_of, limit)`
+7. **GPU phase:** All `lstm` jobs run sequentially on GPU — same `as_of` discipline
+8. Each job: query training data with `as_of` cutoff → train → evaluate → save artifact → deactivate old model → register new model in DB
+9. `inference_engine.load_models()` hot-swaps all active models
+10. Publishes `model:retrained` to Redis with summary (includes the `as_of` cutoff used)
+11. Stores `last_retrain_time` and `last_retrain_as_of` in RuntimeConfig
+12. Sleeps until next scheduled hour
 
 ---
 
