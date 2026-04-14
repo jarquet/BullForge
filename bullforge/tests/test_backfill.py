@@ -42,7 +42,7 @@ async def test_backfill_fetches_and_stores_bars(mock_settings):
     backfiller = Backfiller(
         settings=mock_settings, db=mock_db, alpaca_client=mock_alpaca
     )
-    await backfiller.backfill_symbol("SPY", timeframe="1m", days=1)
+    await backfiller.backfill_timeframe("SPY", timeframe="1m", days=1)
 
     mock_alpaca.get_historical_bars.assert_called_once()
     mock_db.insert_bars.assert_called_once()
@@ -80,6 +80,6 @@ async def test_backfill_handles_empty_response(mock_settings):
     backfiller = Backfiller(
         settings=mock_settings, db=mock_db, alpaca_client=mock_alpaca
     )
-    await backfiller.backfill_symbol("SPY", timeframe="1m", days=1)
+    await backfiller.backfill_timeframe("SPY", timeframe="1m", days=1)
 
     mock_db.insert_bars.assert_not_called()

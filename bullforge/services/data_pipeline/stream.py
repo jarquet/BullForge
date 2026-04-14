@@ -25,6 +25,39 @@ class TickStreamer:
         self._alpaca = alpaca_client
         self._queue: queue.Queue = queue.Queue()
         self._main_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._stock_stream = None
+        self._crypto_stream = None
+        self._active_equity: set[str] = set()
+        self._active_crypto: set[str] = set()
+
+    def attach_streams(self, stock_stream, crypto_stream) -> None:
+        """Let the streamer track running Alpaca stream clients so it can
+        hot-(un)subscribe when symbols are added or removed at runtime."""
+        self._stock_stream = stock_stream
+        self._crypto_stream = crypto_stream
+
+    async def subscribe_symbol(self, symbol: str, *, kind: str) -> None:
+        if kind == "equity":
+            if self._stock_stream is not None:
+                self._stock_stream.subscribe_bars(self.handle_bar, symbol)
+            self._active_equity.add(symbol)
+        elif kind == "crypto":
+            if self._crypto_stream is not None:
+                self._crypto_stream.subscribe_bars(self.handle_bar, symbol)
+            self._active_crypto.add(symbol)
+        logger.info("Subscribed to %s bars: %s", kind, symbol)
+
+    async def unsubscribe_symbol(self, symbol: str, *, kind: str) -> None:
+        stream = (
+            self._stock_stream if kind == "equity" else self._crypto_stream
+        )
+        if stream is not None and hasattr(stream, "unsubscribe_bars"):
+            stream.unsubscribe_bars(symbol)
+        if kind == "equity":
+            self._active_equity.discard(symbol)
+        else:
+            self._active_crypto.discard(symbol)
+        logger.info("Unsubscribed from %s bars: %s", kind, symbol)
 
     async def handle_bar(self, alpaca_bar) -> None:
         """Called from Alpaca's stream thread. Enqueues the bar for main-loop processing."""

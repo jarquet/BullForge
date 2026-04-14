@@ -18,7 +18,7 @@ class Backfiller:
         self._db = db
         self._alpaca = alpaca_client
 
-    async def backfill_symbol(
+    async def backfill_timeframe(
         self, symbol: str, timeframe: str, days: int
     ) -> int:
         end = datetime.now(timezone.utc)
@@ -48,7 +48,15 @@ class Backfiller:
         )
 
         for symbol in all_symbols:
-            await self.backfill_symbol(symbol, "1m", days_1m)
-            await self.backfill_symbol(symbol, "1d", days_daily)
+            await self.backfill_timeframe(symbol, "1m", days_1m)
+            await self.backfill_timeframe(symbol, "1d", days_daily)
 
         logger.info("Backfill complete for all symbols")
+
+    async def backfill_symbol(
+        self, symbol: str, *, kind: str, lookback_days: int = 30,
+    ) -> int:
+        """Backfill both intraday (1m) and daily bars for a newly added symbol."""
+        total = await self.backfill_timeframe(symbol, "1m", lookback_days)
+        total += await self.backfill_timeframe(symbol, "1d", 365)
+        return total

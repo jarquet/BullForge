@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import signal
 import sys
@@ -10,11 +11,28 @@ from aiohttp import web
 from shared.config import Settings
 from shared.db import Database
 from shared.redis import RedisClient
+from shared.runtime_config import RuntimeConfig
 from services.data_pipeline.alpaca_client import AlpacaClient
 from services.data_pipeline.backfill import Backfiller
 from services.data_pipeline.stream import TickStreamer
 from services.data_pipeline.calendar_service import CalendarService
 from services.data_pipeline.health import create_health_app
+
+SYMBOLS_CHANGED_CHANNEL = "config:symbols_changed"
+
+
+async def handle_symbol_change_event(
+    message: str, *, stream, backfill,
+) -> None:
+    """Handle a config:symbols_changed event: backfill + subscribe on add,
+    unsubscribe-only on remove (historical data is retained)."""
+    data = json.loads(message)
+    action, kind, symbol = data["action"], data["kind"], data["symbol"]
+    if action == "add":
+        await backfill.backfill_symbol(symbol, kind=kind)
+        await stream.subscribe_symbol(symbol, kind=kind)
+    elif action == "remove":
+        await stream.unsubscribe_symbol(symbol, kind=kind)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,6 +52,14 @@ async def main() -> None:
     await db.connect()
     logger.info("Connecting to Redis...")
     await redis_client.connect()
+
+    runtime_config = RuntimeConfig(redis_client)
+    equity_symbols = await runtime_config.get("trading_symbols_equity")
+    crypto_symbols = await runtime_config.get("trading_symbols_crypto")
+    logger.info(
+        "Runtime symbol config — equity=%s crypto=%s",
+        equity_symbols, crypto_symbols,
+    )
 
     # Run backfill on startup
     backfiller = Backfiller(settings=settings, db=db, alpaca_client=alpaca_client)
@@ -58,15 +84,27 @@ async def main() -> None:
     stock_stream = None
     crypto_stream = None
 
-    if settings.trading_symbols_equity:
+    if equity_symbols:
         stock_stream = alpaca_client.create_stock_stream()
-        stock_stream.subscribe_bars(streamer.handle_bar, *settings.trading_symbols_equity)
-        logger.info("Starting equity stream for: %s", settings.trading_symbols_equity)
+        stock_stream.subscribe_bars(streamer.handle_bar, *equity_symbols)
+        logger.info("Starting equity stream for: %s", equity_symbols)
 
-    if settings.trading_symbols_crypto:
+    if crypto_symbols:
         crypto_stream = alpaca_client.create_crypto_stream()
-        crypto_stream.subscribe_bars(streamer.handle_bar, *settings.trading_symbols_crypto)
-        logger.info("Starting crypto stream for: %s", settings.trading_symbols_crypto)
+        crypto_stream.subscribe_bars(streamer.handle_bar, *crypto_symbols)
+        logger.info("Starting crypto stream for: %s", crypto_symbols)
+
+    streamer.attach_streams(stock_stream, crypto_stream)
+
+    async def _on_symbols_changed(msg: str) -> None:
+        try:
+            await handle_symbol_change_event(
+                msg, stream=streamer, backfill=backfiller,
+            )
+        except Exception:
+            logger.exception("Failed handling symbols_changed event: %s", msg)
+
+    await redis_client.subscribe(SYMBOLS_CHANGED_CHANNEL, _on_symbols_changed)
 
     # Set up graceful shutdown
     shutdown_event = asyncio.Event()
