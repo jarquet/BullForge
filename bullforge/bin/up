@@ -3,12 +3,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-echo "Building services..."
-docker compose build
-
-echo "Starting BullForge..."
-docker compose up -d
+echo "Building and starting BullForge (rebuilds changed services)..."
+docker compose up -d --build
 
 echo ""
-echo "Waiting for services to be healthy..."
+echo "Service status:"
 docker compose ps
