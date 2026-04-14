@@ -138,7 +138,7 @@ class TelegramBot:
 
             elif data == "halt_yes":
                 await self._halt_manager.trigger_halt(
-                    "Manual full halt via Telegram",
+                    "Manual full halt via Telegram", tier=5,
                 )
                 await query.edit_message_text(
                     text="[HALTED] All trading has been stopped.\n\n"
@@ -234,12 +234,7 @@ async def handle_status(
     for s in statuses:
         counts[s.status] = counts.get(s.status, 0) + 1
 
-    # TODO(phase6b): implement query_latest_bar_timestamps /
-    # query_latest_feature_timestamps in shared/db.py.
-    try:
-        bar_rows = await db.query_latest_bar_timestamps()
-    except AttributeError:
-        bar_rows = []
+    bar_rows = await db.query_latest_bar_timestamps()
     now = datetime.now(timezone.utc)
     ages = [
         (now - r["last_bar"]).total_seconds()
@@ -313,7 +308,6 @@ async def handle_trades(
 async def handle_models(
     update, context, *, db, broker_client, runtime_config, halt_manager,
 ):
-    # TODO(phase6b): implement query_model_details on shared.db.Database.
     details = await db.query_model_details()
     enriched = []
     for d in details:
@@ -330,9 +324,9 @@ async def handle_models(
 async def handle_halt(
     update, context, *, db, broker_client, runtime_config, halt_manager,
 ):
-    # NOTE: HaltManager.trigger_halt currently takes only `reason` positionally.
     # Inline confirmation dialog is a documented follow-up per plan.
-    await halt_manager.trigger_halt("Manual halt via Telegram")
+    # tier=5 distinguishes manual Telegram halts from automated tier-4 circuit breakers.
+    await halt_manager.trigger_halt("Manual halt via Telegram", tier=5)
     await update.message.reply_text(
         "Trading halted. Use /resume to restart."
     )

@@ -152,7 +152,7 @@ async def test_callback_halt_yes(bot, mock_halt_manager):
     await bot._on_callback(update, None)
 
     mock_halt_manager.trigger_halt.assert_called_once_with(
-        "Manual full halt via Telegram",
+        "Manual full halt via Telegram", tier=5,
     )
     update.callback_query.edit_message_text.assert_called_once()
     assert "halted" in update.callback_query.edit_message_text.call_args[1]["text"].lower()

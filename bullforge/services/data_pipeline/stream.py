@@ -51,7 +51,7 @@ class TickStreamer:
         stream = (
             self._stock_stream if kind == "equity" else self._crypto_stream
         )
-        if stream is not None and hasattr(stream, "unsubscribe_bars"):
+        if stream is not None:
             stream.unsubscribe_bars(symbol)
         if kind == "equity":
             self._active_equity.discard(symbol)

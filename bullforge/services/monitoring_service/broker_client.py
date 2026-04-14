@@ -11,7 +11,7 @@ from shared.redis import RedisClient
 class BrokerClient:
     """Issues broker requests over Redis and awaits correlated response."""
 
-    def __init__(self, redis_client: RedisClient, timeout: float = 5.0):
+    def __init__(self, redis_client: RedisClient, timeout: float = 10.0):
         self._redis = redis_client
         self._timeout = timeout
 

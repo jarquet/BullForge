@@ -6,16 +6,6 @@ from services.execution_service.risk_manager import RiskManager
 
 
 @pytest.fixture
-def rm():
-    return RiskManager(
-        max_position_value=10000.0,
-        max_total_positions=3,
-        max_portfolio_exposure=0.5,
-        min_signal_strength=0.5,
-    )
-
-
-@pytest.fixture
 def runtime_config():
     rc = AsyncMock()
 
@@ -27,6 +17,17 @@ def runtime_config():
 
     rc.get = get
     return rc
+
+
+@pytest.fixture
+def rm(runtime_config):
+    return RiskManager(
+        max_position_value=10000.0,
+        max_total_positions=3,
+        max_portfolio_exposure=0.5,
+        min_signal_strength=0.5,
+        runtime_config=runtime_config,
+    )
 
 
 def _signal(direction=1, strength=0.8, symbol="SPY", hour_utc=14):

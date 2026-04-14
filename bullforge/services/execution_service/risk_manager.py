@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional, Tuple
+from typing import Tuple
 
 from shared.models import TradingSignal
 from shared.runtime_config import RuntimeConfig
@@ -13,12 +13,18 @@ logger = logging.getLogger(__name__)
 class RiskManager:
     def __init__(
         self,
+        *,
+        runtime_config: RuntimeConfig,
         max_position_value: float = 10000.0,
         max_total_positions: int = 5,
         max_portfolio_exposure: float = 0.5,
         min_signal_strength: float = 0.5,
-        runtime_config: Optional[RuntimeConfig] = None,
     ):
+        if runtime_config is None:
+            raise ValueError(
+                "RiskManager requires a RuntimeConfig; the equity "
+                "trading-window gate depends on it and must not be bypassed.",
+            )
         self._max_position_value = max_position_value
         self._max_total_positions = max_total_positions
         self._max_portfolio_exposure = max_portfolio_exposure
@@ -36,15 +42,14 @@ class RiskManager:
         Check whether a new position entry is allowed.
         Returns (approved, reason, quantity).
         """
-        if self._rc is not None:
-            open_buf = int(await self._rc.get("equity_window_open_buffer_minutes"))
-            close_buf = int(await self._rc.get("equity_window_close_buffer_minutes"))
-            allowed, reason = is_trading_allowed(
-                signal.symbol, signal.timestamp,
-                open_buffer_min=open_buf, close_buffer_min=close_buf,
-            )
-            if not allowed:
-                return False, f"trading window: {reason}", 0
+        open_buf = int(await self._rc.get("equity_window_open_buffer_minutes"))
+        close_buf = int(await self._rc.get("equity_window_close_buffer_minutes"))
+        allowed, reason = is_trading_allowed(
+            signal.symbol, signal.timestamp,
+            open_buffer_min=open_buf, close_buffer_min=close_buf,
+        )
+        if not allowed:
+            return False, f"trading window: {reason}", 0
 
         if signal.direction == 0:
             return False, "Flat signal, no entry", 0

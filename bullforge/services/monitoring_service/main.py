@@ -153,7 +153,7 @@ async def main() -> None:
     fidelity_tracker = FidelityTracker(db, settings)
     halt_manager = HaltManager(db, redis_client, settings)
     runtime_config = RuntimeConfig(redis_client)
-    broker_client = BrokerClient(redis_client=redis_client, timeout=5.0)
+    broker_client = BrokerClient(redis_client=redis_client, timeout=10.0)
 
     # Start Telegram bot (optional — only if token is configured)
     telegram_bot = None

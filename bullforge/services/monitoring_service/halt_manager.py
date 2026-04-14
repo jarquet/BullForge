@@ -99,10 +99,12 @@ class HaltManager:
 
         return alerts
 
-    async def trigger_halt(self, reason: str) -> None:
+    async def trigger_halt(self, reason: str, tier: int = 4) -> None:
+        """Trigger a full halt. tier=4 for automated circuit breakers,
+        tier=5 for manual halts (distinguishable in halt_events audit)."""
         self._full_halt = True
-        await self._db.insert_halt_event(4, reason)
-        logger.critical("MANUAL HALT: %s", reason)
+        await self._db.insert_halt_event(tier, reason)
+        logger.critical("HALT tier=%d: %s", tier, reason)
         await self._redis.publish("models:status", json.dumps({"_halt": "full"}))
 
     async def resolve_halt(self) -> None:
