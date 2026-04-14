@@ -233,3 +233,27 @@ def test_order_status_expired_is_valid():
         status="expired",
     )
     assert o.status == "expired"
+
+
+def test_order_rejects_invalid_reconcile_source():
+    import pytest
+    from shared.models import Order
+    from datetime import datetime, timezone
+    with pytest.raises(ValueError, match="reconcile_source"):
+        Order(
+            symbol="SPY", side="buy", quantity=1.0, order_type="market",
+            submitted_at=datetime.now(timezone.utc), signal_strength=0.5,
+            reconcile_source="bogus",
+        )
+
+
+def test_order_rejects_naive_last_reconciled_at():
+    import pytest
+    from shared.models import Order
+    from datetime import datetime, timezone
+    with pytest.raises(ValueError, match="last_reconciled_at"):
+        Order(
+            symbol="SPY", side="buy", quantity=1.0, order_type="market",
+            submitted_at=datetime.now(timezone.utc), signal_strength=0.5,
+            last_reconciled_at=datetime(2026, 4, 14, 12, 0, 0),  # naive
+        )
