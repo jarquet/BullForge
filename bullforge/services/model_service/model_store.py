@@ -5,6 +5,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import joblib
+import torch
+
+from services.model_service.lstm_model import LSTMClassifier
 
 logger = logging.getLogger(__name__)
 
@@ -14,18 +17,19 @@ class ModelStore:
         self._dir = Path(artifacts_dir)
         self._dir.mkdir(parents=True, exist_ok=True)
 
-    def save(
-        self,
-        model: object,
-        symbol: str,
-        timeframe: str,
-        horizon_minutes: int,
-        model_type: str,
-    ) -> str:
+    def save(self, model: object, symbol: str, timeframe: str,
+             horizon_minutes: int, model_type: str) -> str:
         now = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        filename = f"{model_type}_{symbol}_{timeframe}_{horizon_minutes}m_{now}.joblib"
+        if isinstance(model, LSTMClassifier):
+            ext = "pt"
+        else:
+            ext = "joblib"
+        filename = f"{model_type}_{symbol}_{timeframe}_{horizon_minutes}m_{now}.{ext}"
         path = self._dir / filename
-        joblib.dump(model, path)
+        if isinstance(model, LSTMClassifier):
+            torch.save(model, path)
+        else:
+            joblib.dump(model, path)
         logger.info("Saved model artifact to %s", path)
         return str(path)
 
@@ -33,6 +37,12 @@ class ModelStore:
         path = Path(artifact_path)
         if not path.exists():
             raise FileNotFoundError(f"Model artifact not found: {artifact_path}")
-        model = joblib.load(path)
+        if path.suffix == ".pt":
+            model = torch.load(path, weights_only=False, map_location="cpu")
+            if isinstance(model, LSTMClassifier) and model._net is not None:
+                model.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                model._net = model._net.to(model.device)
+        else:
+            model = joblib.load(path)
         logger.info("Loaded model artifact from %s", path)
         return model
