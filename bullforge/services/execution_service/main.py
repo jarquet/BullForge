@@ -16,6 +16,7 @@ from services.execution_service.signal_aggregator import SignalAggregator
 from services.execution_service.risk_manager import RiskManager
 from services.execution_service.position_tracker import PositionTracker
 from services.execution_service.order_executor import OrderExecutor
+from services.execution_service.broker_relay import BrokerRelay
 from services.execution_service.health import create_health_app
 
 logging.basicConfig(
@@ -108,6 +109,10 @@ async def main() -> None:
 
     await redis_client.subscribe("models:status", on_model_status)
     logger.info("Subscribed to models:status")
+
+    broker_relay = BrokerRelay(redis_client=redis_client, broker=broker)
+    await broker_relay.start()
+    logger.info("BrokerRelay started")
 
     health_app = create_health_app(db, redis_client, broker)
     runner = web.AppRunner(health_app)
