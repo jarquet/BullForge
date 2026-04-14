@@ -1,18 +1,25 @@
-FROM python:3.12-slim
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.12 python3.12-venv python3-pip \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3.12 /usr/bin/python \
+    && ln -sf /usr/bin/python3.12 /usr/bin/python3
 
 WORKDIR /app
 
-# Install dependencies
 COPY services/model_service/requirements.txt /app/services/model_service/requirements.txt
-RUN pip install --no-cache-dir -r services/model_service/requirements.txt
+RUN pip install --no-cache-dir --break-system-packages \
+    --index-url https://download.pytorch.org/whl/cu124 torch \
+ && pip install --no-cache-dir --break-system-packages \
+    -r services/model_service/requirements.txt
 
-# Copy shared code and service code
 COPY shared/ /app/shared/
 COPY migrations/ /app/migrations/
 COPY services/__init__.py /app/services/__init__.py
 COPY services/model_service/ /app/services/model_service/
 
-# Create default artifacts directory
 RUN mkdir -p /app/models/artifacts
 
 ENV PYTHONPATH=/app

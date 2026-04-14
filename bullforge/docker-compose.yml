@@ -85,6 +85,13 @@ services:
     volumes:
       - model_artifacts:/app/models/artifacts
     restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   execution_service:
     build:
