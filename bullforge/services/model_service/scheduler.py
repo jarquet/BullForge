@@ -74,7 +74,18 @@ class RetrainScheduler:
         as_of = datetime.now(timezone.utc)
         config = await self._rc.get_all()
         workers = int(config["retrain_cpu_workers"])
-        logger.info("Retrain cycle starting (as_of=%s, workers=%d)", as_of, workers)
+        # Re-read symbols from RuntimeConfig each cycle so adds/removes via the
+        # dashboard are picked up without a service restart.
+        rc_symbols = (
+            list(config.get("trading_symbols_equity") or [])
+            + list(config.get("trading_symbols_crypto") or [])
+        )
+        if rc_symbols:
+            self._symbols = rc_symbols
+        logger.info(
+            "Retrain cycle starting (as_of=%s, workers=%d, symbols=%s)",
+            as_of, workers, self._symbols,
+        )
 
         cpu_jobs = []
         gpu_jobs = []

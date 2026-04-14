@@ -11,6 +11,7 @@ from aiohttp import web
 from shared.config import Settings
 from shared.db import Database
 from shared.redis import RedisClient
+from shared.runtime_config import RuntimeConfig
 from services.execution_service.alpaca_broker import AlpacaBroker
 from services.execution_service.signal_aggregator import SignalAggregator
 from services.execution_service.risk_manager import RiskManager
@@ -35,6 +36,13 @@ async def main() -> None:
     await db.connect()
     logger.info("Connecting to Redis...")
     await redis_client.connect()
+
+    runtime_config = RuntimeConfig(redis_client)
+    active_symbols = (
+        list(await runtime_config.get("trading_symbols_equity"))
+        + list(await runtime_config.get("trading_symbols_crypto"))
+    )
+    logger.info("Active trading symbols from RuntimeConfig: %s", active_symbols)
 
     broker = AlpacaBroker(settings)
     aggregator = SignalAggregator(
