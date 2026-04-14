@@ -13,6 +13,7 @@ from shared.redis import RedisClient
 from shared.runtime_config import RuntimeConfig
 from services.dashboard_service.api import create_api_app
 from services.dashboard_service.config_api import register_config_routes
+from services.dashboard_service.freshness_api import register_freshness_routes
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,6 +42,7 @@ async def main() -> None:
     app["redis_client"] = redis_client
     app["runtime_config"] = runtime_config
     register_config_routes(app)
+    register_freshness_routes(app)
 
     # Health check
     async def health_handler(request: web.Request) -> web.Response:

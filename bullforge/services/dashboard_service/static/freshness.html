@@ -1,0 +1,55 @@
+<div id="freshness-view">
+  <h2>Data Freshness</h2>
+  <section>
+    <h3>Bars (latest per symbol)</h3>
+    <table class="data-table" id="freshness-bars">
+      <thead><tr><th>Symbol</th><th>Last Bar</th><th>Age</th><th>Status</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+  <section>
+    <h3>Features</h3>
+    <table class="data-table" id="freshness-features">
+      <thead><tr><th>Symbol</th><th>Last Feature</th><th>Age</th><th>Status</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+  <section>
+    <h3>Models</h3>
+    <table class="data-table" id="freshness-models">
+      <thead><tr><th>Model</th><th>Trained</th><th>Age (h)</th><th>Status</th><th>Accuracy</th><th>F1</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+</div>
+<script>
+(async function () {
+  function ageStr(sec) {
+    if (sec < 60) return Math.round(sec) + "s";
+    if (sec < 3600) return Math.round(sec / 60) + "m";
+    return (sec / 3600).toFixed(1) + "h";
+  }
+  const r = await fetch("/api/freshness");
+  const body = await r.json();
+
+  const barsTb = document.querySelector("#freshness-bars tbody");
+  barsTb.innerHTML = body.bars.map(b =>
+    `<tr><td>${b.symbol}</td><td>${b.last_bar}</td><td>${ageStr(b.age_seconds)}</td>` +
+    `<td><span class="status-cell ${b.color}">${b.color}</span></td></tr>`
+  ).join("");
+
+  const featTb = document.querySelector("#freshness-features tbody");
+  featTb.innerHTML = body.features.map(f =>
+    `<tr><td>${f.symbol}</td><td>${f.last_feature}</td><td>${ageStr(f.age_seconds)}</td>` +
+    `<td><span class="status-cell ${f.color}">${f.color}</span></td></tr>`
+  ).join("");
+
+  const modTb = document.querySelector("#freshness-models tbody");
+  modTb.innerHTML = body.models.map(m =>
+    `<tr><td>${m.label}</td><td>${m.trained_at}</td><td>${m.age_hours.toFixed(1)}</td>` +
+    `<td><span class="status-cell ${m.age_color}">${m.status}</span></td>` +
+    `<td>${m.accuracy != null ? m.accuracy.toFixed(3) : "--"}</td>` +
+    `<td>${m.f1_macro != null ? m.f1_macro.toFixed(3) : "--"}</td></tr>`
+  ).join("");
+})();
+</script>
