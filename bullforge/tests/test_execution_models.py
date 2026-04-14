@@ -198,3 +198,38 @@ def test_order_rejects_naive_filled_at():
             signal_strength=0.8,
             filled_at=datetime(2026, 4, 12, 14, 0, 1),
         )
+
+
+def test_order_has_reconciliation_fields():
+    from shared.models import Order
+    from datetime import datetime, timezone
+    o = Order(
+        symbol="SPY", side="buy", quantity=1.0, order_type="market",
+        submitted_at=datetime.now(timezone.utc), signal_strength=0.5,
+    )
+    assert o.origin == "internal"
+    assert o.last_reconciled_at is None
+    assert o.reconcile_source is None
+
+
+def test_order_origin_must_be_valid():
+    import pytest
+    from shared.models import Order
+    from datetime import datetime, timezone
+    with pytest.raises(ValueError, match="origin"):
+        Order(
+            symbol="SPY", side="buy", quantity=1.0, order_type="market",
+            submitted_at=datetime.now(timezone.utc), signal_strength=0.5,
+            origin="bogus",
+        )
+
+
+def test_order_status_expired_is_valid():
+    from shared.models import Order
+    from datetime import datetime, timezone
+    o = Order(
+        symbol="SPY", side="buy", quantity=1.0, order_type="market",
+        submitted_at=datetime.now(timezone.utc), signal_strength=0.5,
+        status="expired",
+    )
+    assert o.status == "expired"

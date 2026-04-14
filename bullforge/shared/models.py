@@ -134,8 +134,12 @@ class Prediction:
 VALID_ORDER_SIDES = {"buy", "sell"}
 VALID_ORDER_TYPES = {"market", "limit"}
 VALID_ORDER_STATUSES = {
-    "pending", "submitted", "filled", "partially_filled", "cancelled", "rejected",
+    "pending", "submitted", "filled", "partially_filled",
+    "cancelled", "rejected", "expired",
 }
+
+VALID_ORDER_ORIGINS = {"internal", "external"}
+VALID_ORDER_RECONCILE_SOURCES = {"submit", "stream", "poll", "startup"}
 
 
 @dataclass(frozen=True)
@@ -179,6 +183,9 @@ class Order:
     filled_price: Optional[float] = None
     filled_quantity: Optional[float] = None
     limit_price: Optional[float] = None
+    origin: str = "internal"
+    last_reconciled_at: Optional[datetime] = None
+    reconcile_source: Optional[str] = None
     id: Optional[int] = None
 
     def __post_init__(self):
@@ -213,6 +220,21 @@ class Order:
         ):
             raise ValueError(
                 f"filled_at must be UTC when provided, got tzinfo={self.filled_at.tzinfo}"
+            )
+        if self.origin not in VALID_ORDER_ORIGINS:
+            raise ValueError(
+                f"origin must be one of {VALID_ORDER_ORIGINS}, got {self.origin!r}"
+            )
+        if self.reconcile_source is not None and self.reconcile_source not in VALID_ORDER_RECONCILE_SOURCES:
+            raise ValueError(
+                f"reconcile_source must be one of {VALID_ORDER_RECONCILE_SOURCES}, got {self.reconcile_source!r}"
+            )
+        if self.last_reconciled_at is not None and (
+            self.last_reconciled_at.tzinfo is None
+            or self.last_reconciled_at.tzinfo != timezone.utc
+        ):
+            raise ValueError(
+                f"last_reconciled_at must be UTC when provided, got tzinfo={self.last_reconciled_at.tzinfo}"
             )
 
 
