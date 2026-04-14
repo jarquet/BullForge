@@ -65,6 +65,29 @@ async def test_get_all_merges_defaults_and_stored(fake_redis):
     assert result["lstm_epochs"] == 50
 
 
+@pytest.mark.asyncio
+async def test_symbols_stored_as_json(fake_redis):
+    fake_redis.client.hget = AsyncMock(return_value='["SPY", "QQQ"]')
+    cfg = RuntimeConfig(fake_redis)
+    val = await cfg.get("trading_symbols_equity")
+    assert val == ["SPY", "QQQ"]
+
+
+@pytest.mark.asyncio
+async def test_set_symbols_serializes_json(fake_redis):
+    cfg = RuntimeConfig(fake_redis)
+    await cfg.set("trading_symbols_equity", ["SPY", "AAPL", "MSFT"])
+    args, _ = fake_redis.client.hset.call_args
+    assert args[1] == "trading_symbols_equity"
+    assert args[2] == '["SPY", "AAPL", "MSFT"]'
+
+
+def test_schema_includes_symbols_and_last_retrain():
+    assert CONFIG_SCHEMA["trading_symbols_equity"]["type"] == "json"
+    assert CONFIG_SCHEMA["trading_symbols_crypto"]["type"] == "json"
+    assert CONFIG_SCHEMA["last_retrain_time"]["type"] == "str"
+
+
 def test_schema_has_required_keys():
     required = {
         "retrain_schedule_hour", "retrain_cpu_workers",

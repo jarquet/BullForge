@@ -53,6 +53,20 @@ CONFIG_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Number of training samples processed together in each gradient update.",
         "reference": "https://en.wikipedia.org/wiki/Stochastic_gradient_descent#Mini-batch_gradient_descent",
     },
+    "trading_symbols_equity": {
+        "default": ["SPY", "QQQ", "AAPL", "MSFT", "NVDA"],
+        "type": "json",
+        "label": "Equity Symbols",
+        "description": "Equity/ETF tickers to trade. Adding a symbol triggers historical backfill and live stream subscription. Removing stops streaming (historical data retained).",
+        "reference": "https://en.wikipedia.org/wiki/Ticker_symbol",
+    },
+    "trading_symbols_crypto": {
+        "default": ["BTC/USD", "ETH/USD"],
+        "type": "json",
+        "label": "Crypto Pairs",
+        "description": "Crypto trading pairs (base/quote format). Trades 24/7.",
+        "reference": "https://en.wikipedia.org/wiki/Cryptocurrency",
+    },
     "last_retrain_time": {
         "default": "", "type": "str",
         "label": "Last Retrain Time (UTC ISO)",
