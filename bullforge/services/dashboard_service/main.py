@@ -14,6 +14,7 @@ from shared.runtime_config import RuntimeConfig
 from services.dashboard_service.api import create_api_app
 from services.dashboard_service.config_api import register_config_routes
 from services.dashboard_service.freshness_api import register_freshness_routes
+from services.dashboard_service.symbols_api import register_symbol_routes
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,6 +44,7 @@ async def main() -> None:
     app["runtime_config"] = runtime_config
     register_config_routes(app)
     register_freshness_routes(app)
+    register_symbol_routes(app)
 
     # Health check
     async def health_handler(request: web.Request) -> web.Response:

@@ -1,0 +1,91 @@
+<div id="symbols-view">
+  <h2>Trading Symbols</h2>
+  <section>
+    <h3>Equity</h3>
+    <ul id="symbols-equity" class="symbol-list"></ul>
+    <form id="add-equity">
+      <input name="symbol" placeholder="e.g. AAPL" required />
+      <button>Add Equity</button>
+    </form>
+  </section>
+  <section>
+    <h3>Crypto</h3>
+    <ul id="symbols-crypto" class="symbol-list"></ul>
+    <form id="add-crypto">
+      <input name="symbol" placeholder="e.g. BTC/USD" required />
+      <button>Add Crypto</button>
+    </form>
+  </section>
+  <div id="symbols-status"></div>
+</div>
+<script>
+(function () {
+  async function load() {
+    const r = await fetch("/api/symbols");
+    const body = await r.json();
+    for (const kind of ["equity", "crypto"]) {
+      const ul = document.getElementById("symbols-" + kind);
+      ul.innerHTML = body[kind].map(s =>
+        `<li>${s} <button data-kind="${kind}" data-symbol="${s}">Remove</button></li>`
+      ).join("");
+    }
+  }
+
+  async function remove(kind, symbol) {
+    const r = await fetch(
+      `/api/symbols/${encodeURIComponent(symbol)}?kind=${kind}`,
+      { method: "DELETE" },
+    );
+    document.getElementById("symbols-status").textContent =
+      r.ok ? `Removed ${symbol}` : "Remove failed";
+    await load();
+  }
+
+  async function add(kind, symbol) {
+    const r = await fetch("/api/symbols", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol, kind }),
+    });
+    const body = await r.json();
+    const status = document.getElementById("symbols-status");
+    if (!r.ok) {
+      status.textContent = "Error: " + body.error;
+      status.style.color = "red";
+      return;
+    }
+    status.textContent = body.added
+      ? `Added ${body.symbol} — backfill starting.`
+      : `${symbol} already present.`;
+    status.style.color = "green";
+    await load();
+    if (body.added) pollStatus(body.symbol);
+  }
+
+  async function pollStatus(symbol) {
+    for (let i = 0; i < 30; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      const r = await fetch(`/api/symbols/${encodeURIComponent(symbol)}/status`);
+      const s = await r.json();
+      const el = document.getElementById("symbols-status");
+      el.textContent = `${symbol}: ${s.status} (bars=${s.bar_count})`;
+      if (s.status === "complete") return;
+    }
+  }
+
+  document.getElementById("symbols-view").addEventListener("click", e => {
+    if (e.target.tagName === "BUTTON" && e.target.dataset.symbol) {
+      remove(e.target.dataset.kind, e.target.dataset.symbol);
+    }
+  });
+  for (const kind of ["equity", "crypto"]) {
+    document.getElementById("add-" + kind).addEventListener("submit", e => {
+      e.preventDefault();
+      const input = e.target.querySelector("input");
+      add(kind, input.value.trim().toUpperCase());
+      input.value = "";
+    });
+  }
+  load();
+})();
+</script>
