@@ -11,10 +11,12 @@ from aiohttp import web
 from shared.config import Settings
 from shared.db import Database
 from shared.redis import RedisClient
+from shared.runtime_config import RuntimeConfig
 from services.model_service.model_store import ModelStore
 from services.model_service.trainer import Trainer
 from services.model_service.inference import InferenceEngine
 from services.model_service.health import create_health_app
+from services.model_service.scheduler import RetrainScheduler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,6 +45,7 @@ async def main() -> None:
         min_samples=settings.model_min_samples,
     )
     inference_engine = InferenceEngine(db=db, model_store=model_store)
+    runtime_config = RuntimeConfig(redis_client)
 
     # Wait for feature engine to produce enough data before training
     all_symbols = (
@@ -94,6 +97,21 @@ async def main() -> None:
 
     # Load all trained models for inference
     await inference_engine.load_models()
+
+    scheduler = RetrainScheduler(
+        db_dsn="",  # Settings() env vars used inside worker processes
+        artifacts_dir=settings.model_artifacts_dir,
+        runtime_config=runtime_config,
+        inference_engine=inference_engine,
+        redis_client=redis_client,
+        symbols=all_symbols,
+        timeframes=["1m", "1d"],
+        horizons=HORIZONS,
+        min_samples=settings.model_min_samples,
+        db=db,
+    )
+    scheduler_task = asyncio.create_task(scheduler.run_forever())
+    logger.info("Retrain scheduler started")
 
     # Subscribe to feature updates for reactive inference
     async def on_feature_update(message: str) -> None:
@@ -159,6 +177,12 @@ async def main() -> None:
         pass
     finally:
         logger.info("Shutting down...")
+        scheduler.stop()
+        scheduler_task.cancel()
+        try:
+            await scheduler_task
+        except (asyncio.CancelledError, Exception):
+            pass
         await runner.cleanup()
         await redis_client.disconnect()
         await db.disconnect()
