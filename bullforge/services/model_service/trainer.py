@@ -41,6 +41,7 @@ class Trainer:
         *,
         as_of: datetime,
         model_type: str = "gradient_boost",
+        runtime_config: Optional[dict] = None,
     ) -> Optional[ModelMetadata]:
         logger.info(
             "Training %s model for %s %s %dm...",
@@ -56,7 +57,7 @@ class Trainer:
         X, y = result
         X_train, X_test, y_train, y_test = time_based_split(X, y, test_ratio=0.2)
 
-        model = create_model(model_type)
+        model = create_model(model_type, runtime_config=runtime_config)
         model.fit(X_train, y_train)
 
         metrics = self._evaluate(model, X_test, y_test)
