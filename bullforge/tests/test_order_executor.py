@@ -33,7 +33,7 @@ def mock_broker():
 @pytest.fixture
 def mock_risk():
     risk = MagicMock()
-    risk.check_entry = MagicMock(return_value=(True, "Approved", 10))
+    risk.check_entry = AsyncMock(return_value=(True, "Approved", 10))
     risk.check_exit = MagicMock(return_value=(False, "Signal matches position"))
     return risk
 
@@ -124,7 +124,7 @@ async def test_process_signal_exits_on_flat(
 async def test_process_signal_rejected_by_risk(
     executor, mock_broker, mock_risk,
 ):
-    mock_risk.check_entry = MagicMock(
+    mock_risk.check_entry = AsyncMock(
         return_value=(False, "Max positions reached", 0),
     )
 

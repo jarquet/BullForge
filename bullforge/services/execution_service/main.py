@@ -11,6 +11,7 @@ from aiohttp import web
 from shared.config import Settings
 from shared.db import Database
 from shared.redis import RedisClient
+from shared.runtime_config import RuntimeConfig
 from services.execution_service.alpaca_broker import AlpacaBroker
 from services.execution_service.signal_aggregator import SignalAggregator
 from services.execution_service.risk_manager import RiskManager
@@ -41,11 +42,13 @@ async def main() -> None:
         min_confidence=settings.execution_min_confidence,
         min_agreement=settings.execution_min_agreement,
     )
+    runtime_config = RuntimeConfig(redis_client)
     risk_manager = RiskManager(
         max_position_value=settings.execution_max_position_value,
         max_total_positions=settings.execution_max_positions,
         max_portfolio_exposure=settings.execution_max_exposure,
         min_signal_strength=settings.execution_min_signal_strength,
+        runtime_config=runtime_config,
     )
     position_tracker = PositionTracker(broker)
     executor = OrderExecutor(
