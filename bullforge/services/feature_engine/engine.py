@@ -99,6 +99,24 @@ class FeatureEngine:
                 json.dumps({"symbol": symbol, "timeframe": timeframe}),
             )
 
+    def compute_for_bar(
+        self, bars: List[Bar], target_ts, timeframe: str
+    ) -> dict:
+        """Compute features at `target_ts` using ONLY bars with timestamp < target_ts.
+
+        Returns a {name: value} dict of the last feature row (the one at target_ts's
+        predecessor). NaN and None values are dropped.
+        """
+        historical = [b for b in bars if b.timestamp < target_ts]
+        df = self._bars_to_dataframe(historical)
+        if df.empty:
+            return {}
+        features_df = self._registry.compute_all(df)
+        if features_df.empty:
+            return {}
+        last = features_df.iloc[-1].dropna().to_dict()
+        return {k: float(v) for k, v in last.items()}
+
     async def compute_labels_for_symbol(
         self, symbol: str, timeframe: str, limit: int = 500
     ) -> None:

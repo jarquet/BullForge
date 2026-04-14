@@ -702,6 +702,25 @@ class Database:
             for r in rows
         ]
 
+    async def query_trades_closed_before(
+        self, symbol: str, as_of: datetime
+    ) -> list[dict]:
+        """Trades for symbol with exit_time strictly before as_of. Excludes open trades."""
+        if as_of.tzinfo is None or as_of.tzinfo != timezone.utc:
+            raise ValueError(f"as_of must be UTC, got {as_of.tzinfo}")
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, symbol, side, entry_time, entry_price, quantity,
+                       exit_time, exit_price, pnl
+                FROM trades
+                WHERE symbol = $1 AND exit_time IS NOT NULL AND exit_time < $2
+                ORDER BY exit_time ASC
+                """,
+                symbol, as_of,
+            )
+        return [dict(r) for r in rows]
+
     # ── Model status methods ───────────────────────────────────────
 
     async def upsert_model_status(
