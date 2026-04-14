@@ -47,7 +47,7 @@ def mock_model_store(tmp_path):
 @pytest.mark.asyncio
 async def test_trainer_trains_gradient_boost(mock_db, mock_model_store):
     trainer = Trainer(db=mock_db, model_store=mock_model_store, min_samples=50)
-    meta = await trainer.train("SPY", "1m", 5, model_type="gradient_boost")
+    meta = await trainer.train("SPY", "1m", 5, as_of=datetime(2026, 4, 13, tzinfo=timezone.utc), model_type="gradient_boost")
 
     assert meta is not None
     assert isinstance(meta, ModelMetadata)
@@ -69,7 +69,7 @@ async def test_trainer_trains_gradient_boost(mock_db, mock_model_store):
 @pytest.mark.asyncio
 async def test_trainer_trains_logistic_regression(mock_db, mock_model_store):
     trainer = Trainer(db=mock_db, model_store=mock_model_store, min_samples=50)
-    meta = await trainer.train("SPY", "1m", 5, model_type="logistic_regression")
+    meta = await trainer.train("SPY", "1m", 5, as_of=datetime(2026, 4, 13, tzinfo=timezone.utc), model_type="logistic_regression")
 
     assert meta is not None
     assert meta.model_type == "logistic_regression"
@@ -82,7 +82,7 @@ async def test_trainer_returns_none_insufficient_data(mock_model_store):
     mock_db.query_training_data = AsyncMock(return_value=_make_training_rows(10))
 
     trainer = Trainer(db=mock_db, model_store=mock_model_store, min_samples=500)
-    meta = await trainer.train("SPY", "1m", 5)
+    meta = await trainer.train("SPY", "1m", 5, as_of=datetime(2026, 4, 13, tzinfo=timezone.utc))
 
     assert meta is None
     mock_db.insert_model_metadata.assert_not_called()
@@ -91,7 +91,7 @@ async def test_trainer_returns_none_insufficient_data(mock_model_store):
 @pytest.mark.asyncio
 async def test_trainer_deactivates_old_model_before_insert(mock_db, mock_model_store):
     trainer = Trainer(db=mock_db, model_store=mock_model_store, min_samples=50)
-    await trainer.train("SPY", "1m", 5)
+    await trainer.train("SPY", "1m", 5, as_of=datetime(2026, 4, 13, tzinfo=timezone.utc))
 
     # deactivate should be called before insert
     mock_db.deactivate_models.assert_called_once_with("SPY", "1m", 5)
@@ -101,7 +101,7 @@ async def test_trainer_deactivates_old_model_before_insert(mock_db, mock_model_s
 @pytest.mark.asyncio
 async def test_trainer_metrics_are_valid(mock_db, mock_model_store):
     trainer = Trainer(db=mock_db, model_store=mock_model_store, min_samples=50)
-    meta = await trainer.train("SPY", "1m", 5)
+    meta = await trainer.train("SPY", "1m", 5, as_of=datetime(2026, 4, 13, tzinfo=timezone.utc))
 
     assert meta is not None
     assert 0.0 <= meta.metrics["accuracy"] <= 1.0
@@ -116,7 +116,7 @@ async def test_trainer_metrics_are_valid(mock_db, mock_model_store):
 @pytest.mark.asyncio
 async def test_trainer_artifact_path_exists(mock_db, mock_model_store):
     trainer = Trainer(db=mock_db, model_store=mock_model_store, min_samples=50)
-    meta = await trainer.train("SPY", "1m", 5)
+    meta = await trainer.train("SPY", "1m", 5, as_of=datetime(2026, 4, 13, tzinfo=timezone.utc))
 
     assert meta is not None
     from pathlib import Path

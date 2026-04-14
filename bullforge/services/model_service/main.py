@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import signal
+from datetime import datetime, timezone
 
 from aiohttp import web
 
@@ -47,6 +48,7 @@ async def main() -> None:
     all_symbols = (
         settings.trading_symbols_equity + settings.trading_symbols_crypto
     )
+    startup_as_of = datetime.now(timezone.utc)
     logger.info(
         "Waiting for feature engine to produce >= %d samples...",
         settings.model_min_samples,
@@ -56,7 +58,7 @@ async def main() -> None:
     waited = 0
     while waited < max_wait:
         rows = await db.query_training_data(
-            all_symbols[0], "1m", HORIZONS[0], limit=settings.model_min_samples,
+            all_symbols[0], "1m", HORIZONS[0], as_of=startup_as_of, limit=settings.model_min_samples,
         )
         if len(rows) >= settings.model_min_samples:
             logger.info("Feature data ready (%d rows), proceeding with training", len(rows))
@@ -87,7 +89,7 @@ async def main() -> None:
                     )
                     continue
                 await trainer.train(
-                    symbol, timeframe, horizon, model_type="gradient_boost",
+                    symbol, timeframe, horizon, as_of=startup_as_of, model_type="gradient_boost",
                 )
 
     # Load all trained models for inference

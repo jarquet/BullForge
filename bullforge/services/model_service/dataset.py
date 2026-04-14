@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from typing import Optional, Tuple
 
 import pandas as pd
@@ -21,10 +22,12 @@ class DatasetBuilder:
         symbol: str,
         timeframe: str,
         horizon_minutes: int,
+        *,
+        as_of: datetime,
         limit: int = 10000,
     ) -> Optional[Tuple[pd.DataFrame, pd.Series]]:
         rows = await self._db.query_training_data(
-            symbol, timeframe, horizon_minutes, limit=limit,
+            symbol, timeframe, horizon_minutes, as_of=as_of, limit=limit,
         )
 
         if len(rows) < self._min_samples:

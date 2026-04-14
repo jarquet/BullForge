@@ -36,7 +36,7 @@ async def test_dataset_builder_builds_dataframe():
     mock_db.query_training_data = AsyncMock(return_value=_make_training_rows(100))
 
     builder = DatasetBuilder(mock_db, min_samples=50)
-    result = await builder.build("SPY", "1m", 5, limit=1000)
+    result = await builder.build("SPY", "1m", 5, as_of=datetime(2026, 4, 13, tzinfo=timezone.utc), limit=1000)
 
     assert result is not None
     X, y = result
@@ -57,7 +57,7 @@ async def test_dataset_builder_returns_none_insufficient_data():
     mock_db.query_training_data = AsyncMock(return_value=_make_training_rows(5))
 
     builder = DatasetBuilder(mock_db, min_samples=50)
-    result = await builder.build("SPY", "1m", 5)
+    result = await builder.build("SPY", "1m", 5, as_of=datetime(2026, 4, 13, tzinfo=timezone.utc))
 
     assert result is None
 
@@ -68,7 +68,7 @@ async def test_dataset_builder_returns_none_empty():
     mock_db.query_training_data = AsyncMock(return_value=[])
 
     builder = DatasetBuilder(mock_db, min_samples=500)
-    result = await builder.build("SPY", "1m", 5)
+    result = await builder.build("SPY", "1m", 5, as_of=datetime(2026, 4, 13, tzinfo=timezone.utc))
 
     assert result is None
 
@@ -88,7 +88,7 @@ async def test_dataset_builder_handles_json_string_features():
     mock_db.query_training_data = AsyncMock(return_value=rows)
 
     builder = DatasetBuilder(mock_db, min_samples=10)
-    result = await builder.build("SPY", "1m", 5)
+    result = await builder.build("SPY", "1m", 5, as_of=datetime(2026, 4, 13, tzinfo=timezone.utc))
 
     assert result is not None
     X, y = result

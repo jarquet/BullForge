@@ -38,6 +38,8 @@ class Trainer:
         symbol: str,
         timeframe: str,
         horizon_minutes: int,
+        *,
+        as_of: datetime,
         model_type: str = "gradient_boost",
     ) -> Optional[ModelMetadata]:
         logger.info(
@@ -46,7 +48,7 @@ class Trainer:
         )
 
         result = await self._dataset_builder.build(
-            symbol, timeframe, horizon_minutes,
+            symbol, timeframe, horizon_minutes, as_of=as_of,
         )
         if result is None:
             return None

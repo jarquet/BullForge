@@ -8,7 +8,7 @@ from typing import List, Optional
 import asyncpg
 
 from shared.config import Settings
-from datetime import datetime
+from datetime import datetime, timezone
 
 from shared.models import Bar, FeatureRow, Label, ModelMetadata, Prediction, Order, Trade, ModelStatus
 
@@ -255,8 +255,18 @@ class Database:
         symbol: str,
         timeframe: str,
         horizon_minutes: int,
+        *,
+        as_of: datetime,
         limit: int = 10000,
     ) -> list[dict]:
+        """
+        Query training rows where feature_timestamp + horizon <= as_of.
+
+        as_of is a REQUIRED keyword argument to prevent accidental omission
+        that would leak future data into training.
+        """
+        if as_of.tzinfo is None or as_of.tzinfo != timezone.utc:
+            raise ValueError(f"as_of must be UTC, got tzinfo={as_of.tzinfo}")
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
@@ -267,13 +277,11 @@ class Database:
                     AND f.timestamp = l.timestamp
                     AND f.timeframe = l.timeframe
                 WHERE f.symbol = $1 AND f.timeframe = $2 AND l.horizon_minutes = $3
+                  AND f.timestamp + ($3 * INTERVAL '1 minute') <= $4
                 ORDER BY f.timestamp ASC
-                LIMIT $4
+                LIMIT $5
                 """,
-                symbol,
-                timeframe,
-                horizon_minutes,
-                limit,
+                symbol, timeframe, horizon_minutes, as_of, limit,
             )
         return [dict(r) for r in rows]
 
