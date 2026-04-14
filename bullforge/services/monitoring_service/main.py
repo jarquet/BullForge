@@ -12,7 +12,9 @@ from shared.config import Settings
 from shared.db import Database
 from shared.models import ModelStatus
 from shared.redis import RedisClient
+from shared.runtime_config import RuntimeConfig
 from services.execution_service.alpaca_broker import AlpacaBroker
+from services.monitoring_service.broker_client import BrokerClient
 from services.monitoring_service.health import create_health_app
 from services.monitoring_service.metrics import MetricsComputer
 from services.monitoring_service.fidelity import FidelityTracker
@@ -150,12 +152,20 @@ async def main() -> None:
     metrics_computer = MetricsComputer()
     fidelity_tracker = FidelityTracker(db, settings)
     halt_manager = HaltManager(db, redis_client, settings)
+    runtime_config = RuntimeConfig(redis_client)
+    broker_client = BrokerClient(redis_client=redis_client, timeout=5.0)
 
     # Start Telegram bot (optional — only if token is configured)
     telegram_bot = None
     if settings.telegram_bot_token and settings.telegram_chat_id:
         telegram_bot = TelegramBot(settings, db, halt_manager, redis_client)
         await telegram_bot.start()
+        telegram_bot.attach_handlers(
+            db=db,
+            broker_client=broker_client,
+            runtime_config=runtime_config,
+            halt_manager=halt_manager,
+        )
         logger.info("Telegram bot started")
     else:
         logger.info("Telegram bot disabled (no token configured)")

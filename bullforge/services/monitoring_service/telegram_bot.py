@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
+from datetime import datetime, timezone
+from functools import partial
 from typing import Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -19,7 +22,11 @@ from services.monitoring_service.halt_manager import HaltManager
 from services.monitoring_service.telegram_alerts import (
     format_alert,
     format_confirmation,
+    format_models_summary,
+    format_positions,
     format_status,
+    format_status_expanded,
+    format_trades,
 )
 
 logger = logging.getLogger(__name__)
@@ -183,3 +190,193 @@ class TelegramBot:
         except Exception:
             logger.exception("Error handling /status command")
             await update.message.reply_text("Error fetching status.")
+
+    def attach_handlers(
+        self, *, db, broker_client, runtime_config, halt_manager,
+    ) -> None:
+        """Register Phase 6C module-level command handlers on the running app."""
+        if self._app is None:
+            raise RuntimeError("attach_handlers called before start()")
+        register_handlers(
+            self._app,
+            db=db,
+            broker_client=broker_client,
+            runtime_config=runtime_config,
+            halt_manager=halt_manager,
+        )
+
+
+# -----------------------------------------------------------------------------
+# Phase 6C module-level command handlers (DI via kwargs)
+# -----------------------------------------------------------------------------
+
+
+async def handle_status(
+    update, context, *, db, broker_client, runtime_config, halt_manager,
+):
+    try:
+        account = await broker_client.get_account()
+    except TimeoutError:
+        await update.message.reply_text(
+            "Execution service unavailable (broker relay timeout)."
+        )
+        return
+    try:
+        positions = await broker_client.get_positions()
+    except TimeoutError:
+        positions = []
+
+    trading_snap = await db.query_latest_metric_snapshot("trading", "", "all")
+    trading_stats = (trading_snap or {}).get("metrics", {}) or {}
+
+    statuses = await db.get_all_model_statuses()
+    counts = {"active": 0, "warned": 0, "disabled": 0}
+    for s in statuses:
+        counts[s.status] = counts.get(s.status, 0) + 1
+
+    # TODO(phase6b): implement query_latest_bar_timestamps /
+    # query_latest_feature_timestamps in shared/db.py.
+    try:
+        bar_rows = await db.query_latest_bar_timestamps()
+    except AttributeError:
+        bar_rows = []
+    now = datetime.now(timezone.utc)
+    ages = [
+        (now - r["last_bar"]).total_seconds()
+        for r in bar_rows if r.get("last_bar")
+    ]
+    freshness = (
+        f"Max bar age: {max(ages) / 60:.1f}m" if ages else "no bars yet"
+    )
+
+    halts = await db.get_active_halts()
+    try:
+        last_retrain = await runtime_config.get("last_retrain_time")
+    except Exception:
+        last_retrain = ""
+
+    equity = float(account.get("equity", 0.0))
+    exposure_val = sum(
+        abs(float(p.get("market_value", 0))) for p in positions
+    )
+    exposure_pct = (exposure_val / equity) if equity else 0.0
+
+    msg = format_status_expanded(
+        account=account,
+        positions_count=len(positions),
+        exposure_pct=exposure_pct,
+        trading_stats=trading_stats,
+        model_counts=counts,
+        freshness_summary=freshness,
+        active_halts_count=len(halts),
+        last_retrain_iso=last_retrain or "",
+        now=now,
+    )
+    await update.message.reply_text(msg)
+
+
+async def handle_positions(
+    update, context, *, db, broker_client, runtime_config, halt_manager,
+):
+    try:
+        positions = await broker_client.get_positions()
+    except TimeoutError:
+        await update.message.reply_text(
+            "Execution service unavailable (broker relay timeout)."
+        )
+        return
+    await update.message.reply_text(format_positions(positions))
+
+
+async def handle_trades(
+    update, context, *, db, broker_client, runtime_config, halt_manager,
+):
+    raw = await db.query_closed_trades(limit=5)
+    trades: list[dict] = []
+    for t in raw:
+        if dataclasses.is_dataclass(t):
+            trades.append(dataclasses.asdict(t))
+        elif isinstance(t, dict):
+            trades.append(t)
+        else:
+            # Best-effort attribute access for non-dataclass objects.
+            trades.append({
+                k: getattr(t, k, None)
+                for k in (
+                    "symbol", "side", "quantity", "entry_price",
+                    "exit_price", "pnl", "hold_duration_seconds", "exit_time",
+                )
+            })
+    await update.message.reply_text(format_trades(trades))
+
+
+async def handle_models(
+    update, context, *, db, broker_client, runtime_config, halt_manager,
+):
+    # TODO(phase6b): implement query_model_details on shared.db.Database.
+    details = await db.query_model_details()
+    enriched = []
+    for d in details:
+        enriched.append({
+            **d,
+            "label": (
+                f"{d['model_type']} \u00b7 {d['symbol']} \u00b7 "
+                f"{d['timeframe']} \u00b7 {d['horizon_minutes']}m"
+            ),
+        })
+    await update.message.reply_text(format_models_summary(enriched))
+
+
+async def handle_halt(
+    update, context, *, db, broker_client, runtime_config, halt_manager,
+):
+    # NOTE: HaltManager.trigger_halt currently takes only `reason` positionally.
+    # Inline confirmation dialog is a documented follow-up per plan.
+    await halt_manager.trigger_halt("Manual halt via Telegram")
+    await update.message.reply_text(
+        "Trading halted. Use /resume to restart."
+    )
+
+
+async def handle_resume(
+    update, context, *, db, broker_client, runtime_config, halt_manager,
+):
+    await halt_manager.resolve_halt()
+    await update.message.reply_text("Trading resumed. All halts cleared.")
+
+
+async def _wrap(
+    fn, update: Update, context: ContextTypes.DEFAULT_TYPE, *, deps,
+):
+    await fn(update, context, **deps)
+
+
+def register_handlers(
+    app: Application, *, db, broker_client, runtime_config, halt_manager,
+) -> None:
+    deps = dict(
+        db=db,
+        broker_client=broker_client,
+        runtime_config=runtime_config,
+        halt_manager=halt_manager,
+    )
+    app.add_handler(
+        CommandHandler("status", partial(_wrap, handle_status, deps=deps))
+    )
+    app.add_handler(
+        CommandHandler(
+            "positions", partial(_wrap, handle_positions, deps=deps),
+        )
+    )
+    app.add_handler(
+        CommandHandler("trades", partial(_wrap, handle_trades, deps=deps))
+    )
+    app.add_handler(
+        CommandHandler("models", partial(_wrap, handle_models, deps=deps))
+    )
+    app.add_handler(
+        CommandHandler("halt", partial(_wrap, handle_halt, deps=deps))
+    )
+    app.add_handler(
+        CommandHandler("resume", partial(_wrap, handle_resume, deps=deps))
+    )
