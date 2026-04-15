@@ -57,6 +57,9 @@ class RedisClient:
     async def _listen(self) -> None:
         while True:
             try:
+                if not self._pubsub.subscribed:
+                    await asyncio.sleep(0.1)
+                    continue
                 message = await self._pubsub.get_message(
                     ignore_subscribe_messages=True, timeout=0.1
                 )
