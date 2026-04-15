@@ -1,62 +1,180 @@
 from __future__ import annotations
 
+import json
 import logging
-from datetime import datetime, timezone, timedelta
+import time
+from datetime import date, datetime, time as dtime, timedelta, timezone
 
 from shared.config import Settings
 from shared.db import Database
+from shared.symbol_utils import is_crypto
 from services.data_pipeline.alpaca_client import AlpacaClient
 
 logger = logging.getLogger(__name__)
 
+_MONITORING_CHANNEL = "monitoring:data_pipeline"
+
 
 class Backfiller:
     def __init__(
-        self, settings: Settings, db: Database, alpaca_client: AlpacaClient
+        self, settings: Settings, db: Database, alpaca_client: AlpacaClient,
+        redis_client=None,
     ):
         self._settings = settings
         self._db = db
         self._alpaca = alpaca_client
+        self._redis = redis_client
 
-    async def backfill_timeframe(
-        self, symbol: str, timeframe: str, days: int
+    # ---- helpers ----------------------------------------------------------
+
+    def _floor_dt(self, symbol: str) -> datetime:
+        floor: date = (
+            self._settings.backfill_floor_crypto
+            if is_crypto(symbol)
+            else self._settings.backfill_floor_equity
+        )
+        return datetime.combine(floor, dtime.min, tzinfo=timezone.utc)
+
+    @staticmethod
+    def _step(timeframe: str) -> timedelta:
+        return timedelta(minutes=1) if timeframe == "1m" else timedelta(days=1)
+
+    async def _publish_counter(self, name: str, value: int = 1, **labels) -> None:
+        if self._redis is None:
+            return
+        payload = json.dumps(
+            {"counter": name, "labels": labels, "value": value}
+        )
+        try:
+            await self._redis.publish(_MONITORING_CHANNEL, payload)
+        except Exception:
+            logger.exception("Failed publishing counter %s", name)
+
+    async def _fetch_and_insert(
+        self, symbol: str, timeframe: str,
+        start: datetime, end: datetime,
     ) -> int:
-        end = datetime.now(timezone.utc)
-        start = end - timedelta(days=days)
-
-        logger.info(
-            "Backfilling %s %s bars from %s to %s",
-            symbol, timeframe, start.isoformat(), end.isoformat(),
-        )
-
-        bars = self._alpaca.get_historical_bars(
-            symbol=symbol, timeframe=timeframe, start=start, end=end
-        )
-
-        if not bars:
-            logger.info("No bars returned for %s %s", symbol, timeframe)
+        if start >= end:
             return 0
-
+        t0 = time.monotonic()
+        bars = self._alpaca.get_historical_bars(
+            symbol=symbol, timeframe=timeframe, start=start, end=end,
+        )
+        if not bars:
+            logger.info(
+                "No bars returned for %s %s [%s → %s]",
+                symbol, timeframe, start.isoformat(), end.isoformat(),
+            )
+            return 0
         await self._db.insert_bars(bars)
-        logger.info("Inserted %d %s bars for %s", len(bars), timeframe, symbol)
+        logger.info(
+            "Inserted %d %s bars for %s [%s → %s] in %.2fs",
+            len(bars), timeframe, symbol,
+            start.isoformat(), end.isoformat(), time.monotonic() - t0,
+        )
         return len(bars)
 
-    async def backfill_all(self, days_1m: int = 14, days_daily: int = 365) -> None:
-        all_symbols = (
+    # ---- public API -------------------------------------------------------
+
+    async def forward_fill(self, symbol: str, timeframe: str) -> int:
+        _, latest = await self._db.get_bar_range(symbol, timeframe)
+        start = (latest + self._step(timeframe)) if latest else self._floor_dt(symbol)
+        end = datetime.now(timezone.utc)
+        inserted = await self._fetch_and_insert(symbol, timeframe, start, end)
+        if inserted:
+            await self._publish_counter(
+                "backfill.forward.bars_inserted", value=inserted,
+                symbol=symbol, timeframe=timeframe,
+            )
+        return inserted
+
+    async def reach_back(self, symbol: str, timeframe: str) -> int:
+        earliest, _ = await self._db.get_bar_range(symbol, timeframe)
+        if earliest is None:
+            return 0
+        floor = self._floor_dt(symbol)
+        if earliest <= floor:
+            return 0
+        inserted = await self._fetch_and_insert(symbol, timeframe, floor, earliest)
+        if inserted:
+            await self._publish_counter(
+                "backfill.reachback.bars_inserted", value=inserted,
+                symbol=symbol, timeframe=timeframe,
+            )
+        return inserted
+
+    async def backfill_all_forward(self) -> None:
+        symbols = (
             self._settings.trading_symbols_equity
             + self._settings.trading_symbols_crypto
         )
+        failures: list[tuple[str, str]] = []
+        for symbol in symbols:
+            for timeframe in ("1m", "1d"):
+                try:
+                    await self.forward_fill(symbol, timeframe)
+                except Exception:
+                    logger.exception(
+                        "forward_fill failed for %s %s", symbol, timeframe,
+                    )
+                    failures.append((symbol, timeframe))
+                    await self._publish_counter(
+                        "backfill.failures", phase="forward",
+                        symbol=symbol, timeframe=timeframe,
+                    )
+        if failures:
+            logger.warning(
+                "Forward backfill completed with %d failures: %s",
+                len(failures), failures,
+            )
+        else:
+            logger.info("Forward backfill complete for all symbols")
 
-        for symbol in all_symbols:
-            await self.backfill_timeframe(symbol, "1m", days_1m)
-            await self.backfill_timeframe(symbol, "1d", days_daily)
+    async def backfill_all_reach_back(self) -> None:
+        symbols = (
+            self._settings.trading_symbols_equity
+            + self._settings.trading_symbols_crypto
+        )
+        failures: list[tuple[str, str]] = []
+        for symbol in symbols:
+            for timeframe in ("1m", "1d"):
+                try:
+                    await self.reach_back(symbol, timeframe)
+                except Exception:
+                    logger.exception(
+                        "reach_back failed for %s %s", symbol, timeframe,
+                    )
+                    failures.append((symbol, timeframe))
+                    await self._publish_counter(
+                        "backfill.failures", phase="reachback",
+                        symbol=symbol, timeframe=timeframe,
+                    )
+        if failures:
+            logger.warning(
+                "Reach-back completed with %d failures: %s",
+                len(failures), failures,
+            )
+        else:
+            logger.info("Reach-back complete for all symbols")
+        await self._publish_counter(
+            "backfill.reachback.complete", failures=len(failures),
+        )
 
-        logger.info("Backfill complete for all symbols")
+    async def backfill_symbol(self, symbol: str, *, kind: str) -> int:
+        """Forward-fill a newly added symbol for both timeframes.
 
-    async def backfill_symbol(
-        self, symbol: str, *, kind: str, lookback_days: int = 30,
-    ) -> int:
-        """Backfill both intraday (1m) and daily bars for a newly added symbol."""
-        total = await self.backfill_timeframe(symbol, "1m", lookback_days)
-        total += await self.backfill_timeframe(symbol, "1d", 365)
+        The caller is responsible for scheduling reach_back as a background task.
+        """
+        total = 0
+        for timeframe in ("1m", "1d"):
+            try:
+                total += await self.forward_fill(symbol, timeframe)
+            except Exception:
+                logger.exception(
+                    "forward_fill failed for %s %s", symbol, timeframe,
+                )
+                await self._publish_counter(
+                    "backfill.failures", phase="forward",
+                    symbol=symbol, timeframe=timeframe,
+                )
         return total

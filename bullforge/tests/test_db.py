@@ -96,3 +96,51 @@ async def test_insert_bar_upsert_on_duplicate(db):
     assert len(rows) == 1
     assert rows[0].close == 420.8
     assert rows[0].volume == 18000
+
+
+@pytest.mark.asyncio
+async def test_get_bar_range_empty(db):
+    earliest, latest = await db.get_bar_range("XYZ", "1m")
+    assert earliest is None
+    assert latest is None
+
+
+@pytest.mark.asyncio
+async def test_get_bar_range_populated(db):
+    from datetime import datetime, timezone, timedelta
+    from shared.models import Bar
+    base = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    bars = [
+        Bar(
+            symbol="RNG", timestamp=base + timedelta(minutes=i),
+            open=1.0, high=1.0, low=1.0, close=1.0, volume=1,
+            timeframe="1m",
+        )
+        for i in range(3)
+    ]
+    await db.insert_bars(bars)
+    earliest, latest = await db.get_bar_range("RNG", "1m")
+    assert earliest == base
+    assert latest == base + timedelta(minutes=2)
+
+
+@pytest.mark.asyncio
+async def test_get_bar_range_timeframe_isolated(db):
+    from datetime import datetime, timezone, timedelta
+    from shared.models import Bar
+    base = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    minute_bar = Bar(
+        symbol="ISO", timestamp=base, open=1.0, high=1.0,
+        low=1.0, close=1.0, volume=1, timeframe="1m",
+    )
+    daily_bar = Bar(
+        symbol="ISO", timestamp=base + timedelta(days=10),
+        open=1.0, high=1.0, low=1.0, close=1.0, volume=1,
+        timeframe="1d",
+    )
+    await db.insert_bars([minute_bar])
+    await db.insert_bars([daily_bar])
+    e1, l1 = await db.get_bar_range("ISO", "1m")
+    e2, l2 = await db.get_bar_range("ISO", "1d")
+    assert e1 == l1 == base
+    assert e2 == l2 == base + timedelta(days=10)

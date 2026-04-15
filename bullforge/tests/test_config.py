@@ -1,5 +1,6 @@
 import os
 import pytest
+from datetime import date
 from shared.config import Settings
 
 
@@ -95,6 +96,30 @@ def test_telegram_settings_defaults(settings):
 
 def test_dashboard_settings_defaults(settings):
     assert settings.dashboard_port == 8084
+
+
+def test_backfill_floor_equity_default(monkeypatch):
+    monkeypatch.delenv("BACKFILL_FLOOR_EQUITY", raising=False)
+    s = Settings()
+    assert s.backfill_floor_equity == date(2016, 1, 1)
+
+
+def test_backfill_floor_crypto_default(monkeypatch):
+    monkeypatch.delenv("BACKFILL_FLOOR_CRYPTO", raising=False)
+    s = Settings()
+    assert s.backfill_floor_crypto == date(2021, 1, 1)
+
+
+def test_backfill_floor_equity_env_override(monkeypatch):
+    monkeypatch.setenv("BACKFILL_FLOOR_EQUITY", "2018-06-15")
+    s = Settings()
+    assert s.backfill_floor_equity == date(2018, 6, 15)
+
+
+def test_backfill_floor_crypto_env_override(monkeypatch):
+    monkeypatch.setenv("BACKFILL_FLOOR_CRYPTO", "2022-03-01")
+    s = Settings()
+    assert s.backfill_floor_crypto == date(2022, 3, 1)
 
 
 def test_reconciler_settings_have_defaults(monkeypatch):
