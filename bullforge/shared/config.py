@@ -116,8 +116,8 @@ class Settings:
     )
 
     # Execution service
-    execution_max_position_value: float = field(
-        default_factory=lambda: float(os.getenv("EXECUTION_MAX_POSITION_VALUE", "10000.0"))
+    execution_max_position_pct: float = field(
+        default_factory=lambda: float(os.getenv("EXECUTION_MAX_POSITION_PCT", "0.10"))
     )
     execution_max_positions: int = field(
         default_factory=lambda: int(os.getenv("EXECUTION_MAX_POSITIONS", "5"))

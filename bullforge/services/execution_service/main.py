@@ -55,7 +55,7 @@ async def main() -> None:
     )
     runtime_config = RuntimeConfig(redis_client)
     risk_manager = RiskManager(
-        max_position_value=settings.execution_max_position_value,
+        max_position_pct=settings.execution_max_position_pct,
         max_total_positions=settings.execution_max_positions,
         max_portfolio_exposure=settings.execution_max_exposure,
         min_signal_strength=settings.execution_min_signal_strength,

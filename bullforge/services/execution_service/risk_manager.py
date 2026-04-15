@@ -15,7 +15,7 @@ class RiskManager:
         self,
         *,
         runtime_config: RuntimeConfig,
-        max_position_value: float = 10000.0,
+        max_position_pct: float = 0.10,
         max_total_positions: int = 5,
         max_portfolio_exposure: float = 0.5,
         min_signal_strength: float = 0.5,
@@ -25,7 +25,7 @@ class RiskManager:
                 "RiskManager requires a RuntimeConfig; the equity "
                 "trading-window gate depends on it and must not be bypassed.",
             )
-        self._max_position_value = max_position_value
+        self._max_position_pct = max_position_pct
         self._max_total_positions = max_total_positions
         self._max_portfolio_exposure = max_portfolio_exposure
         self._min_signal_strength = min_signal_strength
@@ -69,7 +69,7 @@ class RiskManager:
         if equity > 0 and total_exposure / equity >= self._max_portfolio_exposure:
             return False, "Max portfolio exposure reached", 0
 
-        qty = int(self._max_position_value / current_price)
+        qty = int((equity * self._max_position_pct) / current_price)
         if qty <= 0:
             return False, "Position value too small for one share", 0
 
