@@ -177,9 +177,9 @@ class BacktestEngine:
             if signal is not None and nxt is not None:
                 order = await executor.process_signal(signal, bar["close"])
                 if order is not None:
-                    self._record_trade(
+                    await self._record_trade(
                         symbol, order, signal, ts, open_trade,
-                        completed_trades,
+                        completed_trades, broker,
                     )
 
             account = await broker.get_account()
@@ -211,17 +211,21 @@ class BacktestEngine:
         }
         await self._results.update_fold_metrics(fold_id=fold_id, metrics=metrics)
 
-    def _record_trade(
+    async def _record_trade(
         self, symbol, order, signal, ts,
-        open_trade: dict, completed: list,
+        open_trade: dict, completed: list, broker,
     ) -> None:
+        # The `Order` row returned by `process_signal` reflects DB insert state
+        # (status='submitted', filled_price=NULL) because the backtest uses a
+        # no-op reconciler. Pull the actual fill from the simulated broker.
+        fill_snap = await broker.get_order(order.alpaca_order_id)
         existing = open_trade.get(symbol)
         if existing is None:
             open_trade[symbol] = {
                 "symbol": symbol,
                 "side": "long" if signal.direction == 1 else "short",
                 "entry_time": ts,
-                "entry_price": float(order.filled_price or 0.0),
+                "entry_price": float(fill_snap["filled_avg_price"]),
                 "quantity": float(order.quantity),
                 "exit_time": None,
                 "exit_price": None,
@@ -230,7 +234,7 @@ class BacktestEngine:
             }
             return
         entry = existing
-        exit_price = float(order.filled_price or 0.0)
+        exit_price = float(fill_snap["filled_avg_price"])
         sign = 1.0 if entry["side"] == "long" else -1.0
         pnl = (exit_price - entry["entry_price"]) * entry["quantity"] * sign
         entry["exit_time"] = ts
