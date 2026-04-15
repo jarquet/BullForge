@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import datetime
 
 from shared.db import Database
 from shared.runtime_config import RuntimeConfig
@@ -139,26 +138,22 @@ class BacktestEngine:
         )
 
         equity = EquityTracker()
+        aggregator = SignalAggregator()
         completed_trades: list[dict] = []
         open_trade: dict[str, dict] = {}
 
         # 4) Replay test-window bars chronologically per symbol.
         all_bars = []
+        next_bar_lookup: dict[tuple[str, datetime], dict] = {}
         for symbol in cfg.symbols:
             bars = await self._db.query_bars_between(
                 symbol, cfg.timeframe, fold.test_start, fold.test_end,
             )
             for b in bars:
                 all_bars.append((b["timestamp"], symbol, b))
-        all_bars.sort(key=lambda t: t[0])
-
-        next_bar_lookup: dict[tuple[str, datetime], dict] = {}
-        for symbol in cfg.symbols:
-            bars = await self._db.query_bars_between(
-                symbol, cfg.timeframe, fold.test_start, fold.test_end,
-            )
             for prev, nxt in zip(bars, bars[1:]):
                 next_bar_lookup[(symbol, prev["timestamp"])] = nxt
+        all_bars.sort(key=lambda t: t[0])
 
         for ts, symbol, bar in all_bars:
             broker.set_clock(ts)
@@ -178,7 +173,6 @@ class BacktestEngine:
                 }
                 for p in preds
             ]
-            aggregator = SignalAggregator()
             signal = aggregator.aggregate(symbol, ts, pred_dicts)
             if signal is not None and nxt is not None:
                 order = await executor.process_signal(signal, bar["close"])
