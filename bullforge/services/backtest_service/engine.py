@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Optional
 
 from shared.db import Database
 from shared.runtime_config import RuntimeConfig
@@ -155,7 +156,20 @@ class BacktestEngine:
                 next_bar_lookup[(symbol, prev["timestamp"])] = nxt
         all_bars.sort(key=lambda t: t[0])
 
+        # Multi-symbol runs share `ts` across symbols; record equity ONCE per
+        # ts (at the boundary when ts changes) using the latest account
+        # snapshot, so later symbols don't overwrite earlier ones at the same
+        # ts (PK is (run_id, fold_id, timestamp)).
+        last_ts: Optional[datetime] = None
+        last_account: Optional[dict] = None
         for ts, symbol, bar in all_bars:
+            if last_ts is not None and ts != last_ts and last_account is not None:
+                equity.record(
+                    last_ts,
+                    equity=last_account["equity"],
+                    cash=last_account["cash"],
+                )
+
             broker.set_clock(ts)
             broker.mark_to_market(symbol, bar["close"])
 
@@ -182,8 +196,16 @@ class BacktestEngine:
                         completed_trades, broker,
                     )
 
-            account = await broker.get_account()
-            equity.record(ts, equity=account["equity"], cash=account["cash"])
+            last_account = await broker.get_account()
+            last_ts = ts
+
+        # Flush the final ts after the loop exits.
+        if last_ts is not None and last_account is not None:
+            equity.record(
+                last_ts,
+                equity=last_account["equity"],
+                cash=last_account["cash"],
+            )
 
         # 5) Persist equity + trades + metrics for the fold.
         for pt in equity.points():
