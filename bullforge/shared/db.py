@@ -53,11 +53,15 @@ def _normalize_alpaca_status(raw: str) -> str:
 
 
 class Database:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, *, sandbox: bool = False):
         self._settings = settings
+        self._sandbox = sandbox
         self.pool: Optional[asyncpg.Pool] = None
 
     async def connect(self) -> None:
+        server_settings = {}
+        if self._sandbox:
+            server_settings["search_path"] = "backtest,public"
         self.pool = await asyncpg.create_pool(
             host=self._settings.timescaledb_host,
             port=self._settings.timescaledb_port,
@@ -66,8 +70,10 @@ class Database:
             database=self._settings.timescaledb_db,
             min_size=2,
             max_size=10,
+            server_settings=server_settings or None,
         )
-        await self._run_migrations()
+        if not self._sandbox:
+            await self._run_migrations()
 
     async def disconnect(self) -> None:
         if self.pool:
