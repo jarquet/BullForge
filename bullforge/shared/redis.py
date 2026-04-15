@@ -37,9 +37,9 @@ class RedisClient:
             except asyncio.CancelledError:
                 pass
         if self._pubsub:
-            await self._pubsub.close()
+            await self._pubsub.aclose()
         if self.client:
-            await self.client.close()
+            await self.client.aclose()
 
     async def publish(self, channel: str, message: str) -> None:
         await self.client.publish(channel, message)
