@@ -30,7 +30,7 @@ CREATE TABLE backtest_jobs (
   id          BIGSERIAL PRIMARY KEY,
   name        TEXT NOT NULL,
   config_json JSONB NOT NULL,
-  status      TEXT NOT NULL DEFAULT 'queued',  -- queued | running | done | failed
+  status      TEXT NOT NULL DEFAULT 'queued',  -- queued | running | completed | failed
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   started_at  TIMESTAMPTZ,
   finished_at TIMESTAMPTZ,
@@ -47,7 +47,7 @@ CREATE INDEX ON backtest_jobs (status, created_at);
 1. `BEGIN; SELECT … FROM backtest_jobs WHERE status='queued' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED;`
 2. If a row is claimed: set `status='running'`, `started_at=now()`, commit.
 3. Build `BacktestConfig` from `config_json`, call `await BacktestEngine(...).run(cfg)`.
-4. On success: set `status='done'`, `run_id=<returned id>`, `finished_at=now()`.
+4. On success: set `status='completed'`, `run_id=<returned id>`, `finished_at=now()`.
 5. On exception: set `status='failed'`, `error=<message>`, `finished_at=now()`. Log traceback.
 6. Sleep 2s between polls when idle.
 
@@ -61,7 +61,7 @@ All JSON; base path `/api/backtests`. Read-only except the POST.
 
 List runs + in-flight jobs. Query params:
 
-- `status` — one of `all|running|done|failed|queued` (default `all`)
+- `status` — one of `all|queued|running|completed|failed|queued` (default `all`)
 - `q` — case-insensitive substring match on `name`
 - `sort` — one of `finished_at|started_at|name|total_pnl|sharpe|max_dd` (default `finished_at`)
 - `order` — `asc|desc` (default `desc`)
@@ -198,7 +198,7 @@ Chart.js via CDN `<script>` tag in `index.html`. Loaded only on the Backtests ta
 ## Testing
 
 - **`results_db.py` query methods:** unit tests against the test TimescaleDB, following existing backtest_service test fixtures.
-- **Worker:** unit test the claim/update transition; integration test that inserts a tiny job (one symbol, 2-day range, simulated broker) and asserts `status='done'` + a row in `backtest_runs`.
+- **Worker:** unit test the claim/update transition; integration test that inserts a tiny job (one symbol, 2-day range, simulated broker) and asserts `status='completed'` + a row in `backtest_runs`.
 - **Dashboard API routes:** aiohttp test-client tests for list filtering/sorting, detail 404, POST validation (happy path + each field error), equity + trades pagination.
 - **Frontend:** manual verification in a browser — load the Backtests tab, run the modal happy path, drill into a completed run, toggle per-fold overlay, paginate trades, deep-link `#backtests/{id}`, back-button. No JS test harness exists today; not adding one this round.
 
