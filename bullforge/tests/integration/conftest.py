@@ -24,6 +24,17 @@ async def _raw_conn():
         database=settings.timescaledb_db,
     )
     try:
+        # Clear any legacy rows (e.g. raw Alpaca statuses like "new"/"accepted"
+        # left in the volume from a prior test session) before migration 011
+        # adds the CHECK constraint; otherwise ALTER TABLE would fail.
+        orders_exists = await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema='public' AND table_name='orders')"
+        )
+        if orders_exists:
+            await conn.execute(
+                "TRUNCATE trades, orders RESTART IDENTITY CASCADE"
+            )
         for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
             await conn.execute(path.read_text())
         yield conn

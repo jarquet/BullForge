@@ -96,3 +96,14 @@ async def test_submit_path_is_idempotent_with_stream_winner(real_db):
     assert result is None
     existing = await real_db.get_order_by_alpaca_id("alp-race")
     assert existing.origin == "external"
+
+
+async def test_status_check_rejects_garbage(real_db):
+    await _insert_submitted(real_db, alpaca_id="alp-check")
+    async with real_db.pool.acquire() as conn:
+        with pytest.raises(Exception):
+            await conn.execute(
+                "UPDATE orders SET status='not_a_status' "
+                "WHERE alpaca_order_id=$1",
+                "alp-check",
+            )
