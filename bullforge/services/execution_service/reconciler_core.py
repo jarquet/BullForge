@@ -5,7 +5,7 @@ import logging
 from typing import Optional
 
 from shared.db import Database
-from shared.models import Order
+from shared.models import Order, Trade
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +55,46 @@ class ReconcilerCore:
             await self._publish("execution:orders", order)
 
     async def _handle_fill(self, order: Order) -> None:
-        # Implemented in Task 8
-        pass
+        if order.filled_price is None or order.filled_at is None:
+            logger.warning(
+                "fill event for %s missing price/time; skipping trade bookkeeping",
+                order.alpaca_order_id,
+            )
+            return
+
+        open_trade = await self._db.get_open_trade(order.symbol)
+
+        is_closing = open_trade is not None and (
+            (open_trade.side == "long" and order.side == "sell")
+            or (open_trade.side == "short" and order.side == "buy")
+        )
+
+        if is_closing:
+            pnl = (order.filled_price - open_trade.entry_price) * open_trade.quantity
+            if open_trade.side == "short":
+                pnl = -pnl
+            hold_secs = int(
+                (order.filled_at - open_trade.entry_time).total_seconds()
+            )
+            await self._db.update_trade_exit(
+                trade_id=open_trade.id,
+                exit_time=order.filled_at,
+                exit_price=order.filled_price,
+                exit_order_id=order.id,
+                pnl=pnl,
+                hold_duration_seconds=hold_secs,
+            )
+        else:
+            trade_side = "long" if order.side == "buy" else "short"
+            trade = Trade(
+                symbol=order.symbol,
+                side=trade_side,
+                entry_time=order.filled_at,
+                entry_price=order.filled_price,
+                quantity=order.filled_quantity or order.quantity,
+                entry_order_id=order.id,
+            )
+            await self._db.insert_trade(trade)
 
     async def _publish(self, channel: str, order: Order) -> None:
         if self._redis is None:
