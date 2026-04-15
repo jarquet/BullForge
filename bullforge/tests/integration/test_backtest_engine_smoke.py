@@ -86,9 +86,16 @@ async def test_single_fold_smoke(stack):
             eq_count = await conn.fetchval(
                 "SELECT COUNT(*) FROM backtest_equity WHERE run_id=$1", run_id,
             )
+            trades = await conn.fetch(
+                "SELECT entry_price, exit_price FROM backtest_trades WHERE run_id=$1", run_id,
+            )
         assert run["status"] == "completed"
         assert len(folds) >= 1
         assert eq_count > 0
+        # Allow zero trades (smoke window may be too short), but any recorded
+        # trade must have a non-zero entry price.
+        for t in trades:
+            assert t["entry_price"] > 0, f"trade has zero entry_price: {dict(t)}"
     finally:
         async with live_db.pool.acquire() as conn:
             await conn.execute("DELETE FROM backtest_equity WHERE run_id=$1", run_id)
