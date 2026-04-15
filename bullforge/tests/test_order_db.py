@@ -251,3 +251,104 @@ async def test_insert_order_writes_origin_and_reconcile_fields(
     assert call_args[13] == "external"  # origin at position 13
     assert call_args[14] is None  # last_reconciled_at at position 14
     assert call_args[15] == "submit"  # reconcile_source at position 15
+
+
+@pytest.mark.asyncio
+async def test_upsert_inserts_when_no_existing_row(settings, mock_pool):
+    from shared.db import Database, UpsertResult
+    pool, conn = mock_pool
+    now = datetime.now(timezone.utc)
+
+    # transaction context manager
+    tx = MagicMock()
+    tx.__aenter__ = AsyncMock()
+    tx.__aexit__ = AsyncMock(return_value=False)
+    conn.transaction = MagicMock(return_value=tx)
+
+    conn.fetchrow = AsyncMock(side_effect=[
+        None,  # SELECT ... FOR UPDATE — no existing row
+        {  # get_order_by_alpaca_id readback
+            "id": 42, "symbol": "SPY", "side": "buy", "quantity": 3.0,
+            "order_type": "market", "submitted_at": now,
+            "signal_strength": 0.0, "alpaca_order_id": "alp-new-1",
+            "status": "filled", "filled_at": now,
+            "filled_price": 420.0, "filled_quantity": 3.0,
+            "limit_price": None, "origin": "external",
+            "last_reconciled_at": now, "reconcile_source": "startup",
+        },
+    ])
+    conn.fetchval = AsyncMock(return_value=42)
+    db = Database(settings)
+    db.pool = pool
+
+    snapshot = {
+        "id": "alp-new-1", "symbol": "SPY", "side": "buy", "qty": 3.0,
+        "order_type": "market", "submitted_at": now, "status": "filled",
+        "filled_qty": 3.0, "filled_avg_price": 420.0, "filled_at": now,
+    }
+    result = await db.upsert_order_from_alpaca(snapshot, source="startup")
+
+    assert isinstance(result, UpsertResult)
+    assert result.inserted is True
+    assert result.old_status is None
+    assert result.new_status == "filled"
+    assert result.order.origin == "external"
+    # verify INSERT was called (fetchval), not UPDATE
+    conn.fetchval.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_upsert_updates_existing_row(settings, mock_pool):
+    from shared.db import Database
+    pool, conn = mock_pool
+    now = datetime.now(timezone.utc)
+
+    tx = MagicMock()
+    tx.__aenter__ = AsyncMock()
+    tx.__aexit__ = AsyncMock(return_value=False)
+    conn.transaction = MagicMock(return_value=tx)
+
+    conn.fetchrow = AsyncMock(side_effect=[
+        {"status": "submitted", "origin": "internal"},  # existing SELECT
+        {  # readback
+            "id": 7, "symbol": "SPY", "side": "buy", "quantity": 1.0,
+            "order_type": "market", "submitted_at": now,
+            "signal_strength": 0.5, "alpaca_order_id": "alp-exist",
+            "status": "cancelled", "filled_at": None,
+            "filled_price": None, "filled_quantity": None,
+            "limit_price": None, "origin": "internal",
+            "last_reconciled_at": now, "reconcile_source": "poll",
+        },
+    ])
+    conn.execute = AsyncMock()
+    db = Database(settings)
+    db.pool = pool
+
+    snapshot = {
+        "id": "alp-exist", "symbol": "SPY", "side": "buy", "qty": 1.0,
+        "order_type": "market", "submitted_at": now, "status": "canceled",  # Alpaca spelling
+    }
+    result = await db.upsert_order_from_alpaca(snapshot, source="poll")
+
+    assert result.inserted is False
+    assert result.old_status == "submitted"
+    assert result.new_status == "cancelled"  # normalized
+    assert result.order.origin == "internal"  # preserved
+    conn.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_upsert_normalizes_alpaca_statuses(settings, mock_pool):
+    from shared.db import _normalize_alpaca_status
+    assert _normalize_alpaca_status("new") == "submitted"
+    assert _normalize_alpaca_status("accepted") == "submitted"
+    assert _normalize_alpaca_status("pending_new") == "submitted"
+    assert _normalize_alpaca_status("canceled") == "cancelled"
+    assert _normalize_alpaca_status("cancelled") == "cancelled"
+    assert _normalize_alpaca_status("filled") == "filled"
+    assert _normalize_alpaca_status("rejected") == "rejected"
+    assert _normalize_alpaca_status("expired") == "expired"
+    assert _normalize_alpaca_status("done_for_day") == "expired"
+    import pytest
+    with pytest.raises(ValueError, match="unknown"):
+        _normalize_alpaca_status("bogus-status")

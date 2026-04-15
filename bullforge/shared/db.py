@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
@@ -11,6 +12,44 @@ from shared.config import Settings
 from datetime import datetime, timedelta, timezone
 
 from shared.models import Bar, FeatureRow, Label, ModelMetadata, Prediction, Order, Trade, ModelStatus
+
+
+@dataclass(frozen=True)
+class UpsertResult:
+    order: "Order"
+    old_status: Optional[str]
+    new_status: str
+    inserted: bool
+
+
+# Alpaca reports more statuses than our canonical set. Map them.
+_ALPACA_STATUS_MAP = {
+    "new": "submitted",
+    "accepted": "submitted",
+    "pending_new": "submitted",
+    "accepted_for_bidding": "submitted",
+    "held": "submitted",
+    "pending_cancel": "submitted",
+    "pending_replace": "submitted",
+    "calculated": "submitted",
+    "suspended": "submitted",
+    "replaced": "cancelled",
+    "canceled": "cancelled",
+    "cancelled": "cancelled",
+    "rejected": "rejected",
+    "filled": "filled",
+    "partially_filled": "partially_filled",
+    "expired": "expired",
+    "done_for_day": "expired",
+    "stopped": "filled",
+}
+
+
+def _normalize_alpaca_status(raw: str) -> str:
+    mapped = _ALPACA_STATUS_MAP.get(raw)
+    if mapped is None:
+        raise ValueError(f"unknown Alpaca order status: {raw!r}")
+    return mapped
 
 
 class Database:
@@ -648,6 +687,77 @@ class Database:
             )
             for r in rows
         ]
+
+    async def upsert_order_from_alpaca(
+        self, snapshot: dict, source: str,
+    ) -> UpsertResult:
+        alpaca_id = snapshot["id"]
+        canonical_status = _normalize_alpaca_status(snapshot["status"])
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                existing = await conn.fetchrow(
+                    "SELECT status, origin FROM orders "
+                    "WHERE alpaca_order_id = $1 FOR UPDATE",
+                    alpaca_id,
+                )
+                now_ts = datetime.now(timezone.utc)
+                if existing is None:
+                    await conn.fetchval(
+                        """
+                        INSERT INTO orders
+                          (symbol, side, quantity, order_type, submitted_at,
+                           signal_strength, alpaca_order_id, status,
+                           filled_at, filled_price, filled_quantity,
+                           origin, last_reconciled_at, reconcile_source)
+                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
+                                'external',$12,$13)
+                        RETURNING id
+                        """,
+                        snapshot["symbol"],
+                        snapshot["side"],
+                        float(snapshot["qty"]),
+                        snapshot.get("order_type", "market"),
+                        snapshot.get("submitted_at") or now_ts,
+                        0.0,
+                        alpaca_id,
+                        canonical_status,
+                        snapshot.get("filled_at"),
+                        snapshot.get("filled_avg_price"),
+                        snapshot.get("filled_qty"),
+                        now_ts,
+                        source,
+                    )
+                    order = await self.get_order_by_alpaca_id(alpaca_id)
+                    return UpsertResult(
+                        order=order, old_status=None,
+                        new_status=canonical_status, inserted=True,
+                    )
+
+                old_status = existing["status"]
+                await conn.execute(
+                    """
+                    UPDATE orders
+                    SET status = $2,
+                        filled_at = COALESCE($3, filled_at),
+                        filled_price = COALESCE($4, filled_price),
+                        filled_quantity = COALESCE($5, filled_quantity),
+                        last_reconciled_at = $6,
+                        reconcile_source = $7
+                    WHERE alpaca_order_id = $1
+                    """,
+                    alpaca_id,
+                    canonical_status,
+                    snapshot.get("filled_at"),
+                    snapshot.get("filled_avg_price"),
+                    snapshot.get("filled_qty"),
+                    now_ts,
+                    source,
+                )
+        order = await self.get_order_by_alpaca_id(alpaca_id)
+        return UpsertResult(
+            order=order, old_status=old_status,
+            new_status=canonical_status, inserted=False,
+        )
 
     # ── Trade methods ──────────────────────────────────────────────
 
