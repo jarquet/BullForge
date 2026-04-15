@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from datetime import time
+from datetime import date, time
 from typing import List
 
 
@@ -15,6 +15,11 @@ def _parse_time(env_key: str, default: str) -> time:
     raw = os.getenv(env_key, default)
     parts = raw.split(":")
     return time(hour=int(parts[0]), minute=int(parts[1]))
+
+
+def _parse_date(env_key: str, default: str) -> date:
+    raw = os.getenv(env_key, default)
+    return date.fromisoformat(raw)
 
 
 @dataclass(frozen=True)
@@ -79,6 +84,18 @@ class Settings:
         )
     )
 
+    # Backfill floors (earliest historical bar dates from Alpaca)
+    backfill_floor_equity: date = field(
+        default_factory=lambda: _parse_date(
+            "BACKFILL_FLOOR_EQUITY", "2016-01-01"
+        )
+    )
+    backfill_floor_crypto: date = field(
+        default_factory=lambda: _parse_date(
+            "BACKFILL_FLOOR_CRYPTO", "2021-01-01"
+        )
+    )
+
     # Trading window (UTC times)
     trading_window_start: time = field(
         default_factory=lambda: _parse_time("TRADING_WINDOW_START", "11:30")
@@ -99,8 +116,8 @@ class Settings:
     )
 
     # Execution service
-    execution_max_position_value: float = field(
-        default_factory=lambda: float(os.getenv("EXECUTION_MAX_POSITION_VALUE", "10000.0"))
+    execution_max_position_pct: float = field(
+        default_factory=lambda: float(os.getenv("EXECUTION_MAX_POSITION_PCT", "0.10"))
     )
     execution_max_positions: int = field(
         default_factory=lambda: int(os.getenv("EXECUTION_MAX_POSITIONS", "5"))

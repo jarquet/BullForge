@@ -183,6 +183,21 @@ class Database:
             )
         return [dict(r) for r in rows]
 
+    async def get_bar_range(
+        self, symbol: str, timeframe: str
+    ) -> tuple[Optional[datetime], Optional[datetime]]:
+        """Return (earliest_ts, latest_ts) for (symbol, timeframe), or (None, None)."""
+        table = "bars_1m" if timeframe == "1m" else "bars_daily"
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT MIN(timestamp) AS lo, MAX(timestamp) AS hi "
+                f"FROM {table} WHERE symbol = $1",
+                symbol,
+            )
+        if row is None or row["lo"] is None:
+            return None, None
+        return row["lo"], row["hi"]
+
     async def insert_feature_row(self, row: FeatureRow) -> None:
         async with self.pool.acquire() as conn:
             await conn.execute(

@@ -22,7 +22,7 @@ def runtime_config():
 @pytest.fixture
 def rm(runtime_config):
     return RiskManager(
-        max_position_value=10000.0,
+        max_position_pct=0.10,
         max_total_positions=3,
         max_portfolio_exposure=0.5,
         min_signal_strength=0.5,
@@ -58,6 +58,16 @@ async def test_check_entry_approved(rm):
     assert approved is True
     assert qty == 23
     assert reason == "Approved"
+
+
+@pytest.mark.asyncio
+async def test_check_entry_qty_scales_with_equity(rm):
+    # equity doubled -> position cap doubles -> qty doubles
+    approved, _, qty = await rm.check_entry(
+        _signal(hour_utc=16), _account(equity=200000.0), [], current_price=420.0,
+    )
+    assert approved is True
+    assert qty == 47  # int(200000 * 0.10 / 420)
 
 
 @pytest.mark.asyncio

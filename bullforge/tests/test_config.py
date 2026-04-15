@@ -1,5 +1,6 @@
 import os
 import pytest
+from datetime import date
 from shared.config import Settings
 
 
@@ -54,7 +55,7 @@ def test_model_service_env_override(monkeypatch):
 
 
 def test_execution_defaults(settings):
-    assert settings.execution_max_position_value == 10000.0
+    assert settings.execution_max_position_pct == 0.10
     assert settings.execution_max_positions == 5
     assert settings.execution_max_exposure == 0.5
     assert settings.execution_min_signal_strength == 0.5
@@ -63,7 +64,7 @@ def test_execution_defaults(settings):
 
 
 def test_execution_env_override(monkeypatch):
-    monkeypatch.setenv("EXECUTION_MAX_POSITION_VALUE", "20000.0")
+    monkeypatch.setenv("EXECUTION_MAX_POSITION_PCT", "0.20")
     monkeypatch.setenv("EXECUTION_MAX_POSITIONS", "10")
     monkeypatch.setenv("EXECUTION_MAX_EXPOSURE", "0.8")
     monkeypatch.setenv("EXECUTION_MIN_SIGNAL_STRENGTH", "0.7")
@@ -71,7 +72,7 @@ def test_execution_env_override(monkeypatch):
     monkeypatch.setenv("EXECUTION_MIN_AGREEMENT", "3")
     from shared.config import Settings
     s = Settings()
-    assert s.execution_max_position_value == 20000.0
+    assert s.execution_max_position_pct == 0.20
     assert s.execution_max_positions == 10
     assert s.execution_max_exposure == 0.8
     assert s.execution_min_signal_strength == 0.7
@@ -95,6 +96,30 @@ def test_telegram_settings_defaults(settings):
 
 def test_dashboard_settings_defaults(settings):
     assert settings.dashboard_port == 8084
+
+
+def test_backfill_floor_equity_default(monkeypatch):
+    monkeypatch.delenv("BACKFILL_FLOOR_EQUITY", raising=False)
+    s = Settings()
+    assert s.backfill_floor_equity == date(2016, 1, 1)
+
+
+def test_backfill_floor_crypto_default(monkeypatch):
+    monkeypatch.delenv("BACKFILL_FLOOR_CRYPTO", raising=False)
+    s = Settings()
+    assert s.backfill_floor_crypto == date(2021, 1, 1)
+
+
+def test_backfill_floor_equity_env_override(monkeypatch):
+    monkeypatch.setenv("BACKFILL_FLOOR_EQUITY", "2018-06-15")
+    s = Settings()
+    assert s.backfill_floor_equity == date(2018, 6, 15)
+
+
+def test_backfill_floor_crypto_env_override(monkeypatch):
+    monkeypatch.setenv("BACKFILL_FLOOR_CRYPTO", "2022-03-01")
+    s = Settings()
+    assert s.backfill_floor_crypto == date(2022, 3, 1)
 
 
 def test_reconciler_settings_have_defaults(monkeypatch):
