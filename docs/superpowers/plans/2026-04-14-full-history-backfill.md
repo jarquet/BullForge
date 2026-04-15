@@ -741,6 +741,270 @@ git commit -m "feat(data_pipeline): wire two-phase backfill with background reac
 
 ---
 
+## Task 4.5: Publish backfill counters to `monitoring:data_pipeline`
+
+**Files:**
+- Modify: `bullforge/services/data_pipeline/backfill.py` (add optional redis client + counter publishing)
+- Modify: `bullforge/services/data_pipeline/main.py` (pass `redis_client` into `Backfiller`)
+- Modify: `bullforge/tests/test_backfill.py` (add coverage for counter publishing)
+
+The reconciler already follows this pattern in `bullforge/services/execution_service/reconciler_core.py:14-26` — mirror it. Counter payload format (matches reconciler exactly):
+`json.dumps({"counter": <name>, "labels": {<k:v>...}, "value": <int>})`
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `bullforge/tests/test_backfill.py`:
+
+```python
+import json
+
+
+def _make_backfiller_with_redis(settings, *, range_map=None,
+                                 fetch_returns=None, fetch_side_effect=None):
+    backfiller, db, alpaca = _make_backfiller(
+        settings, range_map=range_map,
+        fetch_returns=fetch_returns, fetch_side_effect=fetch_side_effect,
+    )
+    redis = AsyncMock()
+    redis.publish = AsyncMock()
+    backfiller._redis = redis
+    return backfiller, db, alpaca, redis
+
+
+def _published_counters(redis) -> list[dict]:
+    return [
+        json.loads(call.args[1])
+        for call in redis.publish.await_args_list
+        if call.args[0] == "monitoring:data_pipeline"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_forward_fill_publishes_bars_inserted_counter(mock_settings):
+    bars = _bars("SPY", 7, "1m", datetime(2016, 1, 1, tzinfo=timezone.utc))
+    backfiller, _, _, redis = _make_backfiller_with_redis(
+        mock_settings, fetch_returns=bars,
+    )
+    await backfiller.forward_fill("SPY", "1m")
+    counters = _published_counters(redis)
+    assert any(
+        c["counter"] == "backfill.forward.bars_inserted"
+        and c["labels"] == {"symbol": "SPY", "timeframe": "1m"}
+        and c["value"] == 7
+        for c in counters
+    )
+
+
+@pytest.mark.asyncio
+async def test_reach_back_publishes_bars_inserted_counter(mock_settings):
+    earliest = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    bars = _bars("SPY", 4, "1d", datetime(2016, 1, 1, tzinfo=timezone.utc))
+    backfiller, _, _, redis = _make_backfiller_with_redis(
+        mock_settings,
+        range_map={("SPY", "1d"): (earliest, earliest)},
+        fetch_returns=bars,
+    )
+    await backfiller.reach_back("SPY", "1d")
+    counters = _published_counters(redis)
+    assert any(
+        c["counter"] == "backfill.reachback.bars_inserted"
+        and c["labels"] == {"symbol": "SPY", "timeframe": "1d"}
+        and c["value"] == 4
+        for c in counters
+    )
+
+
+@pytest.mark.asyncio
+async def test_backfill_all_forward_publishes_failure_counter(mock_settings):
+    def _side_effect(*args, **kwargs):
+        if kwargs.get("symbol") == "SPY":
+            raise RuntimeError("alpaca down")
+        return _bars(kwargs["symbol"], 1, kwargs["timeframe"],
+                     datetime(2021, 1, 1, tzinfo=timezone.utc))
+    backfiller, _, _, redis = _make_backfiller_with_redis(
+        mock_settings, fetch_side_effect=_side_effect,
+    )
+    await backfiller.backfill_all_forward()
+    counters = _published_counters(redis)
+    failures = [c for c in counters if c["counter"] == "backfill.failures"]
+    # SPY fails for both timeframes during forward phase
+    assert len(failures) == 2
+    assert all(f["labels"]["phase"] == "forward" for f in failures)
+    assert all(f["labels"]["symbol"] == "SPY" for f in failures)
+
+
+@pytest.mark.asyncio
+async def test_backfill_all_reach_back_publishes_complete_event(mock_settings):
+    backfiller, _, _, redis = _make_backfiller_with_redis(mock_settings)
+    await backfiller.backfill_all_reach_back()
+    counters = _published_counters(redis)
+    assert any(c["counter"] == "backfill.reachback.complete" for c in counters)
+
+
+@pytest.mark.asyncio
+async def test_backfiller_without_redis_does_not_publish(mock_settings):
+    bars = _bars("SPY", 1, "1m", datetime(2016, 1, 1, tzinfo=timezone.utc))
+    backfiller, _, _ = _make_backfiller(mock_settings, fetch_returns=bars)
+    # _redis defaults to None — should not raise
+    await backfiller.forward_fill("SPY", "1m")
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pytest bullforge/tests/test_backfill.py -v -k "publishes or without_redis"`
+Expected: FAIL — `Backfiller` does not publish counters and `_redis` attribute does not exist.
+
+- [ ] **Step 3: Add counter publishing to `Backfiller`**
+
+In `bullforge/services/data_pipeline/backfill.py`:
+
+Add `import json` near the existing imports. Add the channel constant under `logger`:
+
+```python
+_MONITORING_CHANNEL = "monitoring:data_pipeline"
+```
+
+Update `__init__` to accept an optional redis client:
+
+```python
+    def __init__(
+        self, settings: Settings, db: Database, alpaca_client: AlpacaClient,
+        redis_client=None,
+    ):
+        self._settings = settings
+        self._db = db
+        self._alpaca = alpaca_client
+        self._redis = redis_client
+```
+
+Add a publishing helper directly under the helpers section (after `_step`):
+
+```python
+    async def _publish_counter(self, name: str, value: int = 1, **labels) -> None:
+        if self._redis is None:
+            return
+        payload = json.dumps(
+            {"counter": name, "labels": labels, "value": value}
+        )
+        try:
+            await self._redis.publish(_MONITORING_CHANNEL, payload)
+        except Exception:
+            logger.exception("Failed publishing counter %s", name)
+```
+
+In `_fetch_and_insert`, return early as today when no bars; otherwise after the existing `await self._db.insert_bars(bars)` and log line, the *caller* will publish the phase-tagged counter (so `forward_fill` vs `reach_back` get distinct names). Leave `_fetch_and_insert` itself unchanged otherwise — it already returns the inserted count.
+
+Update `forward_fill` to publish on success:
+
+```python
+    async def forward_fill(self, symbol: str, timeframe: str) -> int:
+        _, latest = await self._db.get_bar_range(symbol, timeframe)
+        start = (latest + self._step(timeframe)) if latest else self._floor_dt(symbol)
+        end = datetime.now(timezone.utc)
+        inserted = await self._fetch_and_insert(symbol, timeframe, start, end)
+        if inserted:
+            await self._publish_counter(
+                "backfill.forward.bars_inserted", value=inserted,
+                symbol=symbol, timeframe=timeframe,
+            )
+        return inserted
+```
+
+Update `reach_back` similarly:
+
+```python
+    async def reach_back(self, symbol: str, timeframe: str) -> int:
+        earliest, _ = await self._db.get_bar_range(symbol, timeframe)
+        if earliest is None:
+            return 0
+        floor = self._floor_dt(symbol)
+        if earliest <= floor:
+            return 0
+        inserted = await self._fetch_and_insert(symbol, timeframe, floor, earliest)
+        if inserted:
+            await self._publish_counter(
+                "backfill.reachback.bars_inserted", value=inserted,
+                symbol=symbol, timeframe=timeframe,
+            )
+        return inserted
+```
+
+In `backfill_all_forward`, replace the `except Exception:` block so it also publishes a failure counter:
+
+```python
+                except Exception:
+                    logger.exception(
+                        "forward_fill failed for %s %s", symbol, timeframe,
+                    )
+                    failures.append((symbol, timeframe))
+                    await self._publish_counter(
+                        "backfill.failures", phase="forward",
+                        symbol=symbol, timeframe=timeframe,
+                    )
+```
+
+In `backfill_all_reach_back`, mirror the change for the failure path AND publish a `complete` event at the end (after the `if failures: ... else: ...` block):
+
+```python
+                except Exception:
+                    logger.exception(
+                        "reach_back failed for %s %s", symbol, timeframe,
+                    )
+                    failures.append((symbol, timeframe))
+                    await self._publish_counter(
+                        "backfill.failures", phase="reachback",
+                        symbol=symbol, timeframe=timeframe,
+                    )
+```
+
+…and at the end of `backfill_all_reach_back`:
+
+```python
+        await self._publish_counter(
+            "backfill.reachback.complete", failures=len(failures),
+        )
+```
+
+In `backfill_symbol`, also publish failures (phase `forward`, since this path is forward-only):
+
+```python
+            try:
+                total += await self.forward_fill(symbol, timeframe)
+            except Exception:
+                logger.exception(
+                    "forward_fill failed for %s %s", symbol, timeframe,
+                )
+                await self._publish_counter(
+                    "backfill.failures", phase="forward",
+                    symbol=symbol, timeframe=timeframe,
+                )
+```
+
+- [ ] **Step 4: Wire `redis_client` through `main.py`**
+
+In `bullforge/services/data_pipeline/main.py`, change the `Backfiller(...)` construction added in Task 4 to pass the existing `redis_client`:
+
+```python
+    backfiller = Backfiller(
+        settings=settings, db=db,
+        alpaca_client=alpaca_client, redis_client=redis_client,
+    )
+```
+
+- [ ] **Step 5: Run tests to verify they pass**
+
+Run: `pytest bullforge/tests/test_backfill.py -v`
+Expected: PASS for all tests (including the new counter ones and the original 11).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add bullforge/services/data_pipeline/backfill.py bullforge/services/data_pipeline/main.py bullforge/tests/test_backfill.py
+git commit -m "feat(backfill): publish counters to monitoring:data_pipeline"
+```
+
+---
+
 ## Task 5: Full test sweep + manual smoke
 
 **Files:** none modified.
@@ -781,6 +1045,6 @@ If you edited it: `git add TODO.md && git commit -m "docs(todo): note two-phase 
 
 ## Self-Review Notes
 
-- **Spec coverage:** floors → Task 1; `get_bar_range` → Task 2; two-phase `Backfiller` API → Task 3; main.py wiring + background reach-back + shutdown cancellation → Task 4; observability counters from the spec are intentionally deferred — they would add a new redis publishing surface; flag if reviewer wants them in this plan.
+- **Spec coverage:** floors → Task 1; `get_bar_range` → Task 2; two-phase `Backfiller` API → Task 3; main.py wiring + background reach-back + shutdown cancellation → Task 4; observability counters → Task 4.5.
 - **Type/name consistency:** `forward_fill`, `reach_back`, `backfill_all_forward`, `backfill_all_reach_back`, `backfill_symbol(symbol, *, kind)` used identically across plan, tests, and main.py wiring.
 - **No placeholders.** Every step contains the actual code or command.
