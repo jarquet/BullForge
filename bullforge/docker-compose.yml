@@ -189,6 +189,7 @@ services:
     build:
       context: .
       dockerfile: services/backtest_service/Dockerfile
+    image: bullforge-backtest
     env_file:
       - .env
     environment:
@@ -211,6 +212,35 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+
+  backtest-worker:
+    build:
+      context: .
+      dockerfile: services/backtest_service/Dockerfile
+    image: bullforge-backtest
+    command: ["python", "-m", "services.backtest_service.worker"]
+    env_file:
+      - .env
+    environment:
+      TIMESCALEDB_HOST: timescaledb
+      REDIS_HOST: redis
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
 
 volumes:
   timescaledb_data:
