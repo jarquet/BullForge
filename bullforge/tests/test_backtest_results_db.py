@@ -21,7 +21,7 @@ async def db():
     d = Database(settings)
     await d.connect()
     yield d
-    await d.close()
+    await d.disconnect()
 
 
 async def test_insert_run_and_fold(db):
