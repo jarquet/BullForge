@@ -1,6 +1,7 @@
 import pytest
 import pytest_asyncio
 from unittest.mock import AsyncMock
+from datetime import datetime, timezone
 from aiohttp import web
 
 from services.dashboard_service.backtests_api import register_backtests_routes
@@ -51,3 +52,72 @@ async def test_validate_new_job_rejects_embargo_gt_horizon(aiohttp_client, app):
     assert resp.status == 400
     body = await resp.json()
     assert "embargo_min" in body["errors"]
+
+
+@pytest.mark.asyncio
+async def test_detail_happy_path(aiohttp_client, app):
+    app["results_db"].get_run = AsyncMock(return_value={
+        "id": 1, "name": "r", "symbols": ["SPY"], "timeframe": "1m",
+        "horizons": [5], "range_start": None, "range_end": None,
+        "train_days": 1, "test_days": 1, "embargo_min": 5,
+        "mode": "rolling", "status": "completed",
+        "started_at": None, "finished_at": None,
+        "config": {}, "metrics": {"total_pnl": 1.0, "n_trades": 2,
+                                   "hit_rate": 0.5, "profit_factor": 1.0,
+                                   "max_dd": -0.1, "sharpe": 0.0,
+                                   "sortino": 0.0, "n_folds": 1},
+    })
+    client = await aiohttp_client(app)
+    resp = await client.get("/api/backtests/1")
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["id"] == 1
+    assert data["metrics"]["n_folds"] == 1
+
+
+@pytest.mark.asyncio
+async def test_detail_404(aiohttp_client, app):
+    app["results_db"].get_run = AsyncMock(return_value=None)
+    client = await aiohttp_client(app)
+    resp = await client.get("/api/backtests/999")
+    assert resp.status == 404
+
+
+@pytest.mark.asyncio
+async def test_folds_route(aiohttp_client, app):
+    app["results_db"].list_folds = AsyncMock(return_value=[
+        {"id": 1, "fold_index": 0,
+         "train_start": None, "train_end": None,
+         "test_start": None, "test_end": None,
+         "metrics": {"n_trades": 1, "total_pnl": 1.0,
+                     "max_dd": -0.1, "sharpe": 0.0},
+         "metrics_json": None},
+    ])
+    client = await aiohttp_client(app)
+    resp = await client.get("/api/backtests/1/folds")
+    assert resp.status == 200
+    data = await resp.json()
+    assert len(data["folds"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_equity_route(aiohttp_client, app):
+    app["results_db"].get_equity_curve = AsyncMock(return_value=[
+        {"t": datetime(2025, 1, 1, tzinfo=timezone.utc), "equity": 100.0, "cash": 100.0},
+    ])
+    client = await aiohttp_client(app)
+    resp = await client.get("/api/backtests/1/equity?fold_id=7")
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["points"][0]["equity"] == 100.0
+    app["results_db"].get_equity_curve.assert_awaited_with(1, fold_id=7)
+
+
+@pytest.mark.asyncio
+async def test_trades_route(aiohttp_client, app):
+    app["results_db"].list_trades = AsyncMock(return_value=[])
+    client = await aiohttp_client(app)
+    resp = await client.get("/api/backtests/1/trades?limit=10&offset=0")
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["trades"] == []
