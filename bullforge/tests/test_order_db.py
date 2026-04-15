@@ -265,9 +265,10 @@ async def test_upsert_inserts_when_no_existing_row(settings, mock_pool):
     tx.__aexit__ = AsyncMock(return_value=False)
     conn.transaction = MagicMock(return_value=tx)
 
+    # Two fetchrow calls: (1) SELECT FOR UPDATE returns None, (2) INSERT RETURNING * row
     conn.fetchrow = AsyncMock(side_effect=[
         None,  # SELECT ... FOR UPDATE — no existing row
-        {  # get_order_by_alpaca_id readback
+        {  # INSERT ... RETURNING * — returned directly from the transaction
             "id": 42, "symbol": "SPY", "side": "buy", "quantity": 3.0,
             "order_type": "market", "submitted_at": now,
             "signal_strength": 0.0, "alpaca_order_id": "alp-new-1",
@@ -277,9 +278,12 @@ async def test_upsert_inserts_when_no_existing_row(settings, mock_pool):
             "last_reconciled_at": now, "reconcile_source": "startup",
         },
     ])
-    conn.fetchval = AsyncMock(return_value=42)
     db = Database(settings)
     db.pool = pool
+    # get_order_by_alpaca_id must NOT be called — patch it to detect any accidental call
+    db.get_order_by_alpaca_id = AsyncMock(side_effect=AssertionError(
+        "get_order_by_alpaca_id must not be called inside upsert_order_from_alpaca"
+    ))
 
     snapshot = {
         "id": "alp-new-1", "symbol": "SPY", "side": "buy", "qty": 3.0,
@@ -293,8 +297,9 @@ async def test_upsert_inserts_when_no_existing_row(settings, mock_pool):
     assert result.old_status is None
     assert result.new_status == "filled"
     assert result.order.origin == "external"
-    # verify INSERT was called (fetchval), not UPDATE
-    conn.fetchval.assert_awaited_once()
+    # Exactly 2 fetchrow calls: SELECT FOR UPDATE + INSERT RETURNING *
+    assert conn.fetchrow.await_count == 2
+    db.get_order_by_alpaca_id.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -308,9 +313,10 @@ async def test_upsert_updates_existing_row(settings, mock_pool):
     tx.__aexit__ = AsyncMock(return_value=False)
     conn.transaction = MagicMock(return_value=tx)
 
+    # Two fetchrow calls: (1) SELECT FOR UPDATE returns existing row, (2) UPDATE RETURNING * row
     conn.fetchrow = AsyncMock(side_effect=[
-        {"status": "submitted", "origin": "internal"},  # existing SELECT
-        {  # readback
+        {"status": "submitted", "origin": "internal"},  # existing SELECT FOR UPDATE
+        {  # UPDATE ... RETURNING * — returned directly from the transaction
             "id": 7, "symbol": "SPY", "side": "buy", "quantity": 1.0,
             "order_type": "market", "submitted_at": now,
             "signal_strength": 0.5, "alpaca_order_id": "alp-exist",
@@ -320,9 +326,12 @@ async def test_upsert_updates_existing_row(settings, mock_pool):
             "last_reconciled_at": now, "reconcile_source": "poll",
         },
     ])
-    conn.execute = AsyncMock()
     db = Database(settings)
     db.pool = pool
+    # get_order_by_alpaca_id must NOT be called — patch it to detect any accidental call
+    db.get_order_by_alpaca_id = AsyncMock(side_effect=AssertionError(
+        "get_order_by_alpaca_id must not be called inside upsert_order_from_alpaca"
+    ))
 
     snapshot = {
         "id": "alp-exist", "symbol": "SPY", "side": "buy", "qty": 1.0,
@@ -334,7 +343,9 @@ async def test_upsert_updates_existing_row(settings, mock_pool):
     assert result.old_status == "submitted"
     assert result.new_status == "cancelled"  # normalized
     assert result.order.origin == "internal"  # preserved
-    conn.execute.assert_awaited_once()
+    # Exactly 2 fetchrow calls: SELECT FOR UPDATE + UPDATE RETURNING *
+    assert conn.fetchrow.await_count == 2
+    db.get_order_by_alpaca_id.assert_not_called()
 
 
 @pytest.mark.asyncio

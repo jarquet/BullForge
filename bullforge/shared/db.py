@@ -704,7 +704,7 @@ class Database:
                 )
                 now_ts = datetime.now(timezone.utc)
                 if existing is None:
-                    await conn.fetchval(
+                    row = await conn.fetchrow(
                         """
                         INSERT INTO orders
                           (symbol, side, quantity, order_type, submitted_at,
@@ -713,7 +713,11 @@ class Database:
                            origin, last_reconciled_at, reconcile_source)
                         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
                                 'external',$12,$13)
-                        RETURNING id
+                        RETURNING id, symbol, side, quantity, order_type,
+                                  submitted_at, signal_strength, alpaca_order_id,
+                                  status, filled_at, filled_price, filled_quantity,
+                                  limit_price, origin, last_reconciled_at,
+                                  reconcile_source
                         """,
                         snapshot["symbol"],
                         snapshot["side"],
@@ -733,7 +737,7 @@ class Database:
 
                 else:
                     old_status = existing["status"]
-                    await conn.execute(
+                    row = await conn.fetchrow(
                         """
                         UPDATE orders
                         SET status = $2,
@@ -743,6 +747,11 @@ class Database:
                             last_reconciled_at = $6,
                             reconcile_source = $7
                         WHERE alpaca_order_id = $1
+                        RETURNING id, symbol, side, quantity, order_type,
+                                  submitted_at, signal_strength, alpaca_order_id,
+                                  status, filled_at, filled_price, filled_quantity,
+                                  limit_price, origin, last_reconciled_at,
+                                  reconcile_source
                         """,
                         alpaca_id,
                         canonical_status,
@@ -752,7 +761,19 @@ class Database:
                         now_ts,
                         source,
                     )
-        order = await self.get_order_by_alpaca_id(alpaca_id)
+        order = Order(
+            id=row["id"], symbol=row["symbol"], side=row["side"],
+            quantity=row["quantity"], order_type=row["order_type"],
+            submitted_at=row["submitted_at"],
+            signal_strength=row["signal_strength"],
+            alpaca_order_id=row["alpaca_order_id"], status=row["status"],
+            filled_at=row["filled_at"], filled_price=row["filled_price"],
+            filled_quantity=row["filled_quantity"],
+            limit_price=row["limit_price"],
+            origin=row["origin"],
+            last_reconciled_at=row["last_reconciled_at"],
+            reconcile_source=row["reconcile_source"],
+        )
         return UpsertResult(
             order=order, old_status=old_status,
             new_status=canonical_status, inserted=inserted,
