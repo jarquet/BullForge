@@ -105,6 +105,7 @@ class SimulatedBroker:
         return await self.submit_market_order(symbol, qty, side)
 
     async def list_open_orders(self, after) -> list[dict]:
+        # Fills are synchronous in submit_market_order, so no order is ever open.
         return []
 
     def _apply_fill(
@@ -134,6 +135,9 @@ class SimulatedBroker:
                 + price * signed_qty
             )
             existing["avg_entry_price"] = total_cost / new_qty
+        elif new_qty != 0:
+            # Signs flipped (position reversal): residual position opens at the fill price.
+            existing["avg_entry_price"] = price
         existing["qty"] = new_qty
         existing["side"] = "long" if new_qty > 0 else "short"
         existing["current_price"] = price

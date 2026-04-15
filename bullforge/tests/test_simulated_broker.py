@@ -89,3 +89,17 @@ async def test_mark_to_market_updates_unrealized_pnl(broker):
     assert pos["current_price"] == 110.0
     assert pos["unrealized_pl"] == pytest.approx(1000.0)
     assert pos["market_value"] == pytest.approx(110.0 * 100)
+
+
+@pytest.mark.asyncio
+async def test_reversal_resets_avg_entry_price(broker):
+    await broker.submit_market_order("SPY", 100, "buy")  # long 100 @ 100
+    # New bar at higher price
+    broker.set_next_bar("SPY", _bar(110.0, 111.0, 109.5, 110.5, 1_000_000))
+    await broker.submit_market_order("SPY", 150, "sell")  # crosses flat to short 50
+
+    pos = await broker.get_position("SPY")
+    assert pos is not None
+    assert pos["qty"] == -50
+    assert pos["side"] == "short"
+    assert pos["avg_entry_price"] == pytest.approx(110.0)  # residual opens at 110, not 100
