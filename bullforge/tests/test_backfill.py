@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from datetime import datetime, timezone, timedelta, date
 from unittest.mock import AsyncMock, MagicMock
@@ -204,3 +206,92 @@ async def test_backfill_symbol_runs_forward_only(mock_settings):
     await backfiller.backfill_symbol("NEW", kind="equity")
     # 1 symbol * 2 timeframes = 2 forward fetches; reach-back is caller's job
     assert alpaca.get_historical_bars.call_count == 2
+
+
+def _make_backfiller_with_redis(settings, *, range_map=None,
+                                 fetch_returns=None, fetch_side_effect=None):
+    backfiller, db, alpaca = _make_backfiller(
+        settings, range_map=range_map,
+        fetch_returns=fetch_returns, fetch_side_effect=fetch_side_effect,
+    )
+    redis = AsyncMock()
+    redis.publish = AsyncMock()
+    backfiller._redis = redis
+    return backfiller, db, alpaca, redis
+
+
+def _published_counters(redis) -> list[dict]:
+    return [
+        json.loads(call.args[1])
+        for call in redis.publish.await_args_list
+        if call.args[0] == "monitoring:data_pipeline"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_forward_fill_publishes_bars_inserted_counter(mock_settings):
+    bars = _bars("SPY", 7, "1m", datetime(2016, 1, 1, tzinfo=timezone.utc))
+    backfiller, _, _, redis = _make_backfiller_with_redis(
+        mock_settings, fetch_returns=bars,
+    )
+    await backfiller.forward_fill("SPY", "1m")
+    counters = _published_counters(redis)
+    assert any(
+        c["counter"] == "backfill.forward.bars_inserted"
+        and c["labels"] == {"symbol": "SPY", "timeframe": "1m"}
+        and c["value"] == 7
+        for c in counters
+    )
+
+
+@pytest.mark.asyncio
+async def test_reach_back_publishes_bars_inserted_counter(mock_settings):
+    earliest = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    bars = _bars("SPY", 4, "1d", datetime(2016, 1, 1, tzinfo=timezone.utc))
+    backfiller, _, _, redis = _make_backfiller_with_redis(
+        mock_settings,
+        range_map={("SPY", "1d"): (earliest, earliest)},
+        fetch_returns=bars,
+    )
+    await backfiller.reach_back("SPY", "1d")
+    counters = _published_counters(redis)
+    assert any(
+        c["counter"] == "backfill.reachback.bars_inserted"
+        and c["labels"] == {"symbol": "SPY", "timeframe": "1d"}
+        and c["value"] == 4
+        for c in counters
+    )
+
+
+@pytest.mark.asyncio
+async def test_backfill_all_forward_publishes_failure_counter(mock_settings):
+    def _side_effect(*args, **kwargs):
+        if kwargs.get("symbol") == "SPY":
+            raise RuntimeError("alpaca down")
+        return _bars(kwargs["symbol"], 1, kwargs["timeframe"],
+                     datetime(2021, 1, 1, tzinfo=timezone.utc))
+    backfiller, _, _, redis = _make_backfiller_with_redis(
+        mock_settings, fetch_side_effect=_side_effect,
+    )
+    await backfiller.backfill_all_forward()
+    counters = _published_counters(redis)
+    failures = [c for c in counters if c["counter"] == "backfill.failures"]
+    assert len(failures) == 2
+    assert all(f["labels"]["phase"] == "forward" for f in failures)
+    assert all(f["labels"]["symbol"] == "SPY" for f in failures)
+
+
+@pytest.mark.asyncio
+async def test_backfill_all_reach_back_publishes_complete_event(mock_settings):
+    backfiller, _, _, redis = _make_backfiller_with_redis(mock_settings)
+    await backfiller.backfill_all_reach_back()
+    counters = _published_counters(redis)
+    assert any(c["counter"] == "backfill.reachback.complete" for c in counters)
+
+
+@pytest.mark.asyncio
+async def test_backfiller_without_redis_does_not_publish(mock_settings):
+    bars = _bars("SPY", 1, "1m", datetime(2016, 1, 1, tzinfo=timezone.utc))
+    backfiller, _, _ = _make_backfiller(mock_settings, fetch_returns=bars)
+    # _redis defaults to None — should not raise
+    await backfiller.forward_fill("SPY", "1m")

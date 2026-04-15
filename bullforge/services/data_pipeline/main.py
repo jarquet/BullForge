@@ -73,7 +73,10 @@ async def main() -> None:
     # Forward gap-fill blocks startup so live ticks have no gap; the long
     # reach-back to the configured floor runs in the background once
     # streams are up.
-    backfiller = Backfiller(settings=settings, db=db, alpaca_client=alpaca_client)
+    backfiller = Backfiller(
+        settings=settings, db=db,
+        alpaca_client=alpaca_client, redis_client=redis_client,
+    )
     background_tasks: set[asyncio.Task] = set()
     logger.info("Running forward gap-fill...")
     await backfiller.backfill_all_forward()

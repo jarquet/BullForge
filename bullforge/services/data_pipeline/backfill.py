@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 from datetime import date, datetime, time as dtime, timedelta, timezone
@@ -11,14 +12,18 @@ from services.data_pipeline.alpaca_client import AlpacaClient
 
 logger = logging.getLogger(__name__)
 
+_MONITORING_CHANNEL = "monitoring:data_pipeline"
+
 
 class Backfiller:
     def __init__(
         self, settings: Settings, db: Database, alpaca_client: AlpacaClient,
+        redis_client=None,
     ):
         self._settings = settings
         self._db = db
         self._alpaca = alpaca_client
+        self._redis = redis_client
 
     # ---- helpers ----------------------------------------------------------
 
@@ -33,6 +38,17 @@ class Backfiller:
     @staticmethod
     def _step(timeframe: str) -> timedelta:
         return timedelta(minutes=1) if timeframe == "1m" else timedelta(days=1)
+
+    async def _publish_counter(self, name: str, value: int = 1, **labels) -> None:
+        if self._redis is None:
+            return
+        payload = json.dumps(
+            {"counter": name, "labels": labels, "value": value}
+        )
+        try:
+            await self._redis.publish(_MONITORING_CHANNEL, payload)
+        except Exception:
+            logger.exception("Failed publishing counter %s", name)
 
     async def _fetch_and_insert(
         self, symbol: str, timeframe: str,
@@ -64,7 +80,13 @@ class Backfiller:
         _, latest = await self._db.get_bar_range(symbol, timeframe)
         start = (latest + self._step(timeframe)) if latest else self._floor_dt(symbol)
         end = datetime.now(timezone.utc)
-        return await self._fetch_and_insert(symbol, timeframe, start, end)
+        inserted = await self._fetch_and_insert(symbol, timeframe, start, end)
+        if inserted:
+            await self._publish_counter(
+                "backfill.forward.bars_inserted", value=inserted,
+                symbol=symbol, timeframe=timeframe,
+            )
+        return inserted
 
     async def reach_back(self, symbol: str, timeframe: str) -> int:
         earliest, _ = await self._db.get_bar_range(symbol, timeframe)
@@ -73,7 +95,13 @@ class Backfiller:
         floor = self._floor_dt(symbol)
         if earliest <= floor:
             return 0
-        return await self._fetch_and_insert(symbol, timeframe, floor, earliest)
+        inserted = await self._fetch_and_insert(symbol, timeframe, floor, earliest)
+        if inserted:
+            await self._publish_counter(
+                "backfill.reachback.bars_inserted", value=inserted,
+                symbol=symbol, timeframe=timeframe,
+            )
+        return inserted
 
     async def backfill_all_forward(self) -> None:
         symbols = (
@@ -90,6 +118,10 @@ class Backfiller:
                         "forward_fill failed for %s %s", symbol, timeframe,
                     )
                     failures.append((symbol, timeframe))
+                    await self._publish_counter(
+                        "backfill.failures", phase="forward",
+                        symbol=symbol, timeframe=timeframe,
+                    )
         if failures:
             logger.warning(
                 "Forward backfill completed with %d failures: %s",
@@ -113,6 +145,10 @@ class Backfiller:
                         "reach_back failed for %s %s", symbol, timeframe,
                     )
                     failures.append((symbol, timeframe))
+                    await self._publish_counter(
+                        "backfill.failures", phase="reachback",
+                        symbol=symbol, timeframe=timeframe,
+                    )
         if failures:
             logger.warning(
                 "Reach-back completed with %d failures: %s",
@@ -120,6 +156,9 @@ class Backfiller:
             )
         else:
             logger.info("Reach-back complete for all symbols")
+        await self._publish_counter(
+            "backfill.reachback.complete", failures=len(failures),
+        )
 
     async def backfill_symbol(self, symbol: str, *, kind: str) -> int:
         """Forward-fill a newly added symbol for both timeframes.
@@ -133,5 +172,9 @@ class Backfiller:
             except Exception:
                 logger.exception(
                     "forward_fill failed for %s %s", symbol, timeframe,
+                )
+                await self._publish_counter(
+                    "backfill.failures", phase="forward",
+                    symbol=symbol, timeframe=timeframe,
                 )
         return total
