@@ -1947,10 +1947,10 @@ from shared.config import Settings
 from shared.db import Database
 async def main():
     db = Database(Settings()); await db.connect()
-    async with db._pool.acquire() as c:
+    async with db.pool.acquire() as c:
         n = await c.fetchval(\"SELECT COUNT(*) FROM bars_1m WHERE symbol='SPY'\")
         print('SPY 1m bars:', n)
-    await db.close()
+    await db.disconnect()
 asyncio.run(main())
 "`
 
@@ -2032,13 +2032,36 @@ git commit -m "test(backtest): end-to-end single-fold smoke integration test"
     SELECT timestamp, equity FROM backtest_equity
      WHERE run_id = <RUN_ID> ORDER BY timestamp;
 
+## Sandbox isolation
+
+The CLI wires a sandbox `Database` (search_path=`backtest,public`) for the
+engine, so per-fold writes to `orders`, `model_registry`, and `predictions`
+land in the `backtest` schema instead of `public`. Read-only tables
+(`bars_1m`, `features`, `labels`) fall through to `public` via search_path.
+Backtest results (`backtest_runs`, `backtest_folds`, `backtest_trades`,
+`backtest_equity`) live in `public` and are written via a separate live
+`Database` instance.
+
+To clear sandbox state between runs:
+
+    psql -h localhost -U postgres -d bullforge -c "
+      TRUNCATE backtest.orders, backtest.model_registry, backtest.predictions;
+    "
+
+To clear backtest results:
+
+    psql -h localhost -U postgres -d bullforge -c "
+      TRUNCATE backtest_equity, backtest_trades, backtest_folds, backtest_runs
+        RESTART IDENTITY CASCADE;
+    "
+
 ## Important caveats
-- The trainer overwrites active models in `model_registry` per fold. Do **not**
-  run a backtest while the live model_service is using the same DB; either
-  point the backtest at a separate database, or stop the live service first.
 - Embargo must be >= the longest horizon being backtested to prevent label leakage.
 - Default annualization assumes 1m equities (390 * 252 periods/year). Pass
   `--periods-per-year` for crypto (1440 * 365) or daily (252).
+- The simulated broker only models flat ↔ full-position trades; partial fills
+  and scale-out / scale-in are not supported. Strategies that depend on
+  position sizing changes mid-trade will not backtest accurately.
 ```
 
 - [ ] **Step 2: Commit**
