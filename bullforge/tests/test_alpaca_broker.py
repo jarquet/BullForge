@@ -1,5 +1,5 @@
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock, patch
 from services.execution_service.alpaca_broker import AlpacaBroker
 
@@ -158,3 +158,34 @@ async def test_get_order_handles_enum_status(broker, mock_client):
 
     assert result["status"] == "partially_filled"
     assert result["filled_qty"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_list_open_orders_calls_alpaca_with_bounded_window():
+    from services.execution_service.alpaca_broker import AlpacaBroker
+    from shared.config import Settings
+
+    fake_client = MagicMock()
+    fake_client.get_orders.return_value = [
+        MagicMock(
+            id="alp-1", symbol="SPY", side=MagicMock(value="buy"),
+            qty="1", status=MagicMock(value="new"),
+            filled_qty="0", filled_avg_price=None, filled_at=None,
+            submitted_at=datetime.now(timezone.utc),
+            order_type=MagicMock(value="market"),
+        ),
+    ]
+    with patch(
+        "services.execution_service.alpaca_broker.TradingClient",
+        return_value=fake_client,
+    ):
+        broker = AlpacaBroker(Settings())
+        after = datetime.now(timezone.utc) - timedelta(hours=48)
+        results = await broker.list_open_orders(after=after)
+
+    assert len(results) == 1
+    assert results[0]["id"] == "alp-1"
+    assert results[0]["status"] == "new"
+    args, kwargs = fake_client.get_orders.call_args
+    req = args[0] if args else kwargs.get("filter")
+    assert req is not None

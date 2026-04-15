@@ -6,8 +6,8 @@ from datetime import timezone
 from typing import Optional
 
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.trading.requests import MarketOrderRequest, GetOrdersRequest
+from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 
 from shared.config import Settings
 
@@ -46,6 +46,9 @@ class AlpacaBroker:
     async def close_position(self, symbol: str) -> Optional[str]:
         return await asyncio.to_thread(self._sync_close_position, symbol)
 
+    async def list_open_orders(self, after) -> list[dict]:
+        return await asyncio.to_thread(self._sync_list_open_orders, after)
+
     # --- Sync helpers ---
 
     def _sync_get_account(self) -> dict:
@@ -83,19 +86,7 @@ class AlpacaBroker:
 
     def _sync_get_order(self, alpaca_order_id: str) -> dict:
         order = self._client.get_order_by_id(alpaca_order_id)
-        filled_at = None
-        if order.filled_at:
-            filled_at = order.filled_at
-            if filled_at.tzinfo is None:
-                filled_at = filled_at.replace(tzinfo=timezone.utc)
-        status = order.status.value if hasattr(order.status, "value") else str(order.status)
-        return {
-            "id": str(order.id),
-            "status": status,
-            "filled_qty": float(order.filled_qty) if order.filled_qty else None,
-            "filled_avg_price": float(order.filled_avg_price) if order.filled_avg_price else None,
-            "filled_at": filled_at,
-        }
+        return self._format_order_snapshot(order)
 
     def _sync_close_position(self, symbol: str) -> Optional[str]:
         try:
@@ -104,6 +95,44 @@ class AlpacaBroker:
         except Exception as e:
             logger.warning("Failed to close position %s: %s", symbol, e)
             return None
+
+    def _sync_list_open_orders(self, after) -> list[dict]:
+        request = GetOrdersRequest(
+            status=QueryOrderStatus.OPEN,
+            after=after,
+            limit=500,
+        )
+        orders = self._client.get_orders(request)
+        return [self._format_order_snapshot(o) for o in orders]
+
+    @staticmethod
+    def _format_order_snapshot(o) -> dict:
+        status = o.status.value if hasattr(o.status, "value") else str(o.status)
+        side = o.side.value if hasattr(o.side, "value") else str(o.side)
+        order_type = (
+            o.order_type.value if hasattr(o.order_type, "value")
+            else str(o.order_type)
+        )
+        filled_at = o.filled_at
+        if filled_at is not None and filled_at.tzinfo is None:
+            filled_at = filled_at.replace(tzinfo=timezone.utc)
+        submitted_at = o.submitted_at
+        if submitted_at is not None and submitted_at.tzinfo is None:
+            submitted_at = submitted_at.replace(tzinfo=timezone.utc)
+        return {
+            "id": str(o.id),
+            "symbol": o.symbol,
+            "side": side,
+            "qty": float(o.qty),
+            "order_type": order_type,
+            "status": status,
+            "submitted_at": submitted_at,
+            "filled_qty": float(o.filled_qty) if o.filled_qty else None,
+            "filled_avg_price": (
+                float(o.filled_avg_price) if o.filled_avg_price else None
+            ),
+            "filled_at": filled_at,
+        }
 
     @staticmethod
     def _format_position(p) -> dict:
