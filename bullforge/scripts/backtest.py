@@ -84,12 +84,13 @@ async def _main() -> None:
         max_volume_pct=args.max_volume_pct,
         periods_per_year=args.periods_per_year,
     )
-    run_id = await engine.run(cfg)
-    print(f"backtest run_id={run_id} completed")
-
-    await redis.disconnect()
-    await sandbox_db.disconnect()
-    await live_db.disconnect()
+    try:
+        run_id = await engine.run(cfg)
+        print(f"backtest run_id={run_id} completed")
+    finally:
+        await redis.disconnect()
+        await sandbox_db.disconnect()
+        await live_db.disconnect()
 
 
 if __name__ == "__main__":
