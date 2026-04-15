@@ -70,7 +70,7 @@ class OrderExecutor:
             signal_strength=signal.strength,
             alpaca_order_id=alpaca_id, status="submitted",
         )
-        order_id = await self._db.insert_order(order)
+        order_id = await self._db.insert_order_if_new(order)
 
         try:
             snap = await self._broker.get_order(alpaca_id)
@@ -86,6 +86,9 @@ class OrderExecutor:
                 alpaca_id,
             )
 
+        if order_id is None:
+            # Stream already inserted this row; fetch it as the authoritative record.
+            return await self._db.get_order_by_alpaca_id(alpaca_id)
         existing = await self._db.get_order_by_alpaca_id(alpaca_id)
         if existing is not None:
             return existing
@@ -108,7 +111,7 @@ class OrderExecutor:
             signal_strength=signal.strength,
             alpaca_order_id=alpaca_id, status="submitted",
         )
-        order_id = await self._db.insert_order(order)
+        order_id = await self._db.insert_order_if_new(order)
 
         try:
             snap = await self._broker.get_order(alpaca_id)
@@ -124,6 +127,9 @@ class OrderExecutor:
                 alpaca_id,
             )
 
+        if order_id is None:
+            # Stream already inserted this row; fetch it as the authoritative record.
+            return await self._db.get_order_by_alpaca_id(alpaca_id)
         existing = await self._db.get_order_by_alpaca_id(alpaca_id)
         if existing is not None:
             return existing

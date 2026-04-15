@@ -56,7 +56,7 @@ def mock_tracker():
 @pytest.fixture
 def mock_db():
     db = AsyncMock()
-    db.insert_order = AsyncMock(return_value=42)
+    db.insert_order_if_new = AsyncMock(return_value=42)
     db.get_order_by_alpaca_id = AsyncMock(return_value=None)
     return db
 
@@ -88,7 +88,7 @@ async def test_process_signal_submits_and_delegates_to_core(
     assert order.symbol == "SPY"
     assert order.side == "buy"
     mock_broker.submit_market_order.assert_awaited_once_with("SPY", 10, "buy")
-    mock_db.insert_order.assert_awaited_once()
+    mock_db.insert_order_if_new.assert_awaited_once()
     mock_core.apply_alpaca_order.assert_awaited_once()
     args, kwargs = mock_core.apply_alpaca_order.await_args
     assert (kwargs.get("source") or args[1]) == "submit"
@@ -181,5 +181,36 @@ async def test_broker_failure_returns_none(
     )
     order = await executor.process_signal(_signal(), current_price=420.0)
     assert order is None
-    mock_db.insert_order.assert_not_called()
+    mock_db.insert_order_if_new.assert_not_called()
     mock_core.apply_alpaca_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_submit_race_stream_wins_still_calls_apply_once(
+    mock_broker, mock_risk, mock_tracker, mock_db, mock_core,
+):
+    """When insert_order_if_new returns None the stream already has the row.
+    The executor must still call core.apply_alpaca_order exactly once and
+    return the existing order fetched from the DB."""
+    existing_order = Order(
+        id=99,
+        symbol="SPY", side="buy", quantity=10.0, order_type="market",
+        submitted_at=datetime(2026, 4, 12, 14, 0, 0, tzinfo=timezone.utc),
+        signal_strength=0.8,
+        alpaca_order_id="alp-order-123", status="submitted",
+        origin="external",
+    )
+    mock_db.insert_order_if_new = AsyncMock(return_value=None)
+    mock_db.get_order_by_alpaca_id = AsyncMock(return_value=existing_order)
+
+    executor = OrderExecutor(
+        broker=mock_broker, risk_manager=mock_risk,
+        position_tracker=mock_tracker, db=mock_db, core=mock_core,
+    )
+    order = await executor.process_signal(_signal(), current_price=420.0)
+
+    assert order is existing_order
+    mock_core.apply_alpaca_order.assert_awaited_once()
+    _, kwargs = mock_core.apply_alpaca_order.await_args
+    assert kwargs.get("source") == "submit"
+    mock_db.get_order_by_alpaca_id.assert_awaited_once_with("alp-order-123")

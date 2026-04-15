@@ -546,6 +546,27 @@ class Database:
             )
         return row_id
 
+    async def insert_order_if_new(self, order: Order) -> Optional[int]:
+        """INSERT that does nothing on alpaca_order_id conflict.
+        Returns the inserted row id, or None if a row already existed."""
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(
+                """
+                INSERT INTO orders
+                  (symbol, side, quantity, order_type, submitted_at,
+                   signal_strength, alpaca_order_id, status,
+                   origin, last_reconciled_at, reconcile_source)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,
+                        COALESCE($9,'internal'),$10,$11)
+                ON CONFLICT (alpaca_order_id) WHERE alpaca_order_id IS NOT NULL DO NOTHING
+                RETURNING id
+                """,
+                order.symbol, order.side, order.quantity, order.order_type,
+                order.submitted_at, order.signal_strength,
+                order.alpaca_order_id, order.status,
+                order.origin, order.last_reconciled_at, order.reconcile_source,
+            )
+
     async def update_order_status(
         self,
         order_id: int,

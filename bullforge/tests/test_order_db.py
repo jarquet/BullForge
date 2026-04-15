@@ -349,6 +349,43 @@ async def test_upsert_updates_existing_row(settings, mock_pool):
 
 
 @pytest.mark.asyncio
+async def test_insert_order_if_new_returns_id_on_first_insert(settings, mock_pool):
+    from shared.db import Database
+
+    pool, conn = mock_pool
+    conn.fetchval = AsyncMock(return_value=55)
+    db = Database(settings)
+    db.pool = pool
+
+    order = _make_order()
+    row_id = await db.insert_order_if_new(order)
+
+    assert row_id == 55
+    conn.fetchval.assert_awaited_once()
+    call_args = conn.fetchval.await_args.args
+    assert "INSERT INTO orders" in call_args[0]
+    assert "ON CONFLICT (alpaca_order_id) WHERE alpaca_order_id IS NOT NULL DO NOTHING" in call_args[0]
+    assert call_args[1] == "SPY"
+
+
+@pytest.mark.asyncio
+async def test_insert_order_if_new_returns_none_on_conflict(settings, mock_pool):
+    from shared.db import Database
+
+    pool, conn = mock_pool
+    # Simulate ON CONFLICT DO NOTHING: fetchval returns None (no RETURNING row)
+    conn.fetchval = AsyncMock(return_value=None)
+    db = Database(settings)
+    db.pool = pool
+
+    order = _make_order()
+    row_id = await db.insert_order_if_new(order)
+
+    assert row_id is None
+    conn.fetchval.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_upsert_normalizes_alpaca_statuses(settings, mock_pool):
     from shared.db import _normalize_alpaca_status
     assert _normalize_alpaca_status("new") == "submitted"

@@ -81,3 +81,18 @@ async def test_non_terminal_query_excludes_terminal(real_db):
     rows = await real_db.query_non_terminal_orders(within=timedelta(hours=48))
     assert all(r.status not in ("filled", "cancelled", "rejected", "expired")
                for r in rows)
+
+
+async def test_submit_path_is_idempotent_with_stream_winner(real_db):
+    await real_db.upsert_order_from_alpaca(
+        _snapshot(id="alp-race", status="new"), source="stream",
+    )
+    order = Order(
+        symbol="AAPL", side="buy", quantity=10.0, order_type="market",
+        submitted_at=datetime.now(timezone.utc), signal_strength=0.7,
+        alpaca_order_id="alp-race", status="submitted",
+    )
+    result = await real_db.insert_order_if_new(order)
+    assert result is None
+    existing = await real_db.get_order_by_alpaca_id("alp-race")
+    assert existing.origin == "external"
