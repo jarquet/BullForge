@@ -19,6 +19,9 @@ from services.execution_service.position_tracker import PositionTracker
 from services.execution_service.order_executor import OrderExecutor
 from services.execution_service.broker_relay import BrokerRelay
 from services.execution_service.health import create_health_app
+from services.execution_service.reconciler_core import ReconcilerCore
+from services.execution_service.polling_sweeper import PollingSweeper
+from services.execution_service.trade_updates_stream import TradeUpdatesStream
 
 logging.basicConfig(
     level=logging.INFO,
@@ -59,13 +62,45 @@ async def main() -> None:
         runtime_config=runtime_config,
     )
     position_tracker = PositionTracker(broker)
+    core = ReconcilerCore(db=db, redis_client=redis_client)
     executor = OrderExecutor(
         broker=broker,
         risk_manager=risk_manager,
         position_tracker=position_tracker,
         db=db,
-        redis_client=redis_client,
+        core=core,
     )
+
+    sweeper = PollingSweeper(
+        db=db,
+        broker=broker,
+        core=core,
+        interval_s=settings.execution_reconciler_poll_interval_s,
+        orphan_every=settings.execution_reconciler_orphan_every,
+        orphan_window_hours=settings.execution_reconciler_orphan_window_hours,
+    )
+
+    logger.info("Running startup reconciliation sweep...")
+    try:
+        await sweeper.sweep_now()
+    except Exception:
+        logger.exception("Startup reconciliation sweep failed")
+    await sweeper.start()
+    logger.info(
+        "PollingSweeper started (interval=%ds)",
+        settings.execution_reconciler_poll_interval_s,
+    )
+
+    stream: TradeUpdatesStream | None = None
+    if settings.execution_reconciler_stream_enabled:
+        stream = TradeUpdatesStream(
+            settings=settings, core=core,
+            on_reconnect=sweeper.sweep_now,
+        )
+        await stream.start()
+        logger.info("TradeUpdatesStream started")
+    else:
+        logger.info("TradeUpdatesStream disabled by config")
 
     async def on_prediction(message: str) -> None:
         try:
@@ -152,6 +187,9 @@ async def main() -> None:
         pass
     finally:
         logger.info("Shutting down...")
+        if stream is not None:
+            await stream.stop()
+        await sweeper.stop()
         await runner.cleanup()
         await redis_client.disconnect()
         await db.disconnect()
