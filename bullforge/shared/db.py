@@ -693,6 +693,8 @@ class Database:
     ) -> UpsertResult:
         alpaca_id = snapshot["id"]
         canonical_status = _normalize_alpaca_status(snapshot["status"])
+        inserted = False
+        old_status: Optional[str] = None
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 existing = await conn.fetchrow(
@@ -727,36 +729,33 @@ class Database:
                         now_ts,
                         source,
                     )
-                    order = await self.get_order_by_alpaca_id(alpaca_id)
-                    return UpsertResult(
-                        order=order, old_status=None,
-                        new_status=canonical_status, inserted=True,
-                    )
+                    inserted = True
 
-                old_status = existing["status"]
-                await conn.execute(
-                    """
-                    UPDATE orders
-                    SET status = $2,
-                        filled_at = COALESCE($3, filled_at),
-                        filled_price = COALESCE($4, filled_price),
-                        filled_quantity = COALESCE($5, filled_quantity),
-                        last_reconciled_at = $6,
-                        reconcile_source = $7
-                    WHERE alpaca_order_id = $1
-                    """,
-                    alpaca_id,
-                    canonical_status,
-                    snapshot.get("filled_at"),
-                    snapshot.get("filled_avg_price"),
-                    snapshot.get("filled_qty"),
-                    now_ts,
-                    source,
-                )
+                else:
+                    old_status = existing["status"]
+                    await conn.execute(
+                        """
+                        UPDATE orders
+                        SET status = $2,
+                            filled_at = COALESCE($3, filled_at),
+                            filled_price = COALESCE($4, filled_price),
+                            filled_quantity = COALESCE($5, filled_quantity),
+                            last_reconciled_at = $6,
+                            reconcile_source = $7
+                        WHERE alpaca_order_id = $1
+                        """,
+                        alpaca_id,
+                        canonical_status,
+                        snapshot.get("filled_at"),
+                        snapshot.get("filled_avg_price"),
+                        snapshot.get("filled_qty"),
+                        now_ts,
+                        source,
+                    )
         order = await self.get_order_by_alpaca_id(alpaca_id)
         return UpsertResult(
             order=order, old_status=old_status,
-            new_status=canonical_status, inserted=False,
+            new_status=canonical_status, inserted=inserted,
         )
 
     # ── Trade methods ──────────────────────────────────────────────

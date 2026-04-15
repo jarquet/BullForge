@@ -13,7 +13,7 @@ from shared.db import Database
 MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def _raw_conn():
     settings = Settings()
     conn = await asyncpg.connect(
@@ -31,7 +31,7 @@ async def _raw_conn():
         await conn.close()
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="session")
 async def real_db(_raw_conn):
     await _raw_conn.execute("TRUNCATE trades, orders RESTART IDENTITY CASCADE")
     settings = Settings()
