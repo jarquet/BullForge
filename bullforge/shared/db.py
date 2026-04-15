@@ -72,6 +72,8 @@ class Database:
             max_size=10,
             server_settings=server_settings or None,
         )
+        # Sandbox pools rely on the live pool having already applied
+        # migrations (incl. 013 which creates the `backtest` schema).
         if not self._sandbox:
             await self._run_migrations()
 
