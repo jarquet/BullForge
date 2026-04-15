@@ -95,3 +95,19 @@ def test_telegram_settings_defaults(settings):
 
 def test_dashboard_settings_defaults(settings):
     assert settings.dashboard_port == 8084
+
+
+def test_reconciler_settings_have_defaults(monkeypatch):
+    for var in (
+        "EXECUTION_RECONCILER_POLL_INTERVAL_S",
+        "EXECUTION_RECONCILER_ORPHAN_EVERY",
+        "EXECUTION_RECONCILER_ORPHAN_WINDOW_HOURS",
+        "EXECUTION_RECONCILER_STREAM_ENABLED",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    from shared.config import Settings
+    s = Settings()
+    assert s.execution_reconciler_poll_interval_s == 60
+    assert s.execution_reconciler_orphan_every == 5
+    assert s.execution_reconciler_orphan_window_hours == 48
+    assert s.execution_reconciler_stream_enabled is True

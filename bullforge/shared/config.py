@@ -117,6 +117,26 @@ class Settings:
     execution_min_agreement: int = field(
         default_factory=lambda: int(os.getenv("EXECUTION_MIN_AGREEMENT", "2"))
     )
+    execution_reconciler_poll_interval_s: int = field(
+        default_factory=lambda: int(
+            os.getenv("EXECUTION_RECONCILER_POLL_INTERVAL_S", "60")
+        )
+    )
+    execution_reconciler_orphan_every: int = field(
+        default_factory=lambda: int(
+            os.getenv("EXECUTION_RECONCILER_ORPHAN_EVERY", "5")
+        )
+    )
+    execution_reconciler_orphan_window_hours: int = field(
+        default_factory=lambda: int(
+            os.getenv("EXECUTION_RECONCILER_ORPHAN_WINDOW_HOURS", "48")
+        )
+    )
+    execution_reconciler_stream_enabled: bool = field(
+        default_factory=lambda: os.getenv(
+            "EXECUTION_RECONCILER_STREAM_ENABLED", "true"
+        ).lower() == "true"
+    )
 
     # Monitoring service
     monitoring_port: int = field(
