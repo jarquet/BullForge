@@ -155,6 +155,26 @@ class Database:
             for r in rows
         ]
 
+    async def query_bars_between(
+        self,
+        symbol: str,
+        timeframe: str,
+        start: datetime,
+        end: datetime,
+    ) -> list[dict]:
+        table = "bars_1m" if timeframe == "1m" else "bars_daily"
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT timestamp, open, high, low, close, volume
+                FROM {table}
+                WHERE symbol = $1 AND timestamp >= $2 AND timestamp < $3
+                ORDER BY timestamp ASC
+                """,
+                symbol, start, end,
+            )
+        return [dict(r) for r in rows]
+
     async def insert_feature_row(self, row: FeatureRow) -> None:
         async with self.pool.acquire() as conn:
             await conn.execute(
