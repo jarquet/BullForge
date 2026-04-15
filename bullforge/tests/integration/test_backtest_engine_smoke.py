@@ -50,7 +50,7 @@ async def test_single_fold_smoke(stack):
 
     async with live_db.pool.acquire() as conn:
         bar_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM bars_1m WHERE symbol='SPY' AND ts >= NOW() - INTERVAL '25 days'"
+            "SELECT COUNT(*) FROM bars_1m WHERE symbol='SPY' AND timestamp >= NOW() - INTERVAL '25 days'"
         )
     if bar_count < 5000:
         pytest.skip(f"SPY 1m data not loaded for window (have {bar_count} bars, need >=5000)")
