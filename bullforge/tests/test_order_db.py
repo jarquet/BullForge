@@ -149,7 +149,7 @@ async def test_query_non_terminal_orders_uses_correct_sql(settings, mock_pool):
     db = Database(settings)
     db.pool = pool
 
-    await db.query_non_terminal_orders(older_than=timedelta(hours=48))
+    await db.query_non_terminal_orders(within=timedelta(hours=48))
 
     conn.fetch.assert_awaited_once()
     sql, cutoff = conn.fetch.await_args.args
@@ -178,7 +178,7 @@ async def test_query_non_terminal_orders_parses_rows(settings, mock_pool):
     db = Database(settings)
     db.pool = pool
 
-    rows = await db.query_non_terminal_orders(older_than=timedelta(hours=48))
+    rows = await db.query_non_terminal_orders(within=timedelta(hours=48))
     assert len(rows) == 1
     assert rows[0].alpaca_order_id == "alp-x"
     assert rows[0].origin == "internal"
@@ -240,7 +240,14 @@ async def test_insert_order_writes_origin_and_reconcile_fields(
     )
     oid = await db.insert_order(order)
     assert oid == 99
-    sql, *args = conn.fetchval.await_args.args
-    assert "origin" in sql and "last_reconciled_at" in sql and "reconcile_source" in sql
-    assert "external" in args
-    assert "submit" in args
+
+    # Verify positional args: args[0] is SQL, args[1..15] are parameters
+    # Column order: symbol, side, quantity, order_type, submitted_at, signal_strength,
+    #              alpaca_order_id, status, filled_at, filled_price, filled_quantity,
+    #              limit_price, origin, last_reconciled_at, reconcile_source
+    call_args = conn.fetchval.await_args.args
+    assert len(call_args) == 16  # SQL + 15 params
+    assert "INSERT INTO orders" in call_args[0]  # SQL
+    assert call_args[13] == "external"  # origin at position 13
+    assert call_args[14] is None  # last_reconciled_at at position 14
+    assert call_args[15] == "submit"  # reconcile_source at position 15

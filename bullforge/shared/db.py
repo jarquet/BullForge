@@ -613,9 +613,10 @@ class Database:
         )
 
     async def query_non_terminal_orders(
-        self, older_than: timedelta,
+        self, within: timedelta,
     ) -> list[Order]:
-        cutoff = datetime.now(timezone.utc) - older_than
+        """Return non-terminal orders submitted within the given lookback window."""
+        cutoff = datetime.now(timezone.utc) - within
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
