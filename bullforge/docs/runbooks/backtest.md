@@ -7,6 +7,27 @@
 
 ## Run a backtest
 
+### In Docker (recommended)
+
+The `backtest` compose service bundles the model + execution stacks (torch,
+lightgbm, alpaca-py) on the NVIDIA PyTorch base image. It runs under the
+`tools` profile so it isn't started by `docker compose up`.
+
+    cd bullforge
+    docker compose build backtest     # first time only
+    docker compose run --rm backtest \
+        --name "spy-1m-q1-2025" \
+        --symbols SPY,QQQ \
+        --timeframe 1m \
+        --horizons 5,10,30 \
+        --start 2025-01-01T00:00:00 \
+        --end   2025-04-01T00:00:00 \
+        --train-days 60 --test-days 5 --embargo-min 30 \
+        --mode rolling \
+        --slippage-bps 5 --max-volume-pct 0.10
+
+### Locally (requires full deps installed)
+
     cd bullforge
     PYTHONPATH=. python scripts/backtest.py \
         --name "spy-1m-q1-2025" \
