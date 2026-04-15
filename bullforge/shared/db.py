@@ -8,7 +8,7 @@ from typing import List, Optional
 import asyncpg
 
 from shared.config import Settings
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from shared.models import Bar, FeatureRow, Label, ModelMetadata, Prediction, Order, Trade, ModelStatus
 
@@ -483,8 +483,10 @@ class Database:
                 INSERT INTO orders
                     (symbol, side, quantity, order_type, submitted_at,
                      signal_strength, alpaca_order_id, status,
-                     filled_at, filled_price, filled_quantity, limit_price)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                     filled_at, filled_price, filled_quantity, limit_price,
+                     origin, last_reconciled_at, reconcile_source)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                        $13, $14, $15)
                 RETURNING id
                 """,
                 order.symbol,
@@ -499,6 +501,9 @@ class Database:
                 order.filled_price,
                 order.filled_quantity,
                 order.limit_price,
+                order.origin,
+                order.last_reconciled_at,
+                order.reconcile_source,
             )
         return row_id
 
@@ -535,7 +540,8 @@ class Database:
     ) -> list[Order]:
         query = """SELECT id, symbol, side, quantity, order_type, submitted_at,
                           signal_strength, alpaca_order_id, status,
-                          filled_at, filled_price, filled_quantity, limit_price
+                          filled_at, filled_price, filled_quantity, limit_price,
+                          origin, last_reconciled_at, reconcile_source
                    FROM orders WHERE TRUE"""
         args: list = []
         idx = 1
@@ -570,6 +576,74 @@ class Database:
                 filled_price=r["filled_price"],
                 filled_quantity=r["filled_quantity"],
                 limit_price=r["limit_price"],
+                origin=r["origin"],
+                last_reconciled_at=r["last_reconciled_at"],
+                reconcile_source=r["reconcile_source"],
+            )
+            for r in rows
+        ]
+
+    async def get_order_by_alpaca_id(self, alpaca_order_id: str) -> Optional[Order]:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id, symbol, side, quantity, order_type, submitted_at,
+                       signal_strength, alpaca_order_id, status,
+                       filled_at, filled_price, filled_quantity, limit_price,
+                       origin, last_reconciled_at, reconcile_source
+                FROM orders
+                WHERE alpaca_order_id = $1
+                """,
+                alpaca_order_id,
+            )
+        if row is None:
+            return None
+        return Order(
+            id=row["id"], symbol=row["symbol"], side=row["side"],
+            quantity=row["quantity"], order_type=row["order_type"],
+            submitted_at=row["submitted_at"],
+            signal_strength=row["signal_strength"],
+            alpaca_order_id=row["alpaca_order_id"], status=row["status"],
+            filled_at=row["filled_at"], filled_price=row["filled_price"],
+            filled_quantity=row["filled_quantity"],
+            limit_price=row["limit_price"],
+            origin=row["origin"],
+            last_reconciled_at=row["last_reconciled_at"],
+            reconcile_source=row["reconcile_source"],
+        )
+
+    async def query_non_terminal_orders(
+        self, older_than: timedelta,
+    ) -> list[Order]:
+        cutoff = datetime.now(timezone.utc) - older_than
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, symbol, side, quantity, order_type, submitted_at,
+                       signal_strength, alpaca_order_id, status,
+                       filled_at, filled_price, filled_quantity, limit_price,
+                       origin, last_reconciled_at, reconcile_source
+                FROM orders
+                WHERE status NOT IN ('filled','cancelled','rejected','expired')
+                  AND submitted_at >= $1
+                  AND alpaca_order_id IS NOT NULL
+                ORDER BY submitted_at DESC
+                """,
+                cutoff,
+            )
+        return [
+            Order(
+                id=r["id"], symbol=r["symbol"], side=r["side"],
+                quantity=r["quantity"], order_type=r["order_type"],
+                submitted_at=r["submitted_at"],
+                signal_strength=r["signal_strength"],
+                alpaca_order_id=r["alpaca_order_id"], status=r["status"],
+                filled_at=r["filled_at"], filled_price=r["filled_price"],
+                filled_quantity=r["filled_quantity"],
+                limit_price=r["limit_price"],
+                origin=r["origin"],
+                last_reconciled_at=r["last_reconciled_at"],
+                reconcile_source=r["reconcile_source"],
             )
             for r in rows
         ]
