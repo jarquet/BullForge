@@ -76,7 +76,8 @@ class AlpacaClient:
             barset = self._stock_historical.get_stock_bars(request)
 
         bars = []
-        for alpaca_bar in barset[symbol]:
+        symbol_bars = barset.data.get(symbol, [])
+        for alpaca_bar in symbol_bars:
             bars.append(self.parse_bar(symbol, alpaca_bar, timeframe))
         return bars
 
