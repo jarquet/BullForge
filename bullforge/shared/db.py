@@ -53,11 +53,15 @@ def _normalize_alpaca_status(raw: str) -> str:
 
 
 class Database:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, *, sandbox: bool = False):
         self._settings = settings
+        self._sandbox = sandbox
         self.pool: Optional[asyncpg.Pool] = None
 
     async def connect(self) -> None:
+        server_settings = {}
+        if self._sandbox:
+            server_settings["search_path"] = "backtest,public"
         self.pool = await asyncpg.create_pool(
             host=self._settings.timescaledb_host,
             port=self._settings.timescaledb_port,
@@ -66,8 +70,12 @@ class Database:
             database=self._settings.timescaledb_db,
             min_size=2,
             max_size=10,
+            server_settings=server_settings or None,
         )
-        await self._run_migrations()
+        # Sandbox pools rely on the live pool having already applied
+        # migrations (incl. 013 which creates the `backtest` schema).
+        if not self._sandbox:
+            await self._run_migrations()
 
     async def disconnect(self) -> None:
         if self.pool:
@@ -154,6 +162,26 @@ class Database:
             )
             for r in rows
         ]
+
+    async def query_bars_between(
+        self,
+        symbol: str,
+        timeframe: str,
+        start: datetime,
+        end: datetime,
+    ) -> list[dict]:
+        table = "bars_1m" if timeframe == "1m" else "bars_daily"
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT timestamp, open, high, low, close, volume
+                FROM {table}
+                WHERE symbol = $1 AND timestamp >= $2 AND timestamp < $3
+                ORDER BY timestamp ASC
+                """,
+                symbol, start, end,
+            )
+        return [dict(r) for r in rows]
 
     async def get_bar_range(
         self, symbol: str, timeframe: str
