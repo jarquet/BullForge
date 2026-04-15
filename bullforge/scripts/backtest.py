@@ -87,7 +87,7 @@ async def _main() -> None:
     run_id = await engine.run(cfg)
     print(f"backtest run_id={run_id} completed")
 
-    await redis.close()
+    await redis.disconnect()
     await sandbox_db.disconnect()
     await live_db.disconnect()
 
