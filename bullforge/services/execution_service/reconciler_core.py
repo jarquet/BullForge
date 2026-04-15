@@ -11,11 +11,22 @@ logger = logging.getLogger(__name__)
 
 TERMINAL_STATUSES = {"filled", "cancelled", "rejected", "expired"}
 
+_MONITORING_CHANNEL = "monitoring:reconciler"
+
 
 class ReconcilerCore:
     def __init__(self, db: Database, redis_client=None):
         self._db = db
         self._redis = redis_client
+
+    async def _publish_counter(self, name: str, **labels) -> None:
+        if self._redis is None:
+            return
+        payload = json.dumps({"counter": name, "labels": labels, "value": 1})
+        await self._redis.publish(_MONITORING_CHANNEL, payload)
+
+    async def record_stream_reconnect(self) -> None:
+        await self._publish_counter("reconciler_stream_reconnects_total")
 
     async def apply_alpaca_order(
         self, alpaca_order: dict, source: str,
@@ -25,6 +36,7 @@ class ReconcilerCore:
         )
         old_status = result.old_status
         new_status = result.new_status
+        inserted = result.inserted
         order = result.order
 
         status_changed = old_status != new_status
@@ -44,9 +56,23 @@ class ReconcilerCore:
                 "anomaly: order %s went from filled -> %s",
                 order.alpaca_order_id, new_status,
             )
+            await self._publish_counter(
+                "reconciler_anomalies_total", kind="filled_reverted",
+            )
             await self._publish("execution:orders:anomaly", order)
             await self._publish("execution:orders", order)
             return
+
+        if status_changed:
+            old_label = "none" if inserted else (old_status or "none")
+            await self._publish_counter(
+                "reconciler_events_total",
+                source=source,
+                transition=f"{old_label}->{new_status}",
+            )
+
+        if inserted and source == "poll":
+            await self._publish_counter("reconciler_orphans_ingested_total")
 
         if status_changed and new_status == "filled":
             await self._handle_fill(order)

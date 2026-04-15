@@ -102,6 +102,10 @@ class TradeUpdatesStream:
             try:
                 if attempt > 0:
                     try:
+                        await self._core.record_stream_reconnect()
+                    except Exception:
+                        logger.exception("record_stream_reconnect failed")
+                    try:
                         await self._on_reconnect()
                     except Exception:
                         logger.exception("on_reconnect callback failed")

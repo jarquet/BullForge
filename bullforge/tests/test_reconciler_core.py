@@ -73,10 +73,10 @@ async def test_submitted_to_cancelled_publishes_and_does_not_insert_trade(
     await core.apply_alpaca_order(_snapshot(status="cancelled"), source="poll")
     mock_db.insert_trade.assert_not_called()
     mock_db.update_trade_exit.assert_not_called()
-    mock_redis.publish.assert_awaited_once()
-    channel, payload = mock_redis.publish.await_args.args
-    assert channel == "execution:orders"
-    assert json.loads(payload)["status"] == "cancelled"
+    channels = [call.args[0] for call in mock_redis.publish.await_args_list]
+    assert "execution:orders" in channels
+    order_call = next(c for c in mock_redis.publish.await_args_list if c.args[0] == "execution:orders")
+    assert json.loads(order_call.args[1])["status"] == "cancelled"
 
 
 @pytest.mark.asyncio
@@ -150,3 +150,123 @@ async def test_duplicate_fill_event_does_not_insert_duplicate_trade(
     await core.apply_alpaca_order(_snapshot(status="filled"), source="stream")
     mock_db.insert_trade.assert_not_called()
     mock_db.update_trade_exit.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Counter event tests
+# ---------------------------------------------------------------------------
+
+def _monitoring_calls(mock_redis):
+    """Return parsed counter payloads published to monitoring:reconciler."""
+    return [
+        json.loads(call.args[1])
+        for call in mock_redis.publish.await_args_list
+        if call.args[0] == "monitoring:reconciler"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_counter_events_total_on_status_change(core, mock_db, mock_redis):
+    mock_db.upsert_order_from_alpaca.return_value = _upsert_result(
+        old_status="submitted", new_status="cancelled", inserted=False,
+    )
+    await core.apply_alpaca_order(_snapshot(status="cancelled"), source="poll")
+    counters = _monitoring_calls(mock_redis)
+    events = [c for c in counters if c["counter"] == "reconciler_events_total"]
+    assert len(events) == 1
+    assert events[0]["labels"]["source"] == "poll"
+    assert events[0]["labels"]["transition"] == "submitted->cancelled"
+    assert events[0]["value"] == 1
+
+
+@pytest.mark.asyncio
+async def test_counter_events_total_on_insert_uses_none_as_old(
+    core, mock_db, mock_redis,
+):
+    mock_db.upsert_order_from_alpaca.return_value = _upsert_result(
+        old_status="submitted", new_status="submitted", inserted=True,
+    )
+    # inserted=True and old==new means status_changed is False — no counter
+    await core.apply_alpaca_order(_snapshot(status="submitted"), source="poll")
+    counters = _monitoring_calls(mock_redis)
+    events = [c for c in counters if c["counter"] == "reconciler_events_total"]
+    assert len(events) == 0  # no status change → no event counter
+
+
+@pytest.mark.asyncio
+async def test_counter_events_total_inserted_with_status_change(
+    core, mock_db, mock_redis,
+):
+    """When inserted=True but old_status differs (edge case), label old as 'none'."""
+    mock_db.upsert_order_from_alpaca.return_value = _upsert_result(
+        old_status="submitted", new_status="cancelled", inserted=True,
+    )
+    await core.apply_alpaca_order(_snapshot(status="cancelled"), source="stream")
+    counters = _monitoring_calls(mock_redis)
+    events = [c for c in counters if c["counter"] == "reconciler_events_total"]
+    assert len(events) == 1
+    assert events[0]["labels"]["transition"] == "none->cancelled"
+
+
+@pytest.mark.asyncio
+async def test_no_counter_on_no_op_duplicate(core, mock_db, mock_redis):
+    mock_db.upsert_order_from_alpaca.return_value = _upsert_result(
+        old_status="filled", new_status="filled",
+    )
+    await core.apply_alpaca_order(_snapshot(status="filled"), source="stream")
+    counters = _monitoring_calls(mock_redis)
+    events = [c for c in counters if c["counter"] == "reconciler_events_total"]
+    assert len(events) == 0
+
+
+@pytest.mark.asyncio
+async def test_counter_orphans_ingested_only_when_source_is_poll(
+    core, mock_db, mock_redis,
+):
+    # inserted=True, source="poll" → orphan counter emitted
+    mock_db.upsert_order_from_alpaca.return_value = _upsert_result(
+        old_status="submitted", new_status="cancelled", inserted=True,
+    )
+    await core.apply_alpaca_order(_snapshot(status="cancelled"), source="poll")
+    counters = _monitoring_calls(mock_redis)
+    orphans = [c for c in counters if c["counter"] == "reconciler_orphans_ingested_total"]
+    assert len(orphans) == 1
+    assert orphans[0]["labels"] == {}
+
+
+@pytest.mark.asyncio
+async def test_no_orphan_counter_when_source_is_not_poll(
+    core, mock_db, mock_redis,
+):
+    mock_db.upsert_order_from_alpaca.return_value = _upsert_result(
+        old_status="submitted", new_status="cancelled", inserted=True,
+    )
+    await core.apply_alpaca_order(_snapshot(status="cancelled"), source="stream")
+    counters = _monitoring_calls(mock_redis)
+    orphans = [c for c in counters if c["counter"] == "reconciler_orphans_ingested_total"]
+    assert len(orphans) == 0
+
+
+@pytest.mark.asyncio
+async def test_counter_anomalies_on_filled_reverted(core, mock_db, mock_redis):
+    mock_db.upsert_order_from_alpaca.return_value = _upsert_result(
+        old_status="filled", new_status="cancelled",
+    )
+    await core.apply_alpaca_order(_snapshot(status="cancelled"), source="stream")
+    counters = _monitoring_calls(mock_redis)
+    anomalies = [c for c in counters if c["counter"] == "reconciler_anomalies_total"]
+    assert len(anomalies) == 1
+    assert anomalies[0]["labels"] == {"kind": "filled_reverted"}
+    assert anomalies[0]["value"] == 1
+
+
+@pytest.mark.asyncio
+async def test_anomaly_does_not_also_emit_events_total(core, mock_db, mock_redis):
+    """The anomaly branch returns early; events_total should NOT be emitted."""
+    mock_db.upsert_order_from_alpaca.return_value = _upsert_result(
+        old_status="filled", new_status="cancelled",
+    )
+    await core.apply_alpaca_order(_snapshot(status="cancelled"), source="stream")
+    counters = _monitoring_calls(mock_redis)
+    events = [c for c in counters if c["counter"] == "reconciler_events_total"]
+    assert len(events) == 0

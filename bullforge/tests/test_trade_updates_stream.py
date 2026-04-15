@@ -1,7 +1,7 @@
 import asyncio
 import pytest
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from services.execution_service.trade_updates_stream import (
     TradeUpdatesStream, normalize_trade_update,
 )
@@ -88,3 +88,116 @@ async def test_reconnect_backoff_schedule():
     assert delays[2] == 4
     assert delays[-1] <= 30
     assert delays == sorted(delays)
+
+
+# ---------------------------------------------------------------------------
+# Counter: record_stream_reconnect
+# ---------------------------------------------------------------------------
+
+def _make_stream_settings():
+    s = MagicMock()
+    s.alpaca_api_key = "key"
+    s.alpaca_secret_key = "secret"
+    s.alpaca_base_url = "https://paper-api.alpaca.markets"
+    return s
+
+
+@pytest.mark.asyncio
+async def test_reconnect_records_stream_counter():
+    """
+    record_stream_reconnect is awaited before on_reconnect on attempt > 0.
+    """
+    call_order = []
+
+    core = MagicMock()
+
+    async def _record():
+        call_order.append("record_stream_reconnect")
+
+    async def _on_reconnect():
+        call_order.append("on_reconnect")
+
+    core.record_stream_reconnect = AsyncMock(side_effect=_record)
+    core.apply_alpaca_order = AsyncMock()
+    on_reconnect_mock = AsyncMock(side_effect=_on_reconnect)
+
+    stream = TradeUpdatesStream(
+        settings=_make_stream_settings(),
+        core=core,
+        on_reconnect=on_reconnect_mock,
+        max_backoff_s=0,
+    )
+
+    attempts = 0
+
+    def _make_client(*args, **kwargs):
+        nonlocal attempts
+        client = MagicMock()
+
+        def _run():
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise ConnectionError("stream dropped")
+            stream._stop_event.set()
+
+        client.run = _run
+        client.subscribe_trade_updates = MagicMock()
+        return client
+
+    with patch(
+        "services.execution_service.trade_updates_stream.TradingStream",
+        side_effect=_make_client,
+    ):
+        await stream.start()
+        for _ in range(100):
+            await asyncio.sleep(0.01)
+            if stream._stop_event.is_set():
+                break
+        await stream.stop()
+
+    core.record_stream_reconnect.assert_awaited()
+    on_reconnect_mock.assert_awaited()
+    assert "record_stream_reconnect" in call_order
+    assert "on_reconnect" in call_order
+    assert call_order.index("record_stream_reconnect") < call_order.index("on_reconnect")
+
+
+@pytest.mark.asyncio
+async def test_no_reconnect_counter_on_first_connect():
+    """record_stream_reconnect must NOT be called on the very first connection."""
+    core = MagicMock()
+    core.record_stream_reconnect = AsyncMock()
+    core.apply_alpaca_order = AsyncMock()
+    on_reconnect = AsyncMock()
+
+    stream = TradeUpdatesStream(
+        settings=_make_stream_settings(),
+        core=core,
+        on_reconnect=on_reconnect,
+        max_backoff_s=0,
+    )
+
+    def _make_client(*args, **kwargs):
+        client = MagicMock()
+
+        def _run():
+            stream._stop_event.set()
+
+        client.run = _run
+        client.subscribe_trade_updates = MagicMock()
+        return client
+
+    with patch(
+        "services.execution_service.trade_updates_stream.TradingStream",
+        side_effect=_make_client,
+    ):
+        await stream.start()
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if stream._stop_event.is_set():
+                break
+        await stream.stop()
+
+    core.record_stream_reconnect.assert_not_awaited()
+    on_reconnect.assert_not_awaited()
