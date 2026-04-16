@@ -138,7 +138,7 @@ def test_features_exclude_current_bar():
     registry = _build_registry_with_basic_calculators()
     engine = FeatureEngine(
         settings=settings, db=None, registry=registry,
-        label_horizons=[5], redis_client=None,
+        label_horizons={"1m": [5], "1d": [5]}, redis_client=None,
     )
     features_at_target = engine.compute_for_bar(bars, target_ts, timeframe="1m")
 
@@ -252,7 +252,7 @@ async def test_feature_update_published_only_after_persist():
     registry = _build_registry_with_basic_calculators()
     engine = FeatureEngine(
         settings=settings, db=db, registry=registry,
-        label_horizons=[5], redis_client=redis_client,
+        label_horizons={"1m": [5], "1d": [5]}, redis_client=redis_client,
     )
     await engine.compute_features_for_symbol("TEST", "1m", limit=100)
 

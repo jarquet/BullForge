@@ -29,8 +29,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--symbols", required=True,
                    help="comma-separated, e.g. SPY,QQQ")
     p.add_argument("--timeframe", default="1m", choices=["1m", "1d"])
-    p.add_argument("--horizons", default="5,10,30",
-                   help="comma-separated minutes")
+    p.add_argument("--horizons", default=None,
+                   help="comma-separated bar counts (default: from runtime config)")
     p.add_argument("--start", required=True, type=_parse_iso,
                    help="ISO datetime (UTC) inclusive")
     p.add_argument("--end", required=True, type=_parse_iso,
@@ -68,11 +68,16 @@ async def _main() -> None:
         results_db=results,
     )
 
+    if args.horizons:
+        horizons = [int(h) for h in args.horizons.split(",") if h.strip()]
+    else:
+        horizons = await rc.get(f"label_horizons_{args.timeframe}")
+
     cfg = BacktestConfig(
         name=args.name,
         symbols=[s.strip() for s in args.symbols.split(",") if s.strip()],
         timeframe=args.timeframe,
-        horizons=[int(h) for h in args.horizons.split(",") if h.strip()],
+        horizons=horizons,
         range_start=args.start,
         range_end=args.end,
         train_days=args.train_days,

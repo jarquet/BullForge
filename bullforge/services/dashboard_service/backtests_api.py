@@ -135,7 +135,7 @@ def _validate_new_job(body: dict, valid_horizons: set[int]) -> dict:
             or not all(h in valid_horizons for h in horizons)):
         errors["horizons"] = (
             f"subset of currently-labeled horizons {sorted(valid_horizons)} required "
-            f"(configure via label_horizons runtime config)"
+            f"(configure via label_horizons_1m / label_horizons_1d runtime config)"
         )
     try:
         start = datetime.fromisoformat(body["range_start"])
@@ -164,7 +164,9 @@ async def _create(request: web.Request) -> web.Response:
         return web.json_response({"error": "bad json"}, status=400)
 
     rc = request.app["runtime_config"]
-    valid_horizons = set(await rc.get("label_horizons"))
+    timeframe = body.get("timeframe", "1m")
+    horizons_key = f"label_horizons_{timeframe}" if timeframe in VALID_TIMEFRAMES else "label_horizons_1m"
+    valid_horizons = set(await rc.get(horizons_key))
     errors = _validate_new_job(body, valid_horizons)
     if errors:
         return web.json_response({"errors": errors}, status=400)

@@ -79,11 +79,18 @@ CONFIG_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Minutes before NYSE close (16:00 ET) to stop equity trading. 60 = stop at 15:00 ET.",
         "reference": "https://en.wikipedia.org/wiki/Closing_Bell",
     },
-    "label_horizons": {
-        "default": [5, 10, 15, 30, 60, 75, 90, 105, 120],
+    "label_horizons_1m": {
+        "default": [1, 2, 3, 5, 8, 10, 20, 40, 60, 80, 100, 120],
         "type": "json",
-        "label": "Forecast Horizons (minutes)",
-        "description": "Forward-return horizons (in minutes) for which the feature engine generates labels and trains models. Backtests can only use horizons in this list. Adding new values triggers re-labeling on the next feature_engine restart.",
+        "label": "1-min Forecast Horizons (bars)",
+        "description": "Forward-return horizons (in 1-minute bars) for label generation and model training on 1m data. Backtests using timeframe=1m can only select horizons from this list.",
+        "reference": "https://en.wikipedia.org/wiki/Forecasting",
+    },
+    "label_horizons_1d": {
+        "default": [1, 2, 3, 5, 12, 15],
+        "type": "json",
+        "label": "1-day Forecast Horizons (bars)",
+        "description": "Forward-return horizons (in daily bars) for label generation and model training on 1d data. Backtests using timeframe=1d can only select horizons from this list.",
         "reference": "https://en.wikipedia.org/wiki/Forecasting",
     },
     "last_retrain_time": {

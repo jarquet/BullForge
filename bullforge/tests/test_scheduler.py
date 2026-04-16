@@ -45,7 +45,7 @@ async def test_run_once_dispatches_cpu_then_gpu_phase():
         redis_client=redis_client,
         symbols=["SPY"],
         timeframes=["1m"],
-        horizons=[5],
+        horizons_by_tf={"1m": [5]},
         min_samples=10,
     )
 
@@ -90,7 +90,7 @@ async def test_run_once_handles_worker_error():
     sched = RetrainScheduler(
         db_dsn="postgres://fake", artifacts_dir="/tmp", runtime_config=runtime_config,
         inference_engine=inference_engine, redis_client=redis_client,
-        symbols=["SPY"], timeframes=["1m"], horizons=[5], min_samples=10,
+        symbols=["SPY"], timeframes=["1m"], horizons_by_tf={"1m": [5]}, min_samples=10,
     )
 
     with patch("services.model_service.scheduler.ProcessPoolExecutor") as pool_cls:

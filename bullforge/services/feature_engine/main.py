@@ -44,7 +44,10 @@ async def main() -> None:
     await redis_client.connect()
 
     runtime_config = RuntimeConfig(redis_client)
-    label_horizons = await runtime_config.get("label_horizons")
+    label_horizons = {
+        "1m": await runtime_config.get("label_horizons_1m"),
+        "1d": await runtime_config.get("label_horizons_1d"),
+    }
     logger.info("Using label horizons from runtime config: %s", label_horizons)
 
     registry = build_registry()

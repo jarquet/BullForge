@@ -36,7 +36,7 @@ class RetrainScheduler:
         redis_client: RedisClient,
         symbols: list[str],
         timeframes: list[str],
-        horizons: list[int],
+        horizons_by_tf: dict[str, list[int]],
         min_samples: int,
         min_samples_1d: int = 84,
         db: Optional[Database] = None,
@@ -48,7 +48,7 @@ class RetrainScheduler:
         self._redis = redis_client
         self._symbols = symbols
         self._timeframes = timeframes
-        self._horizons = horizons
+        self._horizons_by_tf = horizons_by_tf
         self._min_samples = min_samples
         self._min_samples_1d = min_samples_1d
         self._db = db
@@ -89,11 +89,17 @@ class RetrainScheduler:
             as_of, workers, self._symbols,
         )
 
+        # Re-read horizons from runtime config each cycle
+        horizons_by_tf = {
+            "1m": config.get("label_horizons_1m", self._horizons_by_tf.get("1m", [])),
+            "1d": config.get("label_horizons_1d", self._horizons_by_tf.get("1d", [])),
+        }
+
         cpu_jobs = []
         gpu_jobs = []
         for symbol in self._symbols:
             for tf in self._timeframes:
-                for h in self._horizons:
+                for h in horizons_by_tf.get(tf, []):
                     cpu_jobs.append((symbol, tf, h, "gradient_boost"))
                     gpu_jobs.append((symbol, tf, h, "lstm"))
 

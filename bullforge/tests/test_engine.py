@@ -63,7 +63,7 @@ def test_engine_creation(mock_settings, mock_db, simple_registry):
         settings=mock_settings,
         db=mock_db,
         registry=simple_registry,
-        label_horizons=[5, 10],
+        label_horizons={"1m": [5, 10], "1d": [5, 10]},
     )
     assert engine is not None
 
@@ -74,7 +74,7 @@ async def test_compute_features_for_symbol(mock_settings, mock_db, simple_regist
         settings=mock_settings,
         db=mock_db,
         registry=simple_registry,
-        label_horizons=[5],
+        label_horizons={"1m": [5], "1d": [5]},
     )
 
     await engine.compute_features_for_symbol("SPY", "1m")
@@ -95,7 +95,7 @@ async def test_compute_labels_for_symbol(mock_settings, mock_db, simple_registry
         settings=mock_settings,
         db=mock_db,
         registry=simple_registry,
-        label_horizons=[5, 10],
+        label_horizons={"1m": [5, 10], "1d": [5, 10]},
     )
 
     await engine.compute_labels_for_symbol("SPY", "1m")
@@ -117,7 +117,7 @@ async def test_compute_all_symbols(mock_settings, mock_db, simple_registry):
         settings=mock_settings,
         db=mock_db,
         registry=simple_registry,
-        label_horizons=[5],
+        label_horizons={"1m": [5], "1d": [5]},
     )
 
     await engine.compute_all()
@@ -137,7 +137,7 @@ async def test_compute_skips_insufficient_bars(mock_settings, simple_registry):
         settings=mock_settings,
         db=mock_db,
         registry=simple_registry,
-        label_horizons=[5],
+        label_horizons={"1m": [5], "1d": [5]},
         min_bars=10,
     )
 
@@ -156,7 +156,7 @@ async def test_compute_features_publishes_update(mock_settings, mock_db, simple_
         settings=mock_settings,
         db=mock_db,
         registry=simple_registry,
-        label_horizons=[5],
+        label_horizons={"1m": [5], "1d": [5]},
         redis_client=mock_redis,
     )
 
@@ -177,7 +177,7 @@ async def test_compute_features_no_publish_without_redis(mock_settings, mock_db,
         settings=mock_settings,
         db=mock_db,
         registry=simple_registry,
-        label_horizons=[5],
+        label_horizons={"1m": [5], "1d": [5]},
     )
 
     # Should not raise even without redis_client
