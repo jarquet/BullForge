@@ -11,7 +11,6 @@ from aiohttp import web
 
 logger = logging.getLogger(__name__)
 
-VALID_HORIZONS = {5, 10, 15, 30, 60, 75, 90, 105, 120}
 VALID_MODES = {"rolling", "anchored"}
 VALID_TIMEFRAMES = {"1m", "1d"}
 JOB_STATUS_FILTERS = {"all", "queued", "running", "completed", "failed"}
@@ -120,7 +119,7 @@ def _compose_full_name(
     return f"{custom}__{syms}_{timeframe}_{start}_{end}_h{hz}"
 
 
-def _validate_new_job(body: dict) -> dict:
+def _validate_new_job(body: dict, valid_horizons: set[int]) -> dict:
     errors: dict[str, str] = {}
     custom_name = (body.get("name") or "").strip()
     if custom_name and not _CUSTOM_NAME_RE.match(custom_name):
@@ -133,8 +132,11 @@ def _validate_new_job(body: dict) -> dict:
         errors["timeframe"] = f"must be one of {sorted(VALID_TIMEFRAMES)}"
     horizons = body.get("horizons") or []
     if (not isinstance(horizons, list) or not horizons
-            or not all(h in VALID_HORIZONS for h in horizons)):
-        errors["horizons"] = f"subset of {sorted(VALID_HORIZONS)} required"
+            or not all(h in valid_horizons for h in horizons)):
+        errors["horizons"] = (
+            f"subset of currently-labeled horizons {sorted(valid_horizons)} required "
+            f"(configure via label_horizons runtime config)"
+        )
     try:
         start = datetime.fromisoformat(body["range_start"])
         end = datetime.fromisoformat(body["range_end"])
@@ -161,7 +163,9 @@ async def _create(request: web.Request) -> web.Response:
     except json.JSONDecodeError:
         return web.json_response({"error": "bad json"}, status=400)
 
-    errors = _validate_new_job(body)
+    rc = request.app["runtime_config"]
+    valid_horizons = set(await rc.get("label_horizons"))
+    errors = _validate_new_job(body, valid_horizons)
     if errors:
         return web.json_response({"errors": errors}, status=400)
 

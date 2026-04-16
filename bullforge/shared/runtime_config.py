@@ -79,6 +79,13 @@ CONFIG_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Minutes before NYSE close (16:00 ET) to stop equity trading. 60 = stop at 15:00 ET.",
         "reference": "https://en.wikipedia.org/wiki/Closing_Bell",
     },
+    "label_horizons": {
+        "default": [5, 10, 15, 30, 60, 75, 90, 105, 120],
+        "type": "json",
+        "label": "Forecast Horizons (minutes)",
+        "description": "Forward-return horizons (in minutes) for which the feature engine generates labels and trains models. Backtests can only use horizons in this list. Adding new values triggers re-labeling on the next feature_engine restart.",
+        "reference": "https://en.wikipedia.org/wiki/Forecasting",
+    },
     "last_retrain_time": {
         "default": "", "type": "str",
         "label": "Last Retrain Time (UTC ISO)",

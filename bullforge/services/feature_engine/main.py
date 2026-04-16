@@ -8,6 +8,7 @@ import signal
 from shared.config import Settings
 from shared.db import Database
 from shared.redis import RedisClient
+from shared.runtime_config import RuntimeConfig
 from services.feature_engine.registry import FeatureRegistry
 from services.feature_engine.calculators.price import compute_price_features
 from services.feature_engine.calculators.technical import compute_technical_features
@@ -42,12 +43,16 @@ async def main() -> None:
     logger.info("Connecting to Redis...")
     await redis_client.connect()
 
+    runtime_config = RuntimeConfig(redis_client)
+    label_horizons = await runtime_config.get("label_horizons")
+    logger.info("Using label horizons from runtime config: %s", label_horizons)
+
     registry = build_registry()
     engine = FeatureEngine(
         settings=settings,
         db=db,
         registry=registry,
-        label_horizons=[5, 10, 30],
+        label_horizons=label_horizons,
         label_threshold=0.001,
         min_bars=50,
         redis_client=redis_client,

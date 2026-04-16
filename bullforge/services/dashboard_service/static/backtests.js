@@ -113,7 +113,7 @@
     }
   }
 
-  const HORIZON_CHOICES = [5,10,15,30,60,75,90,105,120];
+  const HORIZON_CHOICES_FALLBACK = [5,10,15,30,60,75,90,105,120];
 
   async function openNewModal() {
     let symbolsList = [];
@@ -121,6 +121,13 @@
       const sym = await fetchJSON('/api/symbols');
       symbolsList = [...(sym.equity || []), ...(sym.crypto || [])];
     } catch (_) { symbolsList = []; }
+
+    let horizonChoices = HORIZON_CHOICES_FALLBACK;
+    try {
+      const cfg = await fetchJSON('/api/config');
+      const lh = cfg.values && cfg.values.label_horizons;
+      if (Array.isArray(lh) && lh.length) horizonChoices = lh;
+    } catch (_) { /* keep fallback */ }
 
     // Defaults: start = Jan 1 of (current year - 1), end = yesterday 00:00 UTC.
     const now = new Date();
@@ -149,7 +156,7 @@
           </label>
           <label>Horizons (min)<br>
             <select id="f-horizons" multiple size="6">
-              ${HORIZON_CHOICES.map(h => `<option value="${h}">${h}</option>`).join('')}
+              ${horizonChoices.map(h => `<option value="${h}">${h}</option>`).join('')}
             </select>
           </label>
         </div>
