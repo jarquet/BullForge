@@ -26,19 +26,20 @@ class BacktestResultsDB:
         embargo_minutes: int,
         mode: str,
         config: dict,
+        custom_name: Optional[str] = None,
     ) -> int:
         async with self._db.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 INSERT INTO backtest_runs (
-                    name, symbols, timeframe, horizons,
+                    name, custom_name, symbols, timeframe, horizons,
                     range_start, range_end,
                     train_days, test_days, embargo_min, mode, config_json
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 RETURNING id
                 """,
-                name, symbols, timeframe, horizons,
+                name, custom_name, symbols, timeframe, horizons,
                 range_start, range_end,
                 train_days, test_days, embargo_minutes, mode,
                 json.dumps(config),
@@ -143,7 +144,7 @@ class BacktestResultsDB:
         order = "asc" if order.lower() == "asc" else "desc"
 
         sql = f"""
-            SELECT r.id, r.name, r.symbols, r.range_start, r.range_end,
+            SELECT r.id, r.name, r.custom_name, r.symbols, r.range_start, r.range_end,
                    r.status, r.started_at, r.finished_at,
                    COALESCE(t.n_trades, 0)                AS n_trades,
                    COALESCE(t.total_pnl, 0)               AS total_pnl,
@@ -184,6 +185,7 @@ class BacktestResultsDB:
             {
                 "id": r["id"],
                 "name": r["name"],
+                "custom_name": r["custom_name"],
                 "symbols": list(r["symbols"]),
                 "range_start": r["range_start"],
                 "range_end": r["range_end"],
@@ -248,6 +250,7 @@ class BacktestResultsDB:
         return {
             "id": header["id"],
             "name": header["name"],
+            "custom_name": header["custom_name"],
             "symbols": list(header["symbols"]),
             "timeframe": header["timeframe"],
             "horizons": list(header["horizons"]),

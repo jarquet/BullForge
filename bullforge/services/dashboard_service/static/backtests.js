@@ -119,9 +119,16 @@
     let symbolsList = [];
     try {
       const sym = await fetchJSON('/api/symbols');
-      symbolsList = [...(sym.trading_symbols_equity || []),
-                     ...(sym.trading_symbols_crypto || [])];
+      symbolsList = [...(sym.equity || []), ...(sym.crypto || [])];
     } catch (_) { symbolsList = []; }
+
+    // Defaults: start = Jan 1 of (current year - 1), end = yesterday 00:00 UTC.
+    const now = new Date();
+    const defaultStart = new Date(Date.UTC(now.getUTCFullYear() - 1, 0, 1, 0, 0));
+    const defaultEnd = new Date(Date.UTC(
+      now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1, 0, 0,
+    ));
+    const fmtLocal = (d) => d.toISOString().slice(0, 16);
 
     const backdrop = document.createElement('div');
     backdrop.className = 'bt-modal-backdrop';
@@ -129,7 +136,10 @@
       <div class="bt-modal">
         <h3>New Backtest</h3>
         <div class="bt-form-row">
-          <label>Name<input id="f-name"></label>
+          <label>Custom name (optional)
+            <input id="f-name" maxlength="32"
+                   placeholder="leave blank for random 8-char tag">
+          </label>
         </div>
         <div class="bt-form-row">
           <label>Symbols<br>
@@ -152,8 +162,8 @@
           </label>
         </div>
         <div class="bt-form-row">
-          <label>Start (UTC)<input id="f-start" type="datetime-local"></label>
-          <label>End (UTC)<input id="f-end" type="datetime-local"></label>
+          <label>Start (UTC)<input id="f-start" type="datetime-local" value="${fmtLocal(defaultStart)}"></label>
+          <label>End (UTC)<input id="f-end" type="datetime-local" value="${fmtLocal(defaultEnd)}"></label>
         </div>
         <div class="bt-form-row">
           <label>Train days<input id="f-train" type="number" value="60" min="1"></label>

@@ -12,15 +12,18 @@ class BacktestJobsDB:
     def __init__(self, db: Database):
         self._db = db
 
-    async def insert_job(self, *, name: str, config: dict) -> int:
+    async def insert_job(
+        self, *, name: str, config: dict,
+        custom_name: Optional[str] = None,
+    ) -> int:
         async with self._db.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                INSERT INTO backtest_jobs (name, config_json)
-                VALUES ($1, $2)
+                INSERT INTO backtest_jobs (name, custom_name, config_json)
+                VALUES ($1, $2, $3)
                 RETURNING id
                 """,
-                name, json.dumps(config),
+                name, custom_name, json.dumps(config),
             )
         return row["id"]
 
@@ -29,7 +32,7 @@ class BacktestJobsDB:
             async with conn.transaction():
                 row = await conn.fetchrow(
                     """
-                    SELECT id, name, config_json
+                    SELECT id, name, custom_name, config_json
                     FROM backtest_jobs
                     WHERE status = 'queued'
                     ORDER BY created_at
@@ -50,6 +53,7 @@ class BacktestJobsDB:
                 return {
                     "id": row["id"],
                     "name": row["name"],
+                    "custom_name": row["custom_name"],
                     "config": json.loads(row["config_json"]),
                     "status": "running",
                     "started_at": "set",
@@ -88,7 +92,7 @@ class BacktestJobsDB:
         async with self._db.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT id, name, config_json, status, created_at,
+                SELECT id, name, custom_name, config_json, status, created_at,
                        started_at, finished_at, run_id, error
                 FROM backtest_jobs
                 WHERE status IN ('queued','running')

@@ -25,6 +25,7 @@ IDLE_SLEEP_SECONDS = 2.0
 def _build_config(cfg: dict) -> BacktestConfig:
     return BacktestConfig(
         name=cfg.get("name", "dashboard-run"),
+        custom_name=cfg.get("custom_name"),
         symbols=list(cfg["symbols"]),
         timeframe=cfg["timeframe"],
         horizons=list(cfg["horizons"]),
@@ -49,7 +50,11 @@ async def run_one(
 
     job_id = job["id"]
     try:
-        cfg = _build_config({"name": job["name"], **job["config"]})
+        cfg = _build_config({
+            "name": job["name"],
+            "custom_name": job.get("custom_name"),
+            **job["config"],
+        })
         engine = engine_factory(cfg)
         run_id = await engine.run(cfg)
         await jobs.mark_completed(job_id=job_id, run_id=int(run_id))
