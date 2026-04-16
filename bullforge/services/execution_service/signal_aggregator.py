@@ -4,18 +4,30 @@ from datetime import datetime
 from typing import Optional, Set
 
 from shared.models import TradingSignal
+from shared.runtime_config import RuntimeConfig
 
 
 class SignalAggregator:
-    def __init__(self, min_confidence: float = 0.6, min_agreement: int = 2):
-        self._min_confidence = min_confidence
-        self._min_agreement = min_agreement
+    def __init__(
+        self,
+        *,
+        runtime_config: RuntimeConfig,
+        overrides: Optional[dict] = None,
+    ):
+        self._rc = runtime_config
+        self._overrides = overrides or {}
         self._disabled_model_ids: Set[int] = set()
 
     def update_disabled_models(self, disabled_ids: Set[int]) -> None:
         self._disabled_model_ids = disabled_ids
 
-    def aggregate(
+    async def _param(self, key: str):
+        v = self._overrides.get(key)
+        if v is not None:
+            return v
+        return await self._rc.get(f"execution_{key}")
+
+    async def aggregate(
         self,
         symbol: str,
         timestamp: datetime,
@@ -24,16 +36,17 @@ class SignalAggregator:
         if not predictions:
             return None
 
-        # Filter out predictions from disabled models
         active_preds = [
             p for p in predictions
             if p.get("model_id") not in self._disabled_model_ids
         ]
 
+        min_confidence = await self._param("min_confidence")
         confident = [
-            p for p in active_preds if p["confidence"] >= self._min_confidence
+            p for p in active_preds if p["confidence"] >= min_confidence
         ]
-        if len(confident) < self._min_agreement:
+        min_agreement = await self._param("min_agreement")
+        if len(confident) < min_agreement:
             return None
 
         weighted_sum = sum(
@@ -42,9 +55,10 @@ class SignalAggregator:
         total_weight = sum(p["confidence"] for p in confident)
         avg = weighted_sum / total_weight
 
-        if avg > 0.3:
+        band = await self._param("direction_band")
+        if avg > band:
             direction = 1
-        elif avg < -0.3:
+        elif avg < -band:
             direction = -1
         else:
             direction = 0
