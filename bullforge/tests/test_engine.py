@@ -120,7 +120,7 @@ async def test_compute_all_symbols(mock_settings, mock_db, simple_registry):
         label_horizons={"1m": [5], "1d": [5]},
     )
 
-    await engine.compute_all()
+    await engine.compute_all(["SPY"])
 
     # Should have been called for SPY (only equity, no crypto since empty string)
     assert mock_db.query_bars.call_count >= 1

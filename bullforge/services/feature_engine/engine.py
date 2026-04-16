@@ -160,17 +160,12 @@ class FeatureEngine:
             len(labels), symbol, timeframe,
         )
 
-    async def compute_all(self) -> None:
-        all_symbols = (
-            self._settings.trading_symbols_equity
-            + self._settings.trading_symbols_crypto
-        )
-
+    async def compute_all(self, symbols: List[str]) -> None:
         # Use a large limit for initial bulk computation to process all
         # available historical bars, not just the last 500.
         bulk_limit = 300_000
 
-        for symbol in all_symbols:
+        for symbol in symbols:
             for timeframe in ["1m", "1d"]:
                 await self.compute_features_for_symbol(
                     symbol, timeframe, limit=bulk_limit,

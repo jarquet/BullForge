@@ -153,7 +153,7 @@ async def test_backfill_all_forward_runs_each_symbol_and_timeframe(mock_settings
         fetch_returns=_bars("X", 1, "1m",
                             datetime(2016, 1, 1, tzinfo=timezone.utc)),
     )
-    await backfiller.backfill_all_forward()
+    await backfiller.backfill_all_forward(["SPY", "BTC/USD"])
     # 2 symbols * 2 timeframes = 4 fetches
     assert alpaca.get_historical_bars.call_count == 4
 
@@ -172,7 +172,7 @@ async def test_backfill_all_forward_continues_past_failure(
         mock_settings, fetch_side_effect=_side_effect,
     )
     with caplog.at_level("WARNING"):
-        await backfiller.backfill_all_forward()
+        await backfiller.backfill_all_forward(["SPY", "BTC/USD"])
     # SPY failed twice (1m + 1d); BTC/USD succeeded twice
     assert alpaca.get_historical_bars.call_count == 4
     assert any("SPY" in r.getMessage() for r in caplog.records)
@@ -192,7 +192,7 @@ async def test_backfill_all_reach_back_runs_each_symbol_and_timeframe(mock_setti
         fetch_returns=_bars("X", 1, "1m",
                             datetime(2016, 1, 1, tzinfo=timezone.utc)),
     )
-    await backfiller.backfill_all_reach_back()
+    await backfiller.backfill_all_reach_back(["SPY", "BTC/USD"])
     assert alpaca.get_historical_bars.call_count == 4
 
 
@@ -273,7 +273,7 @@ async def test_backfill_all_forward_publishes_failure_counter(mock_settings):
     backfiller, _, _, redis = _make_backfiller_with_redis(
         mock_settings, fetch_side_effect=_side_effect,
     )
-    await backfiller.backfill_all_forward()
+    await backfiller.backfill_all_forward(["SPY", "BTC/USD"])
     counters = _published_counters(redis)
     failures = [c for c in counters if c["counter"] == "backfill.failures"]
     assert len(failures) == 2
@@ -284,7 +284,7 @@ async def test_backfill_all_forward_publishes_failure_counter(mock_settings):
 @pytest.mark.asyncio
 async def test_backfill_all_reach_back_publishes_complete_event(mock_settings):
     backfiller, _, _, redis = _make_backfiller_with_redis(mock_settings)
-    await backfiller.backfill_all_reach_back()
+    await backfiller.backfill_all_reach_back(["SPY", "BTC/USD"])
     counters = _published_counters(redis)
     assert any(c["counter"] == "backfill.reachback.complete" for c in counters)
 

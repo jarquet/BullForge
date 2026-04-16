@@ -43,9 +43,9 @@ async def main() -> None:
         "1d": await runtime_config.get("label_horizons_1d"),
     }
 
-    all_symbols = (
-        settings.trading_symbols_equity + settings.trading_symbols_crypto
-    )
+    equity_symbols = await runtime_config.get("trading_symbols_equity")
+    crypto_symbols = await runtime_config.get("trading_symbols_crypto")
+    all_symbols = list(equity_symbols or []) + list(crypto_symbols or [])
 
     scheduler = RetrainScheduler(
         db_dsn="",

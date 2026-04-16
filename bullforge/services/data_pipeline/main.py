@@ -78,8 +78,9 @@ async def main() -> None:
         alpaca_client=alpaca_client, redis_client=redis_client,
     )
     background_tasks: set[asyncio.Task] = set()
+    all_symbols = list(equity_symbols or []) + list(crypto_symbols or [])
     logger.info("Running forward gap-fill...")
-    await backfiller.backfill_all_forward()
+    await backfiller.backfill_all_forward(all_symbols)
 
     # Start live tick streaming
     streamer = TickStreamer(
@@ -111,7 +112,7 @@ async def main() -> None:
 
     streamer.attach_streams(stock_stream, crypto_stream)
 
-    reach_back_task = asyncio.create_task(backfiller.backfill_all_reach_back())
+    reach_back_task = asyncio.create_task(backfiller.backfill_all_reach_back(all_symbols))
     background_tasks.add(reach_back_task)
     reach_back_task.add_done_callback(background_tasks.discard)
     logger.info("Scheduled background reach-back to historical floor")

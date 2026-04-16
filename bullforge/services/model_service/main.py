@@ -53,8 +53,12 @@ async def main() -> None:
     logger.info("Using label horizons from runtime config: %s", horizons_by_tf)
 
     # Wait for feature engine to produce enough data before training
-    all_symbols = (
-        settings.trading_symbols_equity + settings.trading_symbols_crypto
+    equity_symbols = await runtime_config.get("trading_symbols_equity")
+    crypto_symbols = await runtime_config.get("trading_symbols_crypto")
+    all_symbols = list(equity_symbols or []) + list(crypto_symbols or [])
+    logger.info(
+        "Runtime symbol config — equity=%s crypto=%s",
+        equity_symbols, crypto_symbols,
     )
     startup_as_of = datetime.now(timezone.utc)
     logger.info(

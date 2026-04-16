@@ -103,11 +103,7 @@ class Backfiller:
             )
         return inserted
 
-    async def backfill_all_forward(self) -> None:
-        symbols = (
-            self._settings.trading_symbols_equity
-            + self._settings.trading_symbols_crypto
-        )
+    async def backfill_all_forward(self, symbols: list[str]) -> None:
         failures: list[tuple[str, str]] = []
         for symbol in symbols:
             for timeframe in ("1m", "1d"):
@@ -130,11 +126,7 @@ class Backfiller:
         else:
             logger.info("Forward backfill complete for all symbols")
 
-    async def backfill_all_reach_back(self) -> None:
-        symbols = (
-            self._settings.trading_symbols_equity
-            + self._settings.trading_symbols_crypto
-        )
+    async def backfill_all_reach_back(self, symbols: list[str]) -> None:
         failures: list[tuple[str, str]] = []
         for symbol in symbols:
             for timeframe in ("1m", "1d"):

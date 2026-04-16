@@ -61,9 +61,18 @@ async def main() -> None:
         redis_client=redis_client,
     )
 
+    async def resolve_symbols() -> list[str]:
+        equity = await runtime_config.get("trading_symbols_equity")
+        crypto = await runtime_config.get("trading_symbols_crypto")
+        return list(equity or []) + list(crypto or [])
+
     # Run initial full computation
-    logger.info("Running initial feature computation for all symbols...")
-    await engine.compute_all()
+    startup_symbols = await resolve_symbols()
+    logger.info(
+        "Running initial feature computation for %d symbols: %s",
+        len(startup_symbols), startup_symbols,
+    )
+    await engine.compute_all(startup_symbols)
 
     # Subscribe to market ticks for reactive computation
     async def on_tick(message: str) -> None:
@@ -76,11 +85,9 @@ async def main() -> None:
     logger.info("Subscribed to market:ticks for reactive feature updates")
 
     async def recompute_daily_features_loop(interval_seconds: int = 3600) -> None:
-        all_symbols = (
-            settings.trading_symbols_equity + settings.trading_symbols_crypto
-        )
         while True:
             await asyncio.sleep(interval_seconds)
+            all_symbols = await resolve_symbols()
             logger.info("Hourly 1d feature recompute starting for %d symbols", len(all_symbols))
             for symbol in all_symbols:
                 try:
