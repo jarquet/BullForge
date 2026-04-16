@@ -79,6 +79,85 @@ CONFIG_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Minutes before NYSE close (16:00 ET) to stop equity trading. 60 = stop at 15:00 ET.",
         "reference": "https://en.wikipedia.org/wiki/Closing_Bell",
     },
+    "execution_min_confidence": {
+        "default": 0.6, "type": "float", "min": 0.0, "max": 1.0,
+        "label": "Min Prediction Confidence",
+        "description": (
+            "Minimum per-prediction confidence (max-class probability from "
+            "the model) required for a model's vote to count. Predictions "
+            "below this are dropped before agreement is tallied. Raising it "
+            "makes each model's vote harder to earn; lowering it lets weaker "
+            "signals through."
+        ),
+        "reference": "https://en.wikipedia.org/wiki/Probabilistic_classification",
+    },
+    "execution_min_agreement": {
+        "default": 2, "type": "int", "min": 1, "max": 10000,
+        "label": "Min Agreeing Models",
+        "description": (
+            "Minimum number of confident predictions — after filtering by "
+            "Min Prediction Confidence and dropping disabled models — "
+            "required to emit a trading signal. With fewer survivors than "
+            "this, no trade is considered. Set close to your active model "
+            "count for near-unanimity, or lower to allow a plurality vote."
+        ),
+        "reference": "https://en.wikipedia.org/wiki/Ensemble_learning",
+    },
+    "execution_direction_band": {
+        "default": 0.3, "type": "float", "min": 0.0, "max": 1.0,
+        "label": "Direction Neutral Band",
+        "description": (
+            "Dead-zone around zero for the confidence-weighted average "
+            "direction. A weighted average between -band and +band produces "
+            "a flat signal (no trade); above +band is buy, below -band is "
+            "sell. Widening the band filters out low-conviction crowd votes."
+        ),
+        "reference": "https://en.wikipedia.org/wiki/Dead_zone_(signal_processing)",
+    },
+    "execution_min_signal_strength": {
+        "default": 0.5, "type": "float", "min": 0.0, "max": 1.0,
+        "label": "Min Signal Strength",
+        "description": (
+            "Minimum |weighted_avg_direction| (0-1) required by the Risk "
+            "Manager to approve an entry after the Direction Neutral Band "
+            "check passes. Example: two models agreeing at confidence 0.6 "
+            "produce strength=0.6 — just clearing the default 0.5."
+        ),
+        "reference": "https://en.wikipedia.org/wiki/Signal-to-noise_ratio",
+    },
+    "execution_max_position_pct": {
+        "default": 0.02, "type": "float", "min": 0.0, "max": 1.0,
+        "label": "Max Position Size (fraction of equity)",
+        "description": (
+            "Fraction of account equity allocated to a single new position. "
+            "0.02 = 2% of equity per entry. Share quantity is "
+            "floor(equity * pct / current_price); entries that would size "
+            "to zero shares are rejected."
+        ),
+        "reference": "https://en.wikipedia.org/wiki/Position_sizing",
+    },
+    "execution_max_positions": {
+        "default": 5, "type": "int", "min": 1, "max": 100,
+        "label": "Max Concurrent Positions",
+        "description": (
+            "Maximum number of simultaneous open positions across all "
+            "symbols. New entries beyond this count are rejected until an "
+            "existing position exits."
+        ),
+        "reference": "https://en.wikipedia.org/wiki/Diversification_(finance)",
+    },
+    "execution_max_exposure": {
+        "default": 0.2, "type": "float", "min": 0.0, "max": 1.0,
+        "label": "Max Portfolio Exposure (fraction of equity)",
+        "description": (
+            "Upper bound on total portfolio exposure as a fraction of "
+            "equity (sum of |market_value| across open positions divided by "
+            "equity). New entries that would push exposure to or past this "
+            "value are rejected. 0.2 = up to 20% of equity deployed at any "
+            "time."
+        ),
+        "reference": "https://en.wikipedia.org/wiki/Market_exposure",
+    },
     "label_horizons_1m": {
         "default": [1, 2, 3, 5, 8, 10, 20, 40, 60, 80, 100, 120],
         "type": "json",

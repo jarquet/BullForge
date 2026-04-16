@@ -109,3 +109,34 @@ def test_schema_has_trading_window_buffers():
     assert "equity_window_close_buffer_minutes" in CONFIG_SCHEMA
     assert CONFIG_SCHEMA["equity_window_open_buffer_minutes"]["default"] == 60
     assert CONFIG_SCHEMA["equity_window_close_buffer_minutes"]["default"] == 60
+
+
+EXECUTION_KEYS = (
+    "execution_min_confidence",
+    "execution_min_agreement",
+    "execution_direction_band",
+    "execution_min_signal_strength",
+    "execution_max_position_pct",
+    "execution_max_positions",
+    "execution_max_exposure",
+)
+
+
+def test_execution_keys_present_in_schema():
+    for key in EXECUTION_KEYS:
+        assert key in CONFIG_SCHEMA, f"{key} missing from CONFIG_SCHEMA"
+        meta = CONFIG_SCHEMA[key]
+        assert "default" in meta and "type" in meta
+        assert meta.get("label"), f"{key} needs a label"
+        assert meta.get("description"), f"{key} needs a description"
+
+
+def test_execution_key_defaults_and_bounds():
+    assert CONFIG_SCHEMA["execution_min_confidence"]["default"] == 0.6
+    assert CONFIG_SCHEMA["execution_min_agreement"]["default"] == 2
+    assert CONFIG_SCHEMA["execution_min_agreement"]["max"] == 10000
+    assert CONFIG_SCHEMA["execution_direction_band"]["default"] == 0.3
+    assert CONFIG_SCHEMA["execution_min_signal_strength"]["default"] == 0.5
+    assert CONFIG_SCHEMA["execution_max_position_pct"]["default"] == 0.02
+    assert CONFIG_SCHEMA["execution_max_positions"]["default"] == 5
+    assert CONFIG_SCHEMA["execution_max_exposure"]["default"] == 0.2
