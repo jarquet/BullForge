@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Tuple
+from typing import Optional, Tuple
 
 from shared.models import TradingSignal
 from shared.runtime_config import RuntimeConfig
@@ -15,21 +15,21 @@ class RiskManager:
         self,
         *,
         runtime_config: RuntimeConfig,
-        max_position_pct: float = 0.10,
-        max_total_positions: int = 5,
-        max_portfolio_exposure: float = 0.5,
-        min_signal_strength: float = 0.5,
+        overrides: Optional[dict] = None,
     ):
         if runtime_config is None:
             raise ValueError(
                 "RiskManager requires a RuntimeConfig; the equity "
                 "trading-window gate depends on it and must not be bypassed.",
             )
-        self._max_position_pct = max_position_pct
-        self._max_total_positions = max_total_positions
-        self._max_portfolio_exposure = max_portfolio_exposure
-        self._min_signal_strength = min_signal_strength
         self._rc = runtime_config
+        self._overrides = overrides or {}
+
+    async def _param(self, key: str):
+        v = self._overrides.get(key)
+        if v is not None:
+            return v
+        return await self._rc.get(f"execution_{key}")
 
     async def check_entry(
         self,
@@ -54,22 +54,26 @@ class RiskManager:
         if signal.direction == 0:
             return False, "Flat signal, no entry", 0
 
-        if signal.strength < self._min_signal_strength:
+        min_strength = await self._param("min_signal_strength")
+        if signal.strength < min_strength:
             return False, f"Signal too weak ({signal.strength:.2f})", 0
 
         for pos in positions:
             if pos["symbol"] == signal.symbol:
                 return False, "Already have position in this symbol", 0
 
-        if len(positions) >= self._max_total_positions:
+        max_positions = await self._param("max_positions")
+        if len(positions) >= max_positions:
             return False, "Max positions reached", 0
 
+        max_exposure = await self._param("max_exposure")
         total_exposure = sum(abs(p["market_value"]) for p in positions)
         equity = account["equity"]
-        if equity > 0 and total_exposure / equity >= self._max_portfolio_exposure:
+        if equity > 0 and total_exposure / equity >= max_exposure:
             return False, "Max portfolio exposure reached", 0
 
-        qty = int((equity * self._max_position_pct) / current_price)
+        max_position_pct = await self._param("max_position_pct")
+        qty = int((equity * max_position_pct) / current_price)
         if qty <= 0:
             return False, "Position value too small for one share", 0
 

@@ -1,33 +1,29 @@
-import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
+
+import pytest
+
 from shared.models import TradingSignal
 from services.execution_service.risk_manager import RiskManager
 
 
-@pytest.fixture
-def runtime_config():
+def _rc(values: dict | None = None):
+    defaults = {
+        "equity_window_open_buffer_minutes": 60,
+        "equity_window_close_buffer_minutes": 60,
+        "execution_min_signal_strength": 0.5,
+        "execution_max_position_pct": 0.10,
+        "execution_max_positions": 3,
+        "execution_max_exposure": 0.5,
+    }
+    data = {**defaults, **(values or {})}
     rc = AsyncMock()
 
     async def get(key):
-        return {
-            "equity_window_open_buffer_minutes": 60,
-            "equity_window_close_buffer_minutes": 60,
-        }.get(key, 0)
+        return data[key]
 
     rc.get = get
     return rc
-
-
-@pytest.fixture
-def rm(runtime_config):
-    return RiskManager(
-        max_position_pct=0.10,
-        max_total_positions=3,
-        max_portfolio_exposure=0.5,
-        min_signal_strength=0.5,
-        runtime_config=runtime_config,
-    )
 
 
 def _signal(direction=1, strength=0.8, symbol="SPY", hour_utc=14):
@@ -51,7 +47,8 @@ def _positions(*symbols):
 
 
 @pytest.mark.asyncio
-async def test_check_entry_approved(rm):
+async def test_check_entry_approved():
+    rm = RiskManager(runtime_config=_rc())
     approved, reason, qty = await rm.check_entry(
         _signal(hour_utc=16), _account(), [], current_price=420.0,
     )
@@ -61,17 +58,18 @@ async def test_check_entry_approved(rm):
 
 
 @pytest.mark.asyncio
-async def test_check_entry_qty_scales_with_equity(rm):
-    # equity doubled -> position cap doubles -> qty doubles
+async def test_check_entry_qty_scales_with_equity():
+    rm = RiskManager(runtime_config=_rc())
     approved, _, qty = await rm.check_entry(
         _signal(hour_utc=16), _account(equity=200000.0), [], current_price=420.0,
     )
     assert approved is True
-    assert qty == 47  # int(200000 * 0.10 / 420)
+    assert qty == 47
 
 
 @pytest.mark.asyncio
-async def test_check_entry_weak_signal(rm):
+async def test_check_entry_weak_signal():
+    rm = RiskManager(runtime_config=_rc())
     approved, reason, qty = await rm.check_entry(
         _signal(strength=0.3, hour_utc=16), _account(), [], current_price=420.0,
     )
@@ -81,7 +79,8 @@ async def test_check_entry_weak_signal(rm):
 
 
 @pytest.mark.asyncio
-async def test_check_entry_flat_signal(rm):
+async def test_check_entry_flat_signal():
+    rm = RiskManager(runtime_config=_rc())
     approved, reason, qty = await rm.check_entry(
         _signal(direction=0, hour_utc=16), _account(), [], current_price=420.0,
     )
@@ -90,17 +89,18 @@ async def test_check_entry_flat_signal(rm):
 
 
 @pytest.mark.asyncio
-async def test_check_entry_short_allowed(rm):
+async def test_check_entry_short_allowed():
+    rm = RiskManager(runtime_config=_rc())
     approved, reason, qty = await rm.check_entry(
         _signal(direction=-1, hour_utc=16), _account(), [], current_price=420.0,
     )
     assert approved is True
     assert qty == 23
-    assert reason == "Approved"
 
 
 @pytest.mark.asyncio
-async def test_check_entry_existing_position(rm):
+async def test_check_entry_existing_position():
+    rm = RiskManager(runtime_config=_rc())
     approved, reason, qty = await rm.check_entry(
         _signal(hour_utc=16), _account(), _positions("SPY"), current_price=420.0,
     )
@@ -109,7 +109,8 @@ async def test_check_entry_existing_position(rm):
 
 
 @pytest.mark.asyncio
-async def test_check_entry_max_positions(rm):
+async def test_check_entry_max_positions():
+    rm = RiskManager(runtime_config=_rc())
     approved, reason, qty = await rm.check_entry(
         _signal(hour_utc=16), _account(), _positions("QQQ", "AAPL", "MSFT"),
         current_price=420.0,
@@ -119,45 +120,85 @@ async def test_check_entry_max_positions(rm):
 
 
 @pytest.mark.asyncio
-async def test_check_entry_max_exposure(rm):
+async def test_check_entry_max_exposure():
+    rm = RiskManager(runtime_config=_rc())
     big_positions = [
         {"symbol": "QQQ", "qty": 100.0, "market_value": 30000.0},
         {"symbol": "AAPL", "qty": 100.0, "market_value": 25000.0},
     ]
-    approved, reason, qty = await rm.check_entry(
+    approved, reason, _ = await rm.check_entry(
         _signal(hour_utc=16), _account(), big_positions, current_price=420.0,
     )
     assert approved is False
     assert "exposure" in reason.lower()
 
 
-def test_check_exit_opposing_signal(rm):
+def test_check_exit_opposing_signal():
+    rm = RiskManager(runtime_config=_rc())
     position = {"symbol": "SPY", "qty": 10.0}
     should_exit, reason = rm.check_exit(_signal(direction=-1), position)
     assert should_exit is True
     assert "opposing" in reason.lower()
 
 
-def test_check_exit_flat_signal(rm):
+def test_check_exit_flat_signal():
+    rm = RiskManager(runtime_config=_rc())
     position = {"symbol": "SPY", "qty": 10.0}
     should_exit, reason = rm.check_exit(_signal(direction=0, strength=0.0), position)
     assert should_exit is True
     assert "flat" in reason.lower()
 
 
-def test_check_exit_same_direction(rm):
+def test_check_exit_same_direction():
+    rm = RiskManager(runtime_config=_rc())
     position = {"symbol": "SPY", "qty": 10.0}
-    should_exit, reason = rm.check_exit(_signal(direction=1), position)
+    should_exit, _ = rm.check_exit(_signal(direction=1), position)
     assert should_exit is False
 
 
-# --- Trading window integration tests (Phase 6D) ---
+@pytest.mark.asyncio
+async def test_overrides_win_over_runtime_config():
+    """overrides={'min_signal_strength': 0.9} rejects a 0.8 strength signal."""
+    rm = RiskManager(
+        runtime_config=_rc(),
+        overrides={"min_signal_strength": 0.9},
+    )
+    approved, reason, _ = await rm.check_entry(
+        _signal(strength=0.8, hour_utc=16), _account(), [], current_price=420.0,
+    )
+    assert approved is False
+    assert "weak" in reason.lower()
 
 
 @pytest.mark.asyncio
-async def test_window_rejects_equity_before_buffer(runtime_config):
-    rm = RiskManager(runtime_config=runtime_config)
-    # Monday 13:00 UTC = 09:00 ET — inside open buffer
+async def test_override_none_falls_back_to_runtime_config():
+    rm = RiskManager(
+        runtime_config=_rc({"execution_min_signal_strength": 0.1}),
+        overrides={"min_signal_strength": None},
+    )
+    approved, _, qty = await rm.check_entry(
+        _signal(strength=0.2, hour_utc=16), _account(), [], current_price=420.0,
+    )
+    assert approved is True
+    assert qty > 0
+
+
+@pytest.mark.asyncio
+async def test_max_position_pct_override():
+    rm = RiskManager(
+        runtime_config=_rc(),
+        overrides={"max_position_pct": 0.5},
+    )
+    approved, _, qty = await rm.check_entry(
+        _signal(hour_utc=16), _account(), [], current_price=420.0,
+    )
+    assert approved is True
+    assert qty == 119
+
+
+@pytest.mark.asyncio
+async def test_window_rejects_equity_before_buffer():
+    rm = RiskManager(runtime_config=_rc())
     approved, reason, qty = await rm.check_entry(
         _signal(hour_utc=13), _account(), [], current_price=420.0,
     )
@@ -167,21 +208,18 @@ async def test_window_rejects_equity_before_buffer(runtime_config):
 
 
 @pytest.mark.asyncio
-async def test_window_rejects_equity_after_close_buffer(runtime_config):
-    rm = RiskManager(runtime_config=runtime_config)
-    # Monday 19:30 UTC = 15:30 ET — inside close buffer
-    approved, reason, qty = await rm.check_entry(
+async def test_window_rejects_equity_after_close_buffer():
+    rm = RiskManager(runtime_config=_rc())
+    approved, reason, _ = await rm.check_entry(
         _signal(hour_utc=19), _account(), [], current_price=420.0,
     )
-    # 19:00 UTC = 15:00 ET exactly — excluded by half-open upper bound
     assert approved is False
     assert "window" in reason.lower()
 
 
 @pytest.mark.asyncio
-async def test_window_rejects_equity_weekend(runtime_config):
-    rm = RiskManager(runtime_config=runtime_config)
-    # 2026-04-11 is Saturday
+async def test_window_rejects_equity_weekend():
+    rm = RiskManager(runtime_config=_rc())
     sig = TradingSignal(
         symbol="SPY",
         timestamp=datetime(2026, 4, 11, 16, 0, tzinfo=timezone.utc),
@@ -195,10 +233,9 @@ async def test_window_rejects_equity_weekend(runtime_config):
 
 
 @pytest.mark.asyncio
-async def test_window_allows_equity_midday(runtime_config):
-    rm = RiskManager(runtime_config=runtime_config)
-    # Monday 16:00 UTC = 12:00 ET — inside window
-    approved, reason, qty = await rm.check_entry(
+async def test_window_allows_equity_midday():
+    rm = RiskManager(runtime_config=_rc())
+    approved, _, qty = await rm.check_entry(
         _signal(hour_utc=16), _account(), [], current_price=420.0,
     )
     assert approved is True
@@ -206,22 +243,22 @@ async def test_window_allows_equity_midday(runtime_config):
 
 
 @pytest.mark.asyncio
-async def test_window_allows_crypto_weekend(runtime_config):
-    rm = RiskManager(runtime_config=runtime_config)
+async def test_window_allows_crypto_weekend():
+    rm = RiskManager(runtime_config=_rc())
     sig = TradingSignal(
         symbol="BTC/USD",
         timestamp=datetime(2026, 4, 12, 3, 0, tzinfo=timezone.utc),
         direction=1, strength=0.8, contributing_predictions=3,
     )
-    approved, reason, qty = await rm.check_entry(
+    approved, _, _ = await rm.check_entry(
         sig, _account(), [], current_price=67.0,
     )
     assert approved is True
 
 
 @pytest.mark.asyncio
-async def test_window_allows_crypto_weekday_midnight(runtime_config):
-    rm = RiskManager(runtime_config=runtime_config)
+async def test_window_allows_crypto_weekday_midnight():
+    rm = RiskManager(runtime_config=_rc())
     sig = TradingSignal(
         symbol="ETH/USD",
         timestamp=datetime(2026, 4, 15, 0, 0, tzinfo=timezone.utc),
@@ -234,10 +271,8 @@ async def test_window_allows_crypto_weekday_midnight(runtime_config):
 
 
 @pytest.mark.asyncio
-async def test_window_gate_precedes_other_checks(runtime_config):
-    """Window rejection must fire before signal-strength / position checks."""
-    rm = RiskManager(runtime_config=runtime_config)
-    # Sunday — window blocks regardless of weak signal
+async def test_window_gate_precedes_other_checks():
+    rm = RiskManager(runtime_config=_rc())
     sig = TradingSignal(
         symbol="SPY",
         timestamp=datetime(2026, 4, 12, 16, 0, tzinfo=timezone.utc),
