@@ -10,8 +10,8 @@ def test_format_model_warned():
     assert "Accuracy degrading" in text
     assert len(buttons) == 1
     assert len(buttons[0]) == 2
-    assert buttons[0][0] == ("Disable Model", "disable:5")
-    assert buttons[0][1] == ("Acknowledge", "ack")
+    assert buttons[0][0] == ("Acknowledge", "ack")
+    assert buttons[0][1] == ("Disable Model", "disable:5")
 
 
 def test_format_model_disabled():
@@ -42,8 +42,8 @@ def test_format_drawdown_halt():
     assert "Tier 4" in text
     assert "Drawdown" in text
     assert len(buttons[0]) == 2
-    assert buttons[0][0] == ("Full Halt", "halt_confirm")
-    assert buttons[0][1] == ("Acknowledge", "ack")
+    assert buttons[0][0] == ("Acknowledge", "ack")
+    assert buttons[0][1] == ("Full Halt", "halt_confirm")
 
 
 def test_format_majority_halt():
