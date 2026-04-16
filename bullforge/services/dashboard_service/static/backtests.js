@@ -146,14 +146,196 @@
 
   async function renderDetail(id) {
     clearInterval(pollTimer);
-    root().innerHTML =
-      `<div class="bt-detail"><a href="#backtests">← Back</a>` +
-      `<p>Detail loading for ${id}…</p></div>`;
-    // Populated in Tasks 10-11.
+    if (id.startsWith('job-')) {
+      return renderJobDetail(id.slice(4));
+    }
+    root().innerHTML = `<div class="bt-detail">
+      <a href="#backtests">← Back</a>
+      <div id="bt-header"></div>
+      <div class="bt-cards" id="bt-cards"></div>
+      <div class="bt-chart"><canvas id="bt-equity"></canvas></div>
+      <div class="bt-chart"><canvas id="bt-drawdown"></canvas></div>
+      <h3>Folds</h3>
+      <table class="bt-table" id="bt-folds"></table>
+      <div class="bt-chart"><canvas id="bt-histogram"></canvas></div>
+      <h3>Trades</h3>
+      <div id="bt-trades"></div>
+      <details><summary>Config</summary><pre id="bt-config"></pre></details>
+    </div>`;
+    try {
+      const [detail, folds, equity] = await Promise.all([
+        fetchJSON(`/api/backtests/${id}`),
+        fetchJSON(`/api/backtests/${id}/folds`),
+        fetchJSON(`/api/backtests/${id}/equity`),
+      ]);
+      renderHeader(detail);
+      renderCards(detail.metrics);
+      renderEquityChart(equity.points, folds.folds, id);
+      renderDrawdown(equity.points);
+      renderFolds(folds.folds);
+      renderConfig(detail);
+      await loadTrades(id, 0);
+      await renderHistogram(id);
+    } catch (e) {
+      root().innerHTML += `<p class="bt-error">${e.message}</p>`;
+    }
   }
 
-  window.BacktestsTab = {
+  async function renderJobDetail(jobId) {
+    root().innerHTML = `<div class="bt-detail">
+      <a href="#backtests">← Back</a>
+      <h3 id="bt-job-title">Job #${jobId}</h3>
+      <p id="bt-job-status">Loading…</p>
+      <details open><summary>Config</summary><pre id="bt-job-config"></pre></details>
+      <p id="bt-job-error" class="bt-error"></p>
+    </div>`;
+    async function tick() {
+      try {
+        const data = await fetchJSON(`/api/backtests?status=all`);
+        const job = data.rows.find(r => r.kind === 'job' && r.id == jobId);
+        if (!job) {
+          document.getElementById('bt-job-status').textContent =
+            'Job completed. Return to overview to find the run.';
+          return;
+        }
+        document.getElementById('bt-job-title').textContent =
+          `${job.name} (${job.status})`;
+        document.getElementById('bt-job-status').textContent = job.status;
+        document.getElementById('bt-job-config').textContent =
+          JSON.stringify(job, null, 2);
+        if (job.status === 'failed') {
+          document.getElementById('bt-job-error').textContent = job.error || '';
+        }
+      } catch (e) { /* ignore transient */ }
+    }
+    tick();
+    pollTimer = setInterval(tick, 5000);
+  }
+
+  function renderHeader(d) {
+    document.getElementById('bt-header').innerHTML =
+      `<h2>${d.name}</h2>
+       <p>${d.symbols.join(', ')} · ${d.timeframe} · ${d.mode} ·
+          ${d.range_start?.slice(0,10)} – ${d.range_end?.slice(0,10)} ·
+          ${d.metrics.n_folds} folds · ${d.status}</p>`;
+  }
+  function renderCards(m) {
+    const cards = [
+      ['P&L', fmtPnL(m.total_pnl)], ['Sharpe', m.sharpe.toFixed(2)],
+      ['Sortino', m.sortino.toFixed(2)], ['Max DD', fmtPct(m.max_dd)],
+      ['Hit Rate', fmtPct(m.hit_rate)], ['Profit Factor', m.profit_factor.toFixed(2)],
+      ['#Trades', m.n_trades], ['#Folds', m.n_folds],
+    ];
+    document.getElementById('bt-cards').innerHTML = cards.map(
+      ([l, v]) => `<div class="bt-card"><div class="label">${l}</div>
+                   <div class="value">${v}</div></div>`
+    ).join('');
+  }
+  function renderEquityChart(points, folds, runId) {
+    const ctx = document.getElementById('bt-equity').getContext('2d');
+    const combined = {
+      label: 'Combined',
+      data: points.map(p => ({ x: p.t, y: p.equity })),
+      borderColor: '#4ade80', pointRadius: 0, borderWidth: 1.5,
+    };
+    const chart = new Chart(ctx, {
+      type: 'line',
+      data: { datasets: [combined] },
+      options: {
+        parsing: false, animation: false,
+        scales: { x: { type: 'time', time: { tooltipFormat: 'PP HH:mm' } } },
+        plugins: { legend: { onClick: async (_, item) => {
+          const fold = folds[item.datasetIndex - 1];
+          if (!fold) return;
+          const key = `fold-${fold.id}`;
+          const existing = chart.data.datasets.find(d => d.key === key);
+          if (existing) {
+            chart.data.datasets = chart.data.datasets.filter(d => d.key !== key);
+          } else {
+            const data = await fetchJSON(
+              `/api/backtests/${runId}/equity?fold_id=${fold.id}`);
+            chart.data.datasets.push({
+              key, label: `Fold ${fold.fold_index}`,
+              data: data.points.map(p => ({ x: p.t, y: p.equity })),
+              pointRadius: 0, borderWidth: 1,
+            });
+          }
+          chart.update();
+        } } },
+      },
+    });
+  }
+  function renderDrawdown(points) {
+    let peak = -Infinity;
+    const dd = points.map(p => {
+      peak = Math.max(peak, p.equity);
+      return { x: p.t, y: p.equity / peak - 1 };
+    });
+    new Chart(document.getElementById('bt-drawdown').getContext('2d'), {
+      type: 'line',
+      data: { datasets: [{ label: 'Drawdown', data: dd,
+                           borderColor: '#f87171', backgroundColor: 'rgba(248,113,113,.25)',
+                           fill: 'origin', pointRadius: 0, borderWidth: 1 }] },
+      options: { parsing: false, animation: false,
+                 scales: { x: { type: 'time' },
+                           y: { ticks: { callback: v => `${(v*100).toFixed(0)}%` }}}},
+    });
+  }
+  function renderFolds(folds) {
+    document.getElementById('bt-folds').innerHTML = `
+      <thead><tr><th>#</th><th>Train</th><th>Test</th>
+        <th>P&amp;L</th><th>Sharpe</th><th>Max DD</th><th>#Trades</th></tr></thead>
+      <tbody>${folds.map(f => `<tr>
+        <td>${f.fold_index}</td>
+        <td>${f.train_start?.slice(0,10)} – ${f.train_end?.slice(0,10)}</td>
+        <td>${f.test_start?.slice(0,10)} – ${f.test_end?.slice(0,10)}</td>
+        <td>${fmtPnL(f.metrics.total_pnl)}</td>
+        <td>${f.metrics.sharpe.toFixed(2)}</td>
+        <td><span class="bt-neg">${fmtPct(f.metrics.max_dd)}</span></td>
+        <td>${f.metrics.n_trades}</td></tr>`).join('')}</tbody>`;
+  }
+  function renderConfig(d) {
+    document.getElementById('bt-config').textContent =
+      JSON.stringify(d.config, null, 2);
+  }
+  async function renderHistogram(runId) {
+    const first = await fetchJSON(`/api/backtests/${runId}/trades?limit=200&offset=0`);
+    const pnls = first.trades.map(t => t.pnl).filter(v => v != null);
+    if (!pnls.length) return;
+    const min = Math.min(...pnls), max = Math.max(...pnls);
+    const bins = 30, width = (max - min) / bins || 1;
+    const counts = Array(bins).fill(0);
+    pnls.forEach(p => counts[Math.min(bins-1, Math.floor((p - min) / width))]++);
+    const labels = counts.map((_, i) => (min + width * i).toFixed(2));
+    new Chart(document.getElementById('bt-histogram').getContext('2d'), {
+      type: 'bar',
+      data: { labels, datasets: [{ label: 'Trade P&L', data: counts,
+                                    backgroundColor: '#60a5fa' }] },
+      options: { animation: false },
+    });
+  }
+  async function loadTrades(runId, offset) {
+    const data = await fetchJSON(`/api/backtests/${runId}/trades?limit=50&offset=${offset}`);
+    const rows = data.trades.map(t => `<tr>
+      <td>${t.entry_time || '—'}</td><td>${t.symbol}</td><td>${t.side}</td>
+      <td>${t.entry_price}</td><td>${t.exit_price ?? '—'}</td>
+      <td>${t.quantity}</td><td>${fmtPnL(t.pnl)}</td>
+      <td>${t.signal_strength?.toFixed(2) ?? '—'}</td>
+      <td>${t.fold_id}</td></tr>`).join('');
+    document.getElementById('bt-trades').innerHTML = `
+      <table class="bt-table"><thead><tr>
+        <th>Entry</th><th>Sym</th><th>Side</th><th>Entry$</th><th>Exit$</th>
+        <th>Qty</th><th>P&amp;L</th><th>Signal</th><th>Fold</th>
+      </tr></thead><tbody>${rows}</tbody></table>
+      <div style="margin-top:6px">
+        ${offset > 0 ? `<button onclick="BacktestsTab._trades(${runId},${offset-50})">Prev</button>` : ''}
+        ${data.trades.length === 50 ? `<button onclick="BacktestsTab._trades(${runId},${offset+50})">Next</button>` : ''}
+      </div>`;
+  }
+
+  window.BacktestsTab = Object.assign(window.BacktestsTab || {}, {
     activate() { route(); },
     onHashChange() { route(); },
-  };
+    _trades: (id, off) => loadTrades(id, off),
+  });
 })();
