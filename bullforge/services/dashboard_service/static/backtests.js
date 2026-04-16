@@ -113,7 +113,8 @@
     }
   }
 
-  const HORIZON_CHOICES_FALLBACK = [5,10,15,30,60,75,90,105,120];
+  const HORIZON_FALLBACK_1M = [1,2,3,5,8,10,20,40,60,80,100,120];
+  const HORIZON_FALLBACK_1D = [1,2,3,5,12,15];
 
   async function openNewModal() {
     let symbolsList = [];
@@ -122,12 +123,15 @@
       symbolsList = [...(sym.equity || []), ...(sym.crypto || [])];
     } catch (_) { symbolsList = []; }
 
-    let horizonChoices = HORIZON_CHOICES_FALLBACK;
+    const horizonsByTf = { '1m': HORIZON_FALLBACK_1M, '1d': HORIZON_FALLBACK_1D };
     try {
       const cfg = await fetchJSON('/api/config');
-      const lh = cfg.values && cfg.values.label_horizons;
-      if (Array.isArray(lh) && lh.length) horizonChoices = lh;
-    } catch (_) { /* keep fallback */ }
+      const v = cfg.values || {};
+      if (Array.isArray(v.label_horizons_1m) && v.label_horizons_1m.length)
+        horizonsByTf['1m'] = v.label_horizons_1m;
+      if (Array.isArray(v.label_horizons_1d) && v.label_horizons_1d.length)
+        horizonsByTf['1d'] = v.label_horizons_1d;
+    } catch (_) { /* keep fallbacks */ }
 
     // Defaults: start = Jan 1 of (current year - 1), end = yesterday 00:00 UTC.
     const now = new Date();
@@ -154,9 +158,9 @@
               ${symbolsList.map(s => `<option value="${s}">${s}</option>`).join('')}
             </select>
           </label>
-          <label>Horizons (min)<br>
+          <label><span id="f-horizons-label">Horizons (bars)</span><br>
             <select id="f-horizons" multiple size="6">
-              ${horizonChoices.map(h => `<option value="${h}">${h}</option>`).join('')}
+              ${horizonsByTf['1m'].map(h => `<option value="${h}">${h}</option>`).join('')}
             </select>
           </label>
         </div>
@@ -201,6 +205,16 @@
       }
     };
     horizonsSel.onchange = updateEmbargoCap;
+
+    const tfSel = backdrop.querySelector('#f-timeframe');
+    const horizonsLabel = backdrop.querySelector('#f-horizons-label');
+    tfSel.onchange = () => {
+      const tf = tfSel.value;
+      const choices = horizonsByTf[tf] || HORIZON_FALLBACK_1M;
+      horizonsLabel.textContent = tf === '1d' ? 'Horizons (days)' : 'Horizons (bars)';
+      horizonsSel.innerHTML = choices.map(h => `<option value="${h}">${h}</option>`).join('');
+      updateEmbargoCap();
+    };
 
     backdrop.querySelector('#f-submit').onclick = async () => {
       const body = {

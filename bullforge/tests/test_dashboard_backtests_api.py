@@ -13,9 +13,10 @@ def app():
     app["results_db"] = AsyncMock()
     app["jobs_db"] = AsyncMock()
     rc = AsyncMock()
-    rc.get = AsyncMock(
-        return_value=[5, 10, 15, 30, 60, 75, 90, 105, 120]
-    )
+    rc.get = AsyncMock(side_effect=lambda key: {
+        "label_horizons_1m": [1, 2, 3, 5, 8, 10, 20, 40, 60, 80, 100, 120],
+        "label_horizons_1d": [1, 2, 3, 5, 12, 15],
+    }[key])
     app["runtime_config"] = rc
     register_backtests_routes(app)
     return app
@@ -124,14 +125,14 @@ async def test_create_composes_full_name_with_custom(aiohttp_client, app):
     client = await aiohttp_client(app)
     resp = await client.post("/api/backtests", json={
         "name": "my-tag", "symbols": ["SPY", "QQQ"], "timeframe": "1m",
-        "horizons": [5, 30], "range_start": "2025-01-02T00:00:00+00:00",
+        "horizons": [5, 40], "range_start": "2025-01-02T00:00:00+00:00",
         "range_end":   "2025-06-30T00:00:00+00:00",
-        "train_days": 60, "test_days": 5, "embargo_min": 30, "mode": "rolling",
+        "train_days": 60, "test_days": 5, "embargo_min": 40, "mode": "rolling",
     })
     assert resp.status == 201
     body = await resp.json()
     assert body["custom_name"] == "my-tag"
-    assert body["name"] == "my-tag__SPY-QQQ_1m_2025-01-02_2025-06-30_h5-30"
+    assert body["name"] == "my-tag__SPY-QQQ_1m_2025-01-02_2025-06-30_h5-40"
     kwargs = app["jobs_db"].insert_job.await_args.kwargs
     assert kwargs["custom_name"] == "my-tag"
     assert kwargs["name"].startswith("my-tag__")
@@ -156,8 +157,11 @@ async def test_create_blank_name_generates_random_tag(aiohttp_client, app):
 
 @pytest.mark.asyncio
 async def test_create_rejects_horizon_not_in_runtime_config(aiohttp_client, app):
-    # Runtime config only has [5, 10] labeled; requesting 30 should 400.
-    app["runtime_config"].get = AsyncMock(return_value=[5, 10])
+    # Runtime config only has [5, 10] for 1m; requesting 30 should 400.
+    app["runtime_config"].get = AsyncMock(side_effect=lambda key: {
+        "label_horizons_1m": [5, 10],
+        "label_horizons_1d": [1, 2, 3, 5, 12, 15],
+    }[key])
     client = await aiohttp_client(app)
     resp = await client.post("/api/backtests", json={
         "name": "tag", "symbols": ["SPY"], "timeframe": "1m",

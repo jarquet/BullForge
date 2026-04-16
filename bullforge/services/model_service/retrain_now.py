@@ -26,8 +26,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("retrain_now")
 
-HORIZONS = [5, 10, 30]
-
 
 async def main() -> None:
     settings = Settings()
@@ -39,6 +37,11 @@ async def main() -> None:
     model_store = ModelStore(settings.model_artifacts_dir)
     inference_engine = InferenceEngine(db=db, model_store=model_store)
     runtime_config = RuntimeConfig(redis_client)
+
+    horizons_by_tf = {
+        "1m": await runtime_config.get("label_horizons_1m"),
+        "1d": await runtime_config.get("label_horizons_1d"),
+    }
 
     all_symbols = (
         settings.trading_symbols_equity + settings.trading_symbols_crypto
@@ -52,7 +55,7 @@ async def main() -> None:
         redis_client=redis_client,
         symbols=all_symbols,
         timeframes=["1m", "1d"],
-        horizons=HORIZONS,
+        horizons_by_tf=horizons_by_tf,
         min_samples=settings.model_min_samples,
         min_samples_1d=settings.model_min_samples_1d,
         db=db,

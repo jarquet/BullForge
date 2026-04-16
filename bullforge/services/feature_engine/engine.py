@@ -24,7 +24,7 @@ class FeatureEngine:
         settings: Settings,
         db: Database,
         registry: FeatureRegistry,
-        label_horizons: List[int],
+        label_horizons: dict[str, List[int]],
         label_threshold: float = 0.0,
         min_bars: int = 50,
         redis_client: Optional[RedisClient] = None,
@@ -129,12 +129,16 @@ class FeatureEngine:
             return
 
         df = self._bars_to_dataframe(bars)
+        horizons = self._label_horizons.get(timeframe, [])
+        if not horizons:
+            logger.warning("No label horizons configured for timeframe %s", timeframe)
+            return
         labels_df = compute_forward_return_labels(
-            df, horizons=self._label_horizons, threshold=self._label_threshold
+            df, horizons=horizons, threshold=self._label_threshold
         )
 
         labels = []
-        for h in self._label_horizons:
+        for h in horizons:
             ret_col = f"fwd_return_{h}"
             dir_col = f"fwd_direction_{h}"
             valid = labels_df.dropna(subset=[ret_col, dir_col])

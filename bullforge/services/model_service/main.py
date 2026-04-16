@@ -25,8 +25,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("model_service")
 
-HORIZONS = [5, 10, 30]
-
 
 async def main() -> None:
     settings = Settings()
@@ -48,6 +46,12 @@ async def main() -> None:
     inference_engine = InferenceEngine(db=db, model_store=model_store)
     runtime_config = RuntimeConfig(redis_client)
 
+    horizons_by_tf = {
+        "1m": await runtime_config.get("label_horizons_1m"),
+        "1d": await runtime_config.get("label_horizons_1d"),
+    }
+    logger.info("Using label horizons from runtime config: %s", horizons_by_tf)
+
     # Wait for feature engine to produce enough data before training
     all_symbols = (
         settings.trading_symbols_equity + settings.trading_symbols_crypto
@@ -62,7 +66,8 @@ async def main() -> None:
     waited = 0
     while waited < max_wait:
         rows = await db.query_training_data(
-            all_symbols[0], "1m", HORIZONS[0], as_of=startup_as_of, limit=settings.model_min_samples,
+            all_symbols[0], "1m", horizons_by_tf["1m"][0],
+            as_of=startup_as_of, limit=settings.model_min_samples,
         )
         if len(rows) >= settings.model_min_samples:
             logger.info("Feature data ready (%d rows), proceeding with training", len(rows))
@@ -82,13 +87,13 @@ async def main() -> None:
     # Train models on startup (skip if active model already exists)
     for symbol in all_symbols:
         for timeframe in ["1m", "1d"]:
-            for horizon in HORIZONS:
+            for horizon in horizons_by_tf[timeframe]:
                 existing = await db.query_active_model(
                     symbol, timeframe, horizon,
                 )
                 if existing:
                     logger.info(
-                        "Active model exists for %s %s %dm (id=%d), skipping training",
+                        "Active model exists for %s %s %d (id=%d), skipping training",
                         symbol, timeframe, horizon, existing.id,
                     )
                     continue
@@ -107,7 +112,7 @@ async def main() -> None:
         redis_client=redis_client,
         symbols=all_symbols,
         timeframes=["1m", "1d"],
-        horizons=HORIZONS,
+        horizons_by_tf=horizons_by_tf,
         min_samples=settings.model_min_samples,
         min_samples_1d=settings.model_min_samples_1d,
         db=db,
