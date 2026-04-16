@@ -76,3 +76,49 @@ async def test_run_one_failure_marks_failed():
     await run_one(jobs, engine_factory=lambda cfg: engine)
     assert jobs.failed is not None
     assert "boom" in jobs.failed[1]
+
+
+from services.backtest_service.worker import _build_config
+
+
+def test_build_config_copies_threshold_overrides():
+    cfg = _build_config({
+        "name": "t",
+        "symbols": ["SPY"], "timeframe": "1m", "horizons": [5],
+        "range_start": "2025-01-01T00:00:00+00:00",
+        "range_end": "2025-01-02T00:00:00+00:00",
+        "train_days": 1, "test_days": 1, "embargo_min": 5,
+        "mode": "rolling",
+        "min_confidence": 0.75,
+        "min_agreement": 3,
+        "direction_band": 0.4,
+        "min_signal_strength": 0.6,
+        "max_position_pct": 0.05,
+        "max_positions": 2,
+        "max_exposure": 0.1,
+    })
+    assert cfg.min_confidence == 0.75
+    assert cfg.min_agreement == 3
+    assert cfg.direction_band == 0.4
+    assert cfg.min_signal_strength == 0.6
+    assert cfg.max_position_pct == 0.05
+    assert cfg.max_positions == 2
+    assert cfg.max_exposure == 0.1
+
+
+def test_build_config_missing_thresholds_stay_none():
+    cfg = _build_config({
+        "name": "t",
+        "symbols": ["SPY"], "timeframe": "1m", "horizons": [5],
+        "range_start": "2025-01-01T00:00:00+00:00",
+        "range_end": "2025-01-02T00:00:00+00:00",
+        "train_days": 1, "test_days": 1, "embargo_min": 5,
+        "mode": "rolling",
+    })
+    assert cfg.min_confidence is None
+    assert cfg.min_agreement is None
+    assert cfg.direction_band is None
+    assert cfg.min_signal_strength is None
+    assert cfg.max_position_pct is None
+    assert cfg.max_positions is None
+    assert cfg.max_exposure is None

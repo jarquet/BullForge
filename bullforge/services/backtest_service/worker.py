@@ -35,6 +35,13 @@ def _build_config(cfg: dict) -> BacktestConfig:
         test_days=int(cfg["test_days"]),
         embargo_minutes=int(cfg["embargo_min"]),
         mode=cfg["mode"],
+        min_confidence=cfg.get("min_confidence"),
+        min_agreement=cfg.get("min_agreement"),
+        direction_band=cfg.get("direction_band"),
+        min_signal_strength=cfg.get("min_signal_strength"),
+        max_position_pct=cfg.get("max_position_pct"),
+        max_positions=cfg.get("max_positions"),
+        max_exposure=cfg.get("max_exposure"),
     )
 
 
