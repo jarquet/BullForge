@@ -298,7 +298,10 @@
         const el = backdrop.querySelector(`#f-${k}`);
         const raw = el && el.value.trim();
         if (raw !== undefined && raw !== '') {
-          body[k] = Number(raw);
+          const n = Number(raw);
+          if (Number.isFinite(n)) {
+            body[k] = n;
+          }
         }
       });
       try {

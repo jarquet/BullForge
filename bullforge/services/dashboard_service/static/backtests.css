@@ -14,3 +14,24 @@
 .bt-modal { background: #151515; padding: 16px; width: 520px; max-width: 95vw; border: 1px solid #333; }
 .bt-form-row { display: flex; gap: 8px; margin-bottom: 8px; }
 .bt-error { color: #f87171; font-size: 11px; }
+.bt-advanced {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  background: #1a1a1a;
+}
+.bt-advanced > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #ccc;
+  user-select: none;
+}
+.bt-advanced[open] > summary {
+  margin-bottom: 8px;
+}
+.bt-advanced-help {
+  margin: 4px 0 10px;
+  color: #888;
+  font-size: 0.9em;
+}
