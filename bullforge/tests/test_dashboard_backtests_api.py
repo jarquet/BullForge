@@ -12,6 +12,11 @@ def app():
     app = web.Application()
     app["results_db"] = AsyncMock()
     app["jobs_db"] = AsyncMock()
+    rc = AsyncMock()
+    rc.get = AsyncMock(
+        return_value=[5, 10, 15, 30, 60, 75, 90, 105, 120]
+    )
+    app["runtime_config"] = rc
     register_backtests_routes(app)
     return app
 
@@ -147,6 +152,23 @@ async def test_create_blank_name_generates_random_tag(aiohttp_client, app):
     assert len(body["custom_name"]) == 8
     assert body["custom_name"].isalnum()
     assert body["name"].startswith(body["custom_name"] + "__")
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_horizon_not_in_runtime_config(aiohttp_client, app):
+    # Runtime config only has [5, 10] labeled; requesting 30 should 400.
+    app["runtime_config"].get = AsyncMock(return_value=[5, 10])
+    client = await aiohttp_client(app)
+    resp = await client.post("/api/backtests", json={
+        "name": "tag", "symbols": ["SPY"], "timeframe": "1m",
+        "horizons": [30], "range_start": "2025-01-02T00:00:00+00:00",
+        "range_end":   "2025-01-10T00:00:00+00:00",
+        "train_days": 1, "test_days": 1, "embargo_min": 5, "mode": "rolling",
+    })
+    assert resp.status == 400
+    body = await resp.json()
+    assert "horizons" in body["errors"]
+    assert "[5, 10]" in body["errors"]["horizons"]
 
 
 @pytest.mark.asyncio
