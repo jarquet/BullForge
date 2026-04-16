@@ -218,7 +218,8 @@ services:
       context: .
       dockerfile: services/backtest_service/Dockerfile
     image: bullforge-backtest
-    command: ["python", "-m", "services.backtest_service.worker"]
+    entrypoint: ["python", "-m", "services.backtest_service.worker"]
+    command: []
     env_file:
       - .env
     environment:
