@@ -89,6 +89,10 @@ async def monitoring_loop(
             # 3. Evaluate model fidelity
             fidelity_results = await fidelity_tracker.evaluate_all_models()
             now = datetime.now(timezone.utc)
+            # Snapshot previous statuses before upsert so halt_manager can
+            # edge-trigger alerts on status transitions only.
+            prev_statuses = await db.get_all_model_statuses()
+            prev_status_map = {s.model_id: s.status for s in prev_statuses}
             statuses = []
             for model_id, status, live_accuracy in fidelity_results:
                 reason = f"Live accuracy: {live_accuracy:.2%}"
@@ -108,7 +112,9 @@ async def monitoring_loop(
                 )
                 current_drawdown = acct_metrics.get("current_drawdown", 0.0)
 
-            alerts = await halt_manager.evaluate(statuses, current_drawdown)
+            alerts = await halt_manager.evaluate(
+                statuses, current_drawdown, prev_status_map,
+            )
 
             # 5. Publish status to Redis
             await halt_manager.publish_status(statuses)

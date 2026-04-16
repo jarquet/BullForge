@@ -17,7 +17,7 @@ def format_alert(alert: dict) -> Tuple[str, ButtonLayout]:
             f"{reason}"
         )
         buttons = [
-            [("Disable Model", f"disable:{model_id}"), ("Acknowledge", "ack")],
+            [("Acknowledge", "ack"), ("Disable Model", f"disable:{model_id}")],
         ]
 
     elif alert_type == "model_disabled":
@@ -44,7 +44,7 @@ def format_alert(alert: dict) -> Tuple[str, ButtonLayout]:
             f"{reason}"
         )
         buttons = [
-            [("Full Halt", "halt_confirm"), ("Acknowledge", "ack")],
+            [("Acknowledge", "ack"), ("Full Halt", "halt_confirm")],
         ]
 
     elif alert_type == "majority_halt":

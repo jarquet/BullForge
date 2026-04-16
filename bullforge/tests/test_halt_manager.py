@@ -168,3 +168,74 @@ async def test_resolve_halt_multiple_events(manager, mock_db):
 
     assert manager.is_halted is False
     assert mock_db.resolve_halt_event.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_tier1_no_realert_when_status_unchanged(manager):
+    # Already-warned models must not re-fire on the next monitoring tick.
+    statuses = [_status(1, "warned", "Degrading"), _status(2)]
+    prev = {1: "warned", 2: "active"}
+
+    alerts = await manager.evaluate(
+        statuses, current_drawdown=0.02, prev_status_map=prev,
+    )
+
+    assert [a for a in alerts if a["tier"] == 1] == []
+
+
+@pytest.mark.asyncio
+async def test_tier2_no_realert_when_status_unchanged(manager, mock_db):
+    # Already-disabled models must not re-fire every tick.
+    statuses = [_status(1, "disabled", "Critical"), _status(2), _status(3)]
+    prev = {1: "disabled", 2: "active", 3: "active"}
+
+    alerts = await manager.evaluate(
+        statuses, current_drawdown=0.02, prev_status_map=prev,
+    )
+
+    assert [a for a in alerts if a["tier"] == 2] == []
+
+
+@pytest.mark.asyncio
+async def test_tier1_refires_on_active_to_warned_transition(manager):
+    statuses = [_status(1, "warned", "Degrading")]
+    prev = {1: "active"}
+
+    alerts = await manager.evaluate(
+        statuses, current_drawdown=0.02, prev_status_map=prev,
+    )
+
+    tier1 = [a for a in alerts if a["tier"] == 1]
+    assert len(tier1) == 1
+    assert tier1[0]["model_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_tier3_no_realert_when_already_over_threshold(manager, mock_db):
+    # Both disabled models were already disabled last tick; no new alert.
+    statuses = [
+        _status(1, "disabled", "Critical"),
+        _status(2, "disabled", "Critical"),
+        _status(3),
+        _status(4),
+    ]
+    prev = {1: "disabled", 2: "disabled", 3: "active", 4: "active"}
+
+    alerts = await manager.evaluate(
+        statuses, current_drawdown=0.02, prev_status_map=prev,
+    )
+
+    assert [a for a in alerts if a["tier"] == 3] == []
+    mock_db.insert_halt_event.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_tier4_drawdown_no_realert_when_already_halted(manager, mock_db):
+    # Set the halted flag to simulate the state persisting from a prior tick.
+    manager._full_halt = True
+    statuses = [_status(1), _status(2), _status(3)]
+
+    alerts = await manager.evaluate(statuses, current_drawdown=0.15)
+
+    assert [a for a in alerts if a["tier"] == 4] == []
+    mock_db.insert_halt_event.assert_not_called()
