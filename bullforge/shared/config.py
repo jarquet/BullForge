@@ -116,24 +116,6 @@ class Settings:
     )
 
     # Execution service
-    execution_max_position_pct: float = field(
-        default_factory=lambda: float(os.getenv("EXECUTION_MAX_POSITION_PCT", "0.10"))
-    )
-    execution_max_positions: int = field(
-        default_factory=lambda: int(os.getenv("EXECUTION_MAX_POSITIONS", "5"))
-    )
-    execution_max_exposure: float = field(
-        default_factory=lambda: float(os.getenv("EXECUTION_MAX_EXPOSURE", "0.5"))
-    )
-    execution_min_signal_strength: float = field(
-        default_factory=lambda: float(os.getenv("EXECUTION_MIN_SIGNAL_STRENGTH", "0.5"))
-    )
-    execution_min_confidence: float = field(
-        default_factory=lambda: float(os.getenv("EXECUTION_MIN_CONFIDENCE", "0.6"))
-    )
-    execution_min_agreement: int = field(
-        default_factory=lambda: int(os.getenv("EXECUTION_MIN_AGREEMENT", "2"))
-    )
     execution_reconciler_poll_interval_s: int = field(
         default_factory=lambda: int(
             os.getenv("EXECUTION_RECONCILER_POLL_INTERVAL_S", "60")

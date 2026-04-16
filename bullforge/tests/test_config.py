@@ -54,32 +54,6 @@ def test_model_service_env_override(monkeypatch):
     assert s.model_min_samples == 1000
 
 
-def test_execution_defaults(settings):
-    assert settings.execution_max_position_pct == 0.10
-    assert settings.execution_max_positions == 5
-    assert settings.execution_max_exposure == 0.5
-    assert settings.execution_min_signal_strength == 0.5
-    assert settings.execution_min_confidence == 0.6
-    assert settings.execution_min_agreement == 2
-
-
-def test_execution_env_override(monkeypatch):
-    monkeypatch.setenv("EXECUTION_MAX_POSITION_PCT", "0.20")
-    monkeypatch.setenv("EXECUTION_MAX_POSITIONS", "10")
-    monkeypatch.setenv("EXECUTION_MAX_EXPOSURE", "0.8")
-    monkeypatch.setenv("EXECUTION_MIN_SIGNAL_STRENGTH", "0.7")
-    monkeypatch.setenv("EXECUTION_MIN_CONFIDENCE", "0.75")
-    monkeypatch.setenv("EXECUTION_MIN_AGREEMENT", "3")
-    from shared.config import Settings
-    s = Settings()
-    assert s.execution_max_position_pct == 0.20
-    assert s.execution_max_positions == 10
-    assert s.execution_max_exposure == 0.8
-    assert s.execution_min_signal_strength == 0.7
-    assert s.execution_min_confidence == 0.75
-    assert s.execution_min_agreement == 3
-
-
 def test_monitoring_settings_defaults(settings):
     assert settings.monitoring_port == 8083
     assert settings.monitoring_interval == 60
