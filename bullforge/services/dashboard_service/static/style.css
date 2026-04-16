@@ -204,3 +204,99 @@ h2 {
     margin-bottom: 1rem;
     color: var(--text);
 }
+
+/* ---------- Config tab ---------- */
+.config-intro {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    margin-bottom: 1.25rem;
+}
+.cfg-section { margin-bottom: 1.75rem; }
+.cfg-section-title {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.4rem;
+    margin-bottom: 0.85rem;
+}
+.cfg-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 0.85rem;
+}
+.cfg-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.85rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.cfg-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.5rem;
+}
+.cfg-label {
+    font-weight: 600;
+    color: var(--text);
+    font-size: 0.95rem;
+}
+.cfg-range {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+}
+.cfg-card-body {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.cfg-card-body input {
+    flex: 1;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.4rem 0.55rem;
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    font-size: 0.9rem;
+    min-width: 0;
+}
+.cfg-card-body input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+.cfg-save {
+    background: var(--accent);
+    color: #001;
+    border: none;
+    padding: 0.4rem 0.85rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.85rem;
+}
+.cfg-save:hover { filter: brightness(1.1); }
+.cfg-status {
+    font-size: 0.8rem;
+    min-width: 4.5rem;
+}
+.cfg-status-ok { color: var(--green); }
+.cfg-status-err { color: var(--red); }
+.cfg-desc {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    line-height: 1.45;
+}
+.cfg-desc a {
+    color: var(--accent);
+    text-decoration: none;
+    margin-left: 0.25rem;
+    white-space: nowrap;
+}
+.cfg-desc a:hover { text-decoration: underline; }

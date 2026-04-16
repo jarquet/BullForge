@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 VALID_MODES = {"rolling", "anchored"}
 VALID_TIMEFRAMES = {"1m", "1d"}
+TIMEFRAME_MINUTES = {"1m": 1, "1d": 1440}
 JOB_STATUS_FILTERS = {"all", "queued", "running", "completed", "failed"}
 
 
@@ -148,9 +149,13 @@ def _validate_new_job(body: dict, valid_horizons: set[int]) -> dict:
         v = body.get(key)
         if not isinstance(v, int) or v <= 0:
             errors[key] = "positive integer required"
-    if "horizons" not in errors and "embargo_min" not in errors:
-        if body["embargo_min"] > max(horizons):
-            errors["embargo_min"] = "must be <= max(horizons)"
+    if "horizons" not in errors and "embargo_min" not in errors and "timeframe" not in errors:
+        tf_min = TIMEFRAME_MINUTES[timeframe]
+        max_horizon_minutes = max(horizons) * tf_min
+        if body["embargo_min"] > max_horizon_minutes:
+            errors["embargo_min"] = (
+                f"must be <= max(horizons) in minutes ({max_horizon_minutes})"
+            )
     mode = body.get("mode")
     if mode not in VALID_MODES:
         errors["mode"] = f"must be one of {sorted(VALID_MODES)}"
