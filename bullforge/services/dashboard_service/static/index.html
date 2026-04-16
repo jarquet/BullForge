@@ -23,6 +23,7 @@
         <button class="tab" data-tab="symbols">Symbols</button>
         <button class="tab" data-tab="freshness">Freshness</button>
         <button class="tab" data-tab="config">Config</button>
+        <button class="tab" data-tab="backtests">Backtests</button>
     </nav>
 
     <!-- Overview Tab -->
@@ -217,6 +218,15 @@
     <!-- Config Tab (content loaded from /static/config.html) -->
     <section id="tab-config" class="tab-content" data-fragment="/static/config.html"></section>
 
+    <!-- Backtests Tab -->
+    <section id="tab-backtests" class="tab-content">
+        <div id="backtests-root"></div>
+    </section>
+
     <script src="/static/dashboard.js"></script>
+    <link rel="stylesheet" href="/static/backtests.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script src="/static/backtests.js"></script>
 </body>
 </html>

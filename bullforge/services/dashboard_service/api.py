@@ -7,6 +7,8 @@ from aiohttp import web
 
 from shared.db import Database
 
+from services.dashboard_service.backtests_api import register_backtests_routes
+
 logger = logging.getLogger(__name__)
 
 
@@ -37,6 +39,8 @@ def create_api_app(db: Database) -> web.Application:
     app.router.add_get("/api/trades", _handle_trades)
     app.router.add_get("/api/orders", _handle_orders)
     app.router.add_get("/api/halts", _handle_halts)
+
+    register_backtests_routes(app)
 
     return app
 

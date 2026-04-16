@@ -11,6 +11,8 @@ from shared.config import Settings
 from shared.db import Database
 from shared.redis import RedisClient
 from shared.runtime_config import RuntimeConfig
+from services.backtest_service.jobs_db import BacktestJobsDB
+from services.backtest_service.results_db import BacktestResultsDB
 from services.dashboard_service.api import create_api_app
 from services.dashboard_service.config_api import register_config_routes
 from services.dashboard_service.freshness_api import register_freshness_routes
@@ -42,6 +44,8 @@ async def main() -> None:
     app = create_api_app(db)
     app["redis_client"] = redis_client
     app["runtime_config"] = runtime_config
+    app["results_db"] = BacktestResultsDB(db)
+    app["jobs_db"] = BacktestJobsDB(db)
     register_config_routes(app)
     register_freshness_routes(app)
     register_symbol_routes(app)

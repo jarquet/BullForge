@@ -1,0 +1,16 @@
+.bt-overview, .bt-detail { padding: 12px; }
+.bt-toolbar { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
+.bt-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.bt-table th, .bt-table td { padding: 6px 8px; border-bottom: 1px solid #2a2a2a; text-align: left; }
+.bt-table th { cursor: pointer; background: #1f1f1f; }
+.bt-table tr.clickable { cursor: pointer; }
+.bt-pos { color: #4ade80; } .bt-neg { color: #f87171; }
+.bt-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 10px 0; }
+.bt-card { background: #1a1a1a; padding: 10px; border: 1px solid #2a2a2a; }
+.bt-card .label { font-size: 10px; color: #888; text-transform: uppercase; }
+.bt-card .value { font-size: 16px; margin-top: 4px; }
+.bt-chart { background: #0f0f0f; border: 1px solid #2a2a2a; padding: 8px; margin: 8px 0; height: 260px; }
+.bt-modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.bt-modal { background: #151515; padding: 16px; width: 520px; max-width: 95vw; border: 1px solid #333; }
+.bt-form-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.bt-error { color: #f87171; font-size: 11px; }

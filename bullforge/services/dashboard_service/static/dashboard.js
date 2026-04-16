@@ -28,7 +28,26 @@ document.querySelectorAll('.tab').forEach(btn => {
         const section = document.getElementById('tab-' + btn.dataset.tab);
         section.classList.add('active');
         await _loadFragment(section);
+        if (btn.dataset.tab === 'backtests' && window.BacktestsTab) {
+            window.BacktestsTab.activate();
+        }
     });
+});
+
+window.addEventListener('DOMContentLoaded', () => {
+    const hash = window.location.hash || '';
+    if (hash.startsWith('#backtests')) {
+        const btn = document.querySelector('[data-tab="backtests"]');
+        if (btn) btn.click();
+    }
+});
+window.addEventListener('hashchange', () => {
+    const hash = window.location.hash || '';
+    if (hash.startsWith('#backtests')) {
+        const btn = document.querySelector('[data-tab="backtests"]');
+        if (btn) btn.click();
+        window.BacktestsTab && window.BacktestsTab.onHashChange(hash);
+    }
 });
 
 // -- Helpers --------------------------------------------------------------
