@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -89,10 +90,6 @@ class OrderExecutor:
         if order_id is None:
             # Stream already inserted this row; fetch it as the authoritative record.
             return await self._db.get_order_by_alpaca_id(alpaca_id)
-        existing = await self._db.get_order_by_alpaca_id(alpaca_id)
-        if existing is not None:
-            return existing
-        from dataclasses import replace
         return replace(order, id=order_id)
 
     async def _execute_close(self, signal: TradingSignal, position: dict) -> Optional[Order]:
@@ -130,8 +127,4 @@ class OrderExecutor:
         if order_id is None:
             # Stream already inserted this row; fetch it as the authoritative record.
             return await self._db.get_order_by_alpaca_id(alpaca_id)
-        existing = await self._db.get_order_by_alpaca_id(alpaca_id)
-        if existing is not None:
-            return existing
-        from dataclasses import replace
         return replace(order, id=order_id)

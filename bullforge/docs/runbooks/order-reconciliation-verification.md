@@ -15,8 +15,8 @@ ORDER BY submitted_at DESC;
 ```
 
 Expected: the previously-stuck rows now show `status='cancelled'`,
-`reconcile_source='startup'` or `'poll'`, and a recent
-`last_reconciled_at`.
+`reconcile_source='poll'` (the first sweeper cycle after startup), and
+a recent `last_reconciled_at`.
 
 ## Watch counters
 `redis-cli SUBSCRIBE monitoring:reconciler` — expect

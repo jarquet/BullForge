@@ -27,15 +27,16 @@ async def handle_symbol_change_event(
 ) -> None:
     """Handle a config:symbols_changed event.
 
-    On add: forward-fill (blocking), subscribe, then schedule reach_back
-    for both timeframes as background tasks.
+    On add: subscribe first so any bars produced during forward-fill are
+    captured live (insert_bar upserts on conflict so overlap is safe), then
+    forward-fill, then schedule reach_back for both timeframes.
     On remove: unsubscribe only (historical data is retained).
     """
     data = json.loads(message)
     action, kind, symbol = data["action"], data["kind"], data["symbol"]
     if action == "add":
-        await backfill.backfill_symbol(symbol, kind=kind)
         await stream.subscribe_symbol(symbol, kind=kind)
+        await backfill.backfill_symbol(symbol, kind=kind)
         for timeframe in ("1m", "1d"):
             task = asyncio.create_task(backfill.reach_back(symbol, timeframe))
             background_tasks.add(task)
@@ -70,19 +71,13 @@ async def main() -> None:
         equity_symbols, crypto_symbols,
     )
 
-    # Forward gap-fill blocks startup so live ticks have no gap; the long
-    # reach-back to the configured floor runs in the background once
-    # streams are up.
     backfiller = Backfiller(
         settings=settings, db=db,
         alpaca_client=alpaca_client, redis_client=redis_client,
     )
     background_tasks: set[asyncio.Task] = set()
     all_symbols = list(equity_symbols or []) + list(crypto_symbols or [])
-    logger.info("Running forward gap-fill...")
-    await backfiller.backfill_all_forward(all_symbols)
 
-    # Start live tick streaming
     streamer = TickStreamer(
         settings=settings, db=db,
         redis_client=redis_client, alpaca_client=alpaca_client,
@@ -96,7 +91,9 @@ async def main() -> None:
     await site.start()
     logger.info("Health check endpoint running on :8080/health")
 
-    # Start Alpaca streams
+    # Start Alpaca streams BEFORE forward-fill so live bars produced while
+    # forward-fill runs are captured. insert_bar upserts on conflict, so
+    # any overlap between streamed bars and forward-fill is harmless.
     stock_stream = None
     crypto_stream = None
 
@@ -111,6 +108,25 @@ async def main() -> None:
         logger.info("Starting crypto stream for: %s", crypto_symbols)
 
     streamer.attach_streams(stock_stream, crypto_stream)
+
+    # Run streams in background threads (alpaca-py uses threading internally)
+    stream_tasks = []
+    if stock_stream:
+        stream_tasks.append(
+            asyncio.get_event_loop().run_in_executor(None, stock_stream.run)
+        )
+    if crypto_stream:
+        stream_tasks.append(
+            asyncio.get_event_loop().run_in_executor(None, crypto_stream.run)
+        )
+
+    # Start consumer task on main loop to process bars from stream threads
+    consumer_task = asyncio.create_task(streamer.consume())
+
+    # Forward gap-fill runs after streams are live so there is no window
+    # where produced bars are missed.
+    logger.info("Running forward gap-fill...")
+    await backfiller.backfill_all_forward(all_symbols)
 
     reach_back_task = asyncio.create_task(backfiller.backfill_all_reach_back(all_symbols))
     background_tasks.add(reach_back_task)
@@ -142,20 +158,6 @@ async def main() -> None:
         except NotImplementedError:
             # Windows doesn't support add_signal_handler
             pass
-
-    # Run streams in background threads (alpaca-py uses threading internally)
-    stream_tasks = []
-    if stock_stream:
-        stream_tasks.append(
-            asyncio.get_event_loop().run_in_executor(None, stock_stream.run)
-        )
-    if crypto_stream:
-        stream_tasks.append(
-            asyncio.get_event_loop().run_in_executor(None, crypto_stream.run)
-        )
-
-    # Start consumer task on main loop to process bars from stream threads
-    consumer_task = asyncio.create_task(streamer.consume())
 
     logger.info("Data pipeline running. Press Ctrl+C to stop.")
 

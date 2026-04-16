@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import asyncpg
 import pytest
 
 from shared.models import Order
@@ -67,7 +68,7 @@ async def test_orphan_order_ingested_as_external(real_db):
 
 async def test_unique_partial_index_rejects_duplicate_alpaca_id(real_db):
     await _insert_submitted(real_db, alpaca_id="alp-unique")
-    with pytest.raises(Exception):
+    with pytest.raises(asyncpg.UniqueViolationError):
         await _insert_submitted(real_db, alpaca_id="alp-unique")
 
 
@@ -101,7 +102,7 @@ async def test_submit_path_is_idempotent_with_stream_winner(real_db):
 async def test_status_check_rejects_garbage(real_db):
     await _insert_submitted(real_db, alpaca_id="alp-check")
     async with real_db.pool.acquire() as conn:
-        with pytest.raises(Exception):
+        with pytest.raises(asyncpg.CheckViolationError):
             await conn.execute(
                 "UPDATE orders SET status='not_a_status' "
                 "WHERE alpaca_order_id=$1",
