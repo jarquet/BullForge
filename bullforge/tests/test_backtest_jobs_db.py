@@ -85,3 +85,22 @@ async def test_list_pending_jobs(db):
     ids = {r["id"] for r in pending}
     assert {j1, j2}.issubset(ids)
     assert all(r["status"] in ("queued", "running") for r in pending)
+
+
+async def test_link_run_excludes_from_pending(db):
+    jobs = BacktestJobsDB(db)
+    run_id = await _seed_run(db)
+    job_id = await jobs.insert_job(name="mid-flight", config={})
+    await jobs.claim_next()  # status -> running, run_id still NULL
+
+    # Before link: appears in pending.
+    assert any(r["id"] == job_id for r in await jobs.list_pending())
+
+    await jobs.link_run(job_id=job_id, run_id=run_id)
+
+    # After link: excluded, even though status is still 'running'.
+    pending = await jobs.list_pending()
+    assert all(r["id"] != job_id for r in pending)
+    row = await jobs.get(job_id)
+    assert row["status"] == "running"
+    assert row["run_id"] == run_id

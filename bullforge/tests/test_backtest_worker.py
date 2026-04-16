@@ -12,9 +12,12 @@ class FakeJobs:
         self._job = job
         self.completed = None
         self.failed = None
+        self.linked = None
     async def claim_next(self):
         j, self._job = self._job, None
         return j
+    async def link_run(self, *, job_id, run_id):
+        self.linked = (job_id, run_id)
     async def mark_completed(self, *, job_id, run_id):
         self.completed = (job_id, run_id)
     async def mark_failed(self, *, job_id, error):
@@ -34,10 +37,17 @@ async def test_run_one_success():
         },
     })
     engine = AsyncMock()
-    engine.run = AsyncMock(return_value=42)
+
+    async def fake_run(cfg, *, on_run_created=None):
+        if on_run_created is not None:
+            await on_run_created(42)
+        return 42
+
+    engine.run = AsyncMock(side_effect=fake_run)
 
     got = await run_one(jobs, engine_factory=lambda cfg: engine)
     assert got is True
+    assert jobs.linked == (7, 42)
     assert jobs.completed == (7, 42)
 
 
