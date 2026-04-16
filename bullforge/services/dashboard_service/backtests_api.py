@@ -9,12 +9,47 @@ from datetime import datetime
 
 from aiohttp import web
 
+from shared.runtime_config import CONFIG_SCHEMA
+
 logger = logging.getLogger(__name__)
 
 VALID_MODES = {"rolling", "anchored"}
 VALID_TIMEFRAMES = {"1m", "1d"}
 TIMEFRAME_MINUTES = {"1m": 1, "1d": 1440}
 JOB_STATUS_FILTERS = {"all", "queued", "running", "completed", "failed"}
+
+THRESHOLD_KEYS = (
+    "min_confidence",
+    "min_agreement",
+    "direction_band",
+    "min_signal_strength",
+    "max_position_pct",
+    "max_positions",
+    "max_exposure",
+)
+
+
+def _validate_threshold_overrides(body: dict) -> dict:
+    errors: dict[str, str] = {}
+    for key in THRESHOLD_KEYS:
+        v = body.get(key)
+        if v is None:
+            continue
+        meta = CONFIG_SCHEMA[f"execution_{key}"]
+        t = meta["type"]
+        if t == "int":
+            if not isinstance(v, int) or isinstance(v, bool):
+                errors[key] = "must be integer"
+                continue
+        elif t == "float":
+            if not isinstance(v, (int, float)) or isinstance(v, bool):
+                errors[key] = "must be number"
+                continue
+        if "min" in meta and v < meta["min"]:
+            errors[key] = f"must be >= {meta['min']}"
+        elif "max" in meta and v > meta["max"]:
+            errors[key] = f"must be <= {meta['max']}"
+    return errors
 
 
 def _iso(v):
@@ -170,17 +205,31 @@ async def _create(request: web.Request) -> web.Response:
 
     rc = request.app["runtime_config"]
     timeframe = body.get("timeframe", "1m")
-    horizons_key = f"label_horizons_{timeframe}" if timeframe in VALID_TIMEFRAMES else "label_horizons_1m"
+    horizons_key = (
+        f"label_horizons_{timeframe}"
+        if timeframe in VALID_TIMEFRAMES
+        else "label_horizons_1m"
+    )
     valid_horizons = set(await rc.get(horizons_key))
     errors = _validate_new_job(body, valid_horizons)
     if errors:
         return web.json_response({"errors": errors}, status=400)
+
+    threshold_errors = _validate_threshold_overrides(body)
+    if threshold_errors:
+        return web.json_response({"errors": threshold_errors}, status=400)
+
+    # Snapshot blanks from runtime_config at creation time — reproducibility.
+    for key in THRESHOLD_KEYS:
+        if body.get(key) is None:
+            body[key] = await rc.get(f"execution_{key}")
 
     jobs = request.app["jobs_db"]
     config = {k: body[k] for k in (
         "symbols", "timeframe", "horizons",
         "range_start", "range_end",
         "train_days", "test_days", "embargo_min", "mode",
+        *THRESHOLD_KEYS,
     )}
     custom_name = (body.get("name") or "").strip() or _random_custom_name()
     full_name = _compose_full_name(

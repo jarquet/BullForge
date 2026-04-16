@@ -137,6 +137,7 @@ async def test_equity_route(aiohttp_client, app):
 
 @pytest.mark.asyncio
 async def test_create_composes_full_name_with_custom(aiohttp_client, app):
+    _use_exec_rc(app)
     app["jobs_db"].insert_job = AsyncMock(return_value=42)
     client = await aiohttp_client(app)
     resp = await client.post("/api/backtests", json={
@@ -156,6 +157,7 @@ async def test_create_composes_full_name_with_custom(aiohttp_client, app):
 
 @pytest.mark.asyncio
 async def test_create_blank_name_generates_random_tag(aiohttp_client, app):
+    _use_exec_rc(app)
     app["jobs_db"].insert_job = AsyncMock(return_value=43)
     client = await aiohttp_client(app)
     resp = await client.post("/api/backtests", json={
@@ -213,3 +215,127 @@ async def test_trades_route(aiohttp_client, app):
     assert resp.status == 200
     data = await resp.json()
     assert data["trades"] == []
+
+
+_DEFAULT_EXEC_RC = {
+    "label_horizons_1m": [1, 2, 3, 5, 8, 10, 20, 40, 60, 80, 100, 120],
+    "label_horizons_1d": [1, 2, 3, 5, 12, 15],
+    "execution_min_confidence": 0.6,
+    "execution_min_agreement": 2,
+    "execution_direction_band": 0.3,
+    "execution_min_signal_strength": 0.5,
+    "execution_max_position_pct": 0.02,
+    "execution_max_positions": 5,
+    "execution_max_exposure": 0.2,
+}
+
+
+def _use_exec_rc(app, overrides=None):
+    """Replace the app's runtime_config mock to return execution_* keys too."""
+    data = {**_DEFAULT_EXEC_RC, **(overrides or {})}
+    app["runtime_config"].get = AsyncMock(side_effect=lambda key: data[key])
+
+
+def _base_new_job_body(**extra):
+    body = {
+        "name": "",
+        "symbols": ["SPY"],
+        "timeframe": "1m",
+        "horizons": [5],
+        "range_start": "2025-01-01T00:00:00+00:00",
+        "range_end":   "2025-01-02T00:00:00+00:00",
+        "train_days": 1,
+        "test_days": 1,
+        "embargo_min": 5,
+        "mode": "rolling",
+    }
+    body.update(extra)
+    return body
+
+
+@pytest.mark.asyncio
+async def test_create_without_overrides_snapshots_runtime_config(
+    aiohttp_client, app,
+):
+    _use_exec_rc(app)
+    app["jobs_db"].insert_job = AsyncMock(return_value=1)
+    client = await aiohttp_client(app)
+    resp = await client.post("/api/backtests", json=_base_new_job_body())
+    assert resp.status == 201
+    call_kwargs = app["jobs_db"].insert_job.call_args.kwargs
+    config = call_kwargs["config"]
+    assert config["min_confidence"] == 0.6
+    assert config["min_agreement"] == 2
+    assert config["direction_band"] == 0.3
+    assert config["min_signal_strength"] == 0.5
+    assert config["max_position_pct"] == 0.02
+    assert config["max_positions"] == 5
+    assert config["max_exposure"] == 0.2
+
+
+@pytest.mark.asyncio
+async def test_create_with_valid_overrides_persists_them(aiohttp_client, app):
+    _use_exec_rc(app)
+    app["jobs_db"].insert_job = AsyncMock(return_value=2)
+    client = await aiohttp_client(app)
+    body = _base_new_job_body(
+        min_confidence=0.8,
+        min_agreement=4,
+        direction_band=0.25,
+        min_signal_strength=0.7,
+        max_position_pct=0.05,
+        max_positions=3,
+        max_exposure=0.1,
+    )
+    resp = await client.post("/api/backtests", json=body)
+    assert resp.status == 201
+    config = app["jobs_db"].insert_job.call_args.kwargs["config"]
+    assert config["min_confidence"] == 0.8
+    assert config["min_agreement"] == 4
+    assert config["direction_band"] == 0.25
+    assert config["min_signal_strength"] == 0.7
+    assert config["max_position_pct"] == 0.05
+    assert config["max_positions"] == 3
+    assert config["max_exposure"] == 0.1
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_out_of_range_override(aiohttp_client, app):
+    _use_exec_rc(app)
+    client = await aiohttp_client(app)
+    resp = await client.post(
+        "/api/backtests", json=_base_new_job_body(min_confidence=1.5),
+    )
+    assert resp.status == 400
+    payload = await resp.json()
+    assert "min_confidence" in payload["errors"]
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_wrong_type_override(aiohttp_client, app):
+    _use_exec_rc(app)
+    client = await aiohttp_client(app)
+    resp = await client.post(
+        "/api/backtests", json=_base_new_job_body(min_agreement=3.5),
+    )
+    assert resp.status == 400
+    payload = await resp.json()
+    assert "min_agreement" in payload["errors"]
+
+
+@pytest.mark.asyncio
+async def test_create_partial_overrides_fill_rest_from_runtime_config(
+    aiohttp_client, app,
+):
+    _use_exec_rc(app)
+    app["jobs_db"].insert_job = AsyncMock(return_value=3)
+    client = await aiohttp_client(app)
+    resp = await client.post(
+        "/api/backtests", json=_base_new_job_body(min_confidence=0.9),
+    )
+    assert resp.status == 201
+    config = app["jobs_db"].insert_job.call_args.kwargs["config"]
+    assert config["min_confidence"] == 0.9         # user-supplied
+    assert config["min_agreement"] == 2            # snapshot
+    assert config["direction_band"] == 0.3         # snapshot
+    assert config["max_position_pct"] == 0.02      # snapshot
