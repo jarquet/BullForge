@@ -89,3 +89,22 @@ To clear backtest results:
 - The simulated broker only models flat ↔ full-position trades; partial fills
   and scale-out / scale-in are not supported. Strategies that depend on
   position sizing changes mid-trade will not backtest accurately.
+
+## Dashboard UI
+
+Open the dashboard and click the **Backtests** tab to see all runs/jobs with
+P&L and other summary metrics. Click a row to drill into equity curve,
+drawdown, per-fold metrics, trade P&L histogram, and the trade list.
+
+### Queue a run from the UI
+
+Click **New Backtest**, fill the form (symbols, horizons, date range, mode),
+and submit. The row appears as `queued` and transitions to `running` →
+`completed`/`failed` as the `backtest-worker` service processes it.
+
+### Worker service
+
+`docker compose up -d backtest-worker` runs the queue consumer. One job at a
+time; restart via `docker compose restart backtest-worker`. The legacy CLI
+invocation (`docker compose run --rm backtest …`) still works for one-off or
+scripted runs and bypasses the queue.
