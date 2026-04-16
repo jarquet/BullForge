@@ -115,6 +115,7 @@
 
   const HORIZON_FALLBACK_1M = [1,2,3,5,8,10,20,40,60,80,100,120];
   const HORIZON_FALLBACK_1D = [1,2,3,5,12,15];
+  const TIMEFRAME_MINUTES = { '1m': 1, '1d': 1440 };
 
   async function openNewModal() {
     let symbolsList = [];
@@ -159,14 +160,15 @@
             </select>
           </label>
           <label><span id="f-horizons-label">Horizons (bars)</span><br>
-            <select id="f-horizons" multiple size="6">
-              ${horizonsByTf['1m'].map(h => `<option value="${h}">${h}</option>`).join('')}
-            </select>
+            <select id="f-horizons" multiple size="6"></select>
           </label>
         </div>
         <div class="bt-form-row">
           <label>Timeframe
-            <select id="f-timeframe"><option>1m</option><option>1d</option></select>
+            <select id="f-timeframe">
+              <option value="1m">1m</option>
+              <option value="1d">1d</option>
+            </select>
           </label>
           <label>Mode
             <select id="f-mode"><option>rolling</option><option>anchored</option></select>
@@ -195,26 +197,32 @@
 
     const horizonsSel = backdrop.querySelector('#f-horizons');
     const embargoIn = backdrop.querySelector('#f-embargo');
+    const tfSel = backdrop.querySelector('#f-timeframe');
+    const horizonsLabel = backdrop.querySelector('#f-horizons-label');
+
     const updateEmbargoCap = () => {
       const chosen = [...horizonsSel.selectedOptions].map(o => Number(o.value));
+      const tfMin = TIMEFRAME_MINUTES[tfSel.value] || 1;
       if (chosen.length) {
-        embargoIn.max = Math.max(...chosen);
+        embargoIn.max = Math.max(...chosen) * tfMin;
         if (Number(embargoIn.value) > embargoIn.max) embargoIn.value = embargoIn.max;
       } else {
         embargoIn.removeAttribute('max');
       }
     };
-    horizonsSel.onchange = updateEmbargoCap;
 
-    const tfSel = backdrop.querySelector('#f-timeframe');
-    const horizonsLabel = backdrop.querySelector('#f-horizons-label');
-    tfSel.onchange = () => {
+    const populateHorizons = () => {
       const tf = tfSel.value;
       const choices = horizonsByTf[tf] || HORIZON_FALLBACK_1M;
       horizonsLabel.textContent = tf === '1d' ? 'Horizons (days)' : 'Horizons (bars)';
-      horizonsSel.innerHTML = choices.map(h => `<option value="${h}">${h}</option>`).join('');
+      horizonsSel.innerHTML = choices
+        .map(h => `<option value="${h}" selected>${h}</option>`).join('');
       updateEmbargoCap();
     };
+
+    horizonsSel.addEventListener('change', updateEmbargoCap);
+    tfSel.addEventListener('change', populateHorizons);
+    populateHorizons();
 
     backdrop.querySelector('#f-submit').onclick = async () => {
       const body = {

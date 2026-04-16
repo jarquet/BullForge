@@ -1,55 +1,125 @@
 <div id="config-editor">
   <h2>Runtime Configuration</h2>
+  <p class="config-intro">Changes apply immediately and persist across restarts.</p>
   <div id="config-list">Loading&hellip;</div>
 </div>
 <script>
 (async function () {
+  const GROUPS = [
+    { title: "Forecast Horizons", keys: [
+      "label_horizons_1m", "label_horizons_1d",
+    ]},
+    { title: "Training Schedule", keys: [
+      "retrain_schedule_hour", "retrain_cpu_workers",
+    ]},
+    { title: "LSTM Hyperparameters", keys: [
+      "lstm_epochs", "lstm_hidden_size", "lstm_sequence_length",
+      "lstm_learning_rate", "lstm_batch_size",
+    ]},
+    { title: "Trading Symbols", keys: [
+      "trading_symbols_equity", "trading_symbols_crypto",
+    ]},
+    { title: "Trading Window", keys: [
+      "equity_window_open_buffer_minutes",
+      "equity_window_close_buffer_minutes",
+    ]},
+  ];
+  const HIDDEN = new Set(["last_retrain_time"]);
+
   const resp = await fetch("/api/config");
   const { values, schema } = await resp.json();
   const container = document.getElementById("config-list");
   container.innerHTML = "";
-  for (const [key, meta] of Object.entries(schema)) {
-    if (key === "last_retrain_time") continue;
-    const row = document.createElement("div");
-    row.className = "config-row";
+
+  const renderField = (key) => {
+    const meta = schema[key];
+    if (!meta) return "";
     const inputType =
       meta.type === "float" || meta.type === "int" ? "number" : "text";
     let displayValue = values[key];
-    if (meta.type === "json") {
-      displayValue = JSON.stringify(displayValue);
-    }
-    row.innerHTML = `
-      <label>${meta.label}</label>
-      <input type="${inputType}"
-             step="${meta.type === 'float' ? 'any' : '1'}"
-             min="${meta.min ?? ''}" max="${meta.max ?? ''}"
-             id="cfg-${key}" value="${displayValue}" />
-      <button data-key="${key}">Save</button>
-      <p class="description">${meta.description}
-        ${meta.reference ? `<a href="${meta.reference}" target="_blank">Learn more &rarr;</a>` : ""}
-      </p>
-      <div class="save-status" id="status-${key}"></div>
-    `;
-    container.appendChild(row);
+    if (meta.type === "json") displayValue = JSON.stringify(displayValue);
+    const escaped = String(displayValue ?? "")
+      .replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+    const constraints = (meta.min ?? meta.max ?? "") !== ""
+      ? `<span class="cfg-range">range: ${meta.min ?? "−∞"} – ${meta.max ?? "∞"}</span>`
+      : `<span class="cfg-range">type: ${meta.type}</span>`;
+    return `
+      <div class="cfg-card" id="card-${key}">
+        <div class="cfg-card-head">
+          <label class="cfg-label" for="cfg-${key}">${meta.label}</label>
+          ${constraints}
+        </div>
+        <div class="cfg-card-body">
+          <input type="${inputType}"
+                 step="${meta.type === 'float' ? 'any' : '1'}"
+                 ${meta.min != null ? `min="${meta.min}"` : ""}
+                 ${meta.max != null ? `max="${meta.max}"` : ""}
+                 id="cfg-${key}" value="${escaped}" />
+          <button class="cfg-save" data-key="${key}">Save</button>
+          <span class="cfg-status" id="status-${key}"></span>
+        </div>
+        <p class="cfg-desc">${meta.description}
+          ${meta.reference ? `<a href="${meta.reference}" target="_blank" rel="noopener">Learn more →</a>` : ""}
+        </p>
+      </div>`;
+  };
+
+  const seen = new Set();
+  for (const group of GROUPS) {
+    const cards = group.keys
+      .filter(k => schema[k] && !HIDDEN.has(k))
+      .map(k => { seen.add(k); return renderField(k); })
+      .join("");
+    if (!cards) continue;
+    const section = document.createElement("section");
+    section.className = "cfg-section";
+    section.innerHTML = `<h3 class="cfg-section-title">${group.title}</h3>
+      <div class="cfg-grid">${cards}</div>`;
+    container.appendChild(section);
   }
+
+  const remaining = Object.keys(schema).filter(
+    k => !seen.has(k) && !HIDDEN.has(k));
+  if (remaining.length) {
+    const section = document.createElement("section");
+    section.className = "cfg-section";
+    section.innerHTML = `<h3 class="cfg-section-title">Other</h3>
+      <div class="cfg-grid">${remaining.map(renderField).join("")}</div>`;
+    container.appendChild(section);
+  }
+
   container.addEventListener("click", async (e) => {
-    if (e.target.tagName !== "BUTTON") return;
+    if (!e.target.classList.contains("cfg-save")) return;
     const key = e.target.dataset.key;
     const input = document.getElementById(`cfg-${key}`);
     const status = document.getElementById(`status-${key}`);
     let value = input.value;
-    if (schema[key].type === "int") value = parseInt(value, 10);
-    else if (schema[key].type === "float") value = parseFloat(value);
-    else if (schema[key].type === "json") value = JSON.parse(value);
+    try {
+      if (schema[key].type === "int") value = parseInt(value, 10);
+      else if (schema[key].type === "float") value = parseFloat(value);
+      else if (schema[key].type === "json") value = JSON.parse(value);
+    } catch (err) {
+      status.textContent = `Parse error: ${err.message}`;
+      status.className = "cfg-status cfg-status-err";
+      return;
+    }
     const r = await fetch(`/api/config/${key}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ value }),
     });
     const body = await r.json();
-    status.textContent = r.ok ? "Saved \u2713" : `Error: ${body.error}`;
-    status.style.color = r.ok ? "green" : "red";
-    setTimeout(() => { status.textContent = ""; }, 3000);
+    if (r.ok) {
+      status.textContent = "Saved ✓";
+      status.className = "cfg-status cfg-status-ok";
+    } else {
+      status.textContent = `Error: ${body.error}`;
+      status.className = "cfg-status cfg-status-err";
+    }
+    setTimeout(() => {
+      status.textContent = "";
+      status.className = "cfg-status";
+    }, 3000);
   });
 })();
 </script>

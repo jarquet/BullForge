@@ -61,6 +61,22 @@ async def test_validate_new_job_rejects_embargo_gt_horizon(aiohttp_client, app):
 
 
 @pytest.mark.asyncio
+async def test_validate_new_job_accepts_1d_embargo_in_minutes(aiohttp_client, app):
+    # For 1d timeframe, horizons are in days; embargo_min=30 should be valid
+    # because 30 minutes < max(horizons)*1440 minutes per day.
+    app["runtime_config"].get = AsyncMock(return_value=[1, 2, 5, 15])
+    app["jobs_db"].insert_job = AsyncMock(return_value=99)
+    client = await aiohttp_client(app)
+    resp = await client.post("/api/backtests", json={
+        "name": "d", "symbols": ["SPY"], "timeframe": "1d",
+        "horizons": [1, 5], "range_start": "2025-01-01T00:00:00+00:00",
+        "range_end":   "2025-06-30T00:00:00+00:00",
+        "train_days": 60, "test_days": 5, "embargo_min": 30, "mode": "rolling",
+    })
+    assert resp.status == 201
+
+
+@pytest.mark.asyncio
 async def test_detail_happy_path(aiohttp_client, app):
     app["results_db"].get_run = AsyncMock(return_value={
         "id": 1, "name": "r", "symbols": ["SPY"], "timeframe": "1m",
