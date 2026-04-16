@@ -49,18 +49,8 @@ async def main() -> None:
     logger.info("Active trading symbols from RuntimeConfig: %s", active_symbols)
 
     broker = AlpacaBroker(settings)
-    aggregator = SignalAggregator(
-        min_confidence=settings.execution_min_confidence,
-        min_agreement=settings.execution_min_agreement,
-    )
-    runtime_config = RuntimeConfig(redis_client)
-    risk_manager = RiskManager(
-        max_position_pct=settings.execution_max_position_pct,
-        max_total_positions=settings.execution_max_positions,
-        max_portfolio_exposure=settings.execution_max_exposure,
-        min_signal_strength=settings.execution_min_signal_strength,
-        runtime_config=runtime_config,
-    )
+    aggregator = SignalAggregator(runtime_config=runtime_config)
+    risk_manager = RiskManager(runtime_config=runtime_config)
     position_tracker = PositionTracker(broker)
     core = ReconcilerCore(db=db, redis_client=redis_client)
     executor = OrderExecutor(
@@ -109,7 +99,7 @@ async def main() -> None:
             timeframe = data["timeframe"]
             predictions = data["predictions"]
 
-            signal_obj = aggregator.aggregate(
+            signal_obj = await aggregator.aggregate(
                 symbol=symbol,
                 timestamp=datetime.now(timezone.utc),
                 predictions=predictions,
