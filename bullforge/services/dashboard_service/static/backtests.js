@@ -85,10 +85,7 @@
       t = setTimeout(() => { state.q = e.target.value; reload(); }, 300);
     };
     document.getElementById('bt-refresh').onclick = () => reload();
-    document.getElementById('bt-new').onclick = () => {
-      // openNewModal is defined in Task 11.
-      if (typeof openNewModal === 'function') openNewModal();
-    };
+    document.getElementById('bt-new').onclick = () => openNewModal();
     document.querySelectorAll('.bt-table th[data-sort]').forEach(th => {
       th.onclick = () => {
         const key = th.getAttribute('data-sort');
@@ -114,6 +111,108 @@
       document.getElementById('bt-rows').innerHTML =
         `<tr><td colspan="10" class="bt-error">Failed to load: ${e.message}</td></tr>`;
     }
+  }
+
+  const HORIZON_CHOICES = [5,10,15,30,60,75,90,105,120];
+
+  async function openNewModal() {
+    let symbolsList = [];
+    try {
+      const sym = await fetchJSON('/api/symbols');
+      symbolsList = [...(sym.trading_symbols_equity || []),
+                     ...(sym.trading_symbols_crypto || [])];
+    } catch (_) { symbolsList = []; }
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'bt-modal-backdrop';
+    backdrop.innerHTML = `
+      <div class="bt-modal">
+        <h3>New Backtest</h3>
+        <div class="bt-form-row">
+          <label>Name<input id="f-name"></label>
+        </div>
+        <div class="bt-form-row">
+          <label>Symbols<br>
+            <select id="f-symbols" multiple size="6">
+              ${symbolsList.map(s => `<option value="${s}">${s}</option>`).join('')}
+            </select>
+          </label>
+          <label>Horizons (min)<br>
+            <select id="f-horizons" multiple size="6">
+              ${HORIZON_CHOICES.map(h => `<option value="${h}">${h}</option>`).join('')}
+            </select>
+          </label>
+        </div>
+        <div class="bt-form-row">
+          <label>Timeframe
+            <select id="f-timeframe"><option>1m</option><option>1d</option></select>
+          </label>
+          <label>Mode
+            <select id="f-mode"><option>rolling</option><option>anchored</option></select>
+          </label>
+        </div>
+        <div class="bt-form-row">
+          <label>Start (UTC)<input id="f-start" type="datetime-local"></label>
+          <label>End (UTC)<input id="f-end" type="datetime-local"></label>
+        </div>
+        <div class="bt-form-row">
+          <label>Train days<input id="f-train" type="number" value="60" min="1"></label>
+          <label>Test days<input id="f-test" type="number" value="5" min="1"></label>
+          <label>Embargo (min)<input id="f-embargo" type="number" value="30" min="1"></label>
+        </div>
+        <div id="f-errors" class="bt-error"></div>
+        <div style="display:flex;justify-content:flex-end;gap:8px">
+          <button id="f-cancel">Cancel</button>
+          <button id="f-submit">Queue Run</button>
+        </div>
+      </div>`;
+    document.body.appendChild(backdrop);
+
+    const close = () => backdrop.remove();
+    backdrop.querySelector('#f-cancel').onclick = close;
+    backdrop.onclick = (e) => { if (e.target === backdrop) close(); };
+
+    const horizonsSel = backdrop.querySelector('#f-horizons');
+    const embargoIn = backdrop.querySelector('#f-embargo');
+    const updateEmbargoCap = () => {
+      const chosen = [...horizonsSel.selectedOptions].map(o => Number(o.value));
+      if (chosen.length) {
+        embargoIn.max = Math.max(...chosen);
+        if (Number(embargoIn.value) > embargoIn.max) embargoIn.value = embargoIn.max;
+      } else {
+        embargoIn.removeAttribute('max');
+      }
+    };
+    horizonsSel.onchange = updateEmbargoCap;
+
+    backdrop.querySelector('#f-submit').onclick = async () => {
+      const body = {
+        name: backdrop.querySelector('#f-name').value.trim(),
+        symbols: [...backdrop.querySelector('#f-symbols').selectedOptions].map(o => o.value),
+        timeframe: backdrop.querySelector('#f-timeframe').value,
+        horizons: [...horizonsSel.selectedOptions].map(o => Number(o.value)),
+        range_start: new Date(backdrop.querySelector('#f-start').value + 'Z').toISOString(),
+        range_end:   new Date(backdrop.querySelector('#f-end').value + 'Z').toISOString(),
+        train_days: Number(backdrop.querySelector('#f-train').value),
+        test_days:  Number(backdrop.querySelector('#f-test').value),
+        embargo_min: Number(embargoIn.value),
+        mode: backdrop.querySelector('#f-mode').value,
+      };
+      try {
+        await fetchJSON('/api/backtests', {
+          method: 'POST',
+          headers: {'content-type': 'application/json'},
+          body: JSON.stringify(body),
+        });
+        close();
+        reload();
+      } catch (e) {
+        const errs = e.body && e.body.errors;
+        backdrop.querySelector('#f-errors').textContent = errs
+          ? Object.entries(errs).map(([k,v]) => `${k}: ${v}`).join(' · ')
+          : (e.message || 'Failed');
+      }
+    };
   }
 
   function renderRows(rows) {
