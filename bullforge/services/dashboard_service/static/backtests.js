@@ -125,6 +125,7 @@
     } catch (_) { symbolsList = []; }
 
     const horizonsByTf = { '1m': HORIZON_FALLBACK_1M, '1d': HORIZON_FALLBACK_1D };
+    let liveThresholds = {};
     try {
       const cfg = await fetchJSON('/api/config');
       const v = cfg.values || {};
@@ -132,6 +133,15 @@
         horizonsByTf['1m'] = v.label_horizons_1m;
       if (Array.isArray(v.label_horizons_1d) && v.label_horizons_1d.length)
         horizonsByTf['1d'] = v.label_horizons_1d;
+      liveThresholds = {
+        min_confidence: v.execution_min_confidence,
+        min_agreement: v.execution_min_agreement,
+        direction_band: v.execution_direction_band,
+        min_signal_strength: v.execution_min_signal_strength,
+        max_position_pct: v.execution_max_position_pct,
+        max_positions: v.execution_max_positions,
+        max_exposure: v.execution_max_exposure,
+      };
     } catch (_) { /* keep fallbacks */ }
 
     // Defaults: start = Jan 1 of (current year - 1), end = yesterday 00:00 UTC.
@@ -183,6 +193,41 @@
           <label>Test days<input id="f-test" type="number" value="5" min="1"></label>
           <label>Embargo (min)<input id="f-embargo" type="number" value="30" min="1"></label>
         </div>
+        <details class="bt-advanced">
+          <summary>Advanced — Entry thresholds (optional overrides)</summary>
+          <p class="bt-advanced-help">
+            Blank fields snapshot the current live values at submit time, so
+            the backtest reproduces those exact thresholds even if live config
+            changes later.
+          </p>
+          <div class="bt-form-row">
+            <label>Min Prediction Confidence (0-1)
+              <input id="f-min_confidence" type="number" step="0.01" min="0" max="1">
+            </label>
+            <label>Min Agreeing Models
+              <input id="f-min_agreement" type="number" step="1" min="1" max="10000">
+            </label>
+          </div>
+          <div class="bt-form-row">
+            <label>Direction Neutral Band (0-1)
+              <input id="f-direction_band" type="number" step="0.01" min="0" max="1">
+            </label>
+            <label>Min Signal Strength (0-1)
+              <input id="f-min_signal_strength" type="number" step="0.01" min="0" max="1">
+            </label>
+          </div>
+          <div class="bt-form-row">
+            <label>Max Position Size (fraction of equity)
+              <input id="f-max_position_pct" type="number" step="0.01" min="0" max="1">
+            </label>
+            <label>Max Concurrent Positions
+              <input id="f-max_positions" type="number" step="1" min="1" max="100">
+            </label>
+            <label>Max Portfolio Exposure (fraction of equity)
+              <input id="f-max_exposure" type="number" step="0.01" min="0" max="1">
+            </label>
+          </div>
+        </details>
         <div id="f-errors" class="bt-error"></div>
         <div style="display:flex;justify-content:flex-end;gap:8px">
           <button id="f-cancel">Cancel</button>
@@ -190,6 +235,18 @@
         </div>
       </div>`;
     document.body.appendChild(backdrop);
+
+    const THRESHOLD_KEYS = [
+      'min_confidence', 'min_agreement', 'direction_band',
+      'min_signal_strength', 'max_position_pct', 'max_positions',
+      'max_exposure',
+    ];
+    THRESHOLD_KEYS.forEach(k => {
+      const el = backdrop.querySelector(`#f-${k}`);
+      if (el && liveThresholds[k] !== undefined && liveThresholds[k] !== null) {
+        el.placeholder = `live: ${liveThresholds[k]}`;
+      }
+    });
 
     const close = () => backdrop.remove();
     backdrop.querySelector('#f-cancel').onclick = close;
@@ -237,6 +294,13 @@
         embargo_min: Number(embargoIn.value),
         mode: backdrop.querySelector('#f-mode').value,
       };
+      THRESHOLD_KEYS.forEach(k => {
+        const el = backdrop.querySelector(`#f-${k}`);
+        const raw = el && el.value.trim();
+        if (raw !== undefined && raw !== '') {
+          body[k] = Number(raw);
+        }
+      });
       try {
         await fetchJSON('/api/backtests', {
           method: 'POST',
