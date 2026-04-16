@@ -59,6 +59,18 @@ class BacktestJobsDB:
                     "started_at": "set",
                 }
 
+    async def link_run(self, *, job_id: int, run_id: int) -> None:
+        """Attach a run_id to a job as soon as the run row exists.
+
+        Called mid-flight so the dashboard list can de-duplicate: once a job
+        has a run_id, the run row is the authoritative UI surface.
+        """
+        async with self._db.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE backtest_jobs SET run_id = $2 WHERE id = $1",
+                job_id, run_id,
+            )
+
     async def mark_completed(self, *, job_id: int, run_id: int) -> None:
         async with self._db.pool.acquire() as conn:
             await conn.execute(
@@ -96,6 +108,7 @@ class BacktestJobsDB:
                        started_at, finished_at, run_id, error
                 FROM backtest_jobs
                 WHERE status IN ('queued','running')
+                  AND run_id IS NULL
                 ORDER BY created_at DESC
                 """
             )

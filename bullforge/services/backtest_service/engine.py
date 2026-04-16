@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from shared.db import Database
 from shared.runtime_config import RuntimeConfig
@@ -64,7 +64,12 @@ class BacktestEngine:
         self._model_store = model_store
         self._results = results_db
 
-    async def run(self, cfg: BacktestConfig) -> int:
+    async def run(
+        self,
+        cfg: BacktestConfig,
+        *,
+        on_run_created: Optional[Callable[[int], Awaitable[None]]] = None,
+    ) -> int:
         run_id = await self._results.insert_run(
             name=cfg.name,
             custom_name=cfg.custom_name,
@@ -78,6 +83,8 @@ class BacktestEngine:
                 "max_volume_pct": cfg.max_volume_pct,
             },
         )
+        if on_run_created is not None:
+            await on_run_created(run_id)
         try:
             splitter = WalkForwardSplitter(
                 train_days=cfg.train_days,

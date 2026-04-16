@@ -56,7 +56,11 @@ async def run_one(
             **job["config"],
         })
         engine = engine_factory(cfg)
-        run_id = await engine.run(cfg)
+
+        async def _link(run_id: int) -> None:
+            await jobs.link_run(job_id=job_id, run_id=run_id)
+
+        run_id = await engine.run(cfg, on_run_created=_link)
         await jobs.mark_completed(job_id=job_id, run_id=int(run_id))
         logger.info("backtest job %s -> run %s completed", job_id, run_id)
     except Exception as exc:
