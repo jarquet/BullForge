@@ -1,10 +1,7 @@
 from unittest.mock import AsyncMock
 import pytest
 
-from services.backtest_service.worker import run_one
-
-
-pytestmark = pytest.mark.asyncio
+from services.backtest_service.worker import _build_config, run_one
 
 
 class FakeJobs:
@@ -24,6 +21,7 @@ class FakeJobs:
         self.failed = (job_id, error)
 
 
+@pytest.mark.asyncio
 async def test_run_one_success():
     jobs = FakeJobs({
         "id": 7,
@@ -51,6 +49,7 @@ async def test_run_one_success():
     assert jobs.completed == (7, 42)
 
 
+@pytest.mark.asyncio
 async def test_run_one_idle_when_no_job():
     jobs = FakeJobs(None)
     engine = AsyncMock()
@@ -60,6 +59,7 @@ async def test_run_one_idle_when_no_job():
     engine.run.assert_not_called()
 
 
+@pytest.mark.asyncio
 async def test_run_one_failure_marks_failed():
     jobs = FakeJobs({
         "id": 9, "name": "t",
@@ -76,9 +76,6 @@ async def test_run_one_failure_marks_failed():
     await run_one(jobs, engine_factory=lambda cfg: engine)
     assert jobs.failed is not None
     assert "boom" in jobs.failed[1]
-
-
-from services.backtest_service.worker import _build_config
 
 
 def test_build_config_copies_threshold_overrides():
