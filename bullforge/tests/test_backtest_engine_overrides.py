@@ -1,0 +1,142 @@
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock
+
+import pytest
+
+from services.backtest_service.engine import BacktestConfig
+from services.execution_service.signal_aggregator import SignalAggregator
+from services.execution_service.risk_manager import RiskManager
+
+
+def _rc():
+    defaults = {
+        "execution_min_confidence": 0.6,
+        "execution_min_agreement": 2,
+        "execution_direction_band": 0.3,
+        "execution_min_signal_strength": 0.5,
+        "execution_max_position_pct": 0.10,
+        "execution_max_positions": 5,
+        "execution_max_exposure": 0.5,
+        "equity_window_open_buffer_minutes": 60,
+        "equity_window_close_buffer_minutes": 60,
+    }
+    rc = AsyncMock()
+
+    async def get(key):
+        return defaults[key]
+
+    rc.get = get
+    return rc
+
+
+def test_backtest_config_has_all_seven_override_fields():
+    cfg = BacktestConfig(
+        name="t",
+        symbols=["SPY"],
+        timeframe="1m",
+        horizons=[5],
+        range_start=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        range_end=datetime(2025, 1, 2, tzinfo=timezone.utc),
+        train_days=1, test_days=1, embargo_minutes=5, mode="rolling",
+        min_confidence=0.7,
+        min_agreement=3,
+        direction_band=0.4,
+        min_signal_strength=0.6,
+        max_position_pct=0.05,
+        max_positions=2,
+        max_exposure=0.1,
+    )
+    assert cfg.min_confidence == 0.7
+    assert cfg.min_agreement == 3
+    assert cfg.direction_band == 0.4
+    assert cfg.min_signal_strength == 0.6
+    assert cfg.max_position_pct == 0.05
+    assert cfg.max_positions == 2
+    assert cfg.max_exposure == 0.1
+
+
+def test_backtest_config_override_fields_default_none():
+    cfg = BacktestConfig(
+        name="t",
+        symbols=["SPY"],
+        timeframe="1m",
+        horizons=[5],
+        range_start=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        range_end=datetime(2025, 1, 2, tzinfo=timezone.utc),
+        train_days=1, test_days=1, embargo_minutes=5, mode="rolling",
+    )
+    assert cfg.min_confidence is None
+    assert cfg.min_agreement is None
+    assert cfg.direction_band is None
+    assert cfg.min_signal_strength is None
+    assert cfg.max_position_pct is None
+    assert cfg.max_positions is None
+    assert cfg.max_exposure is None
+
+
+@pytest.mark.asyncio
+async def test_signal_aggregator_honors_backtest_overrides_end_to_end():
+    """Mimics how engine._run_fold builds overrides from cfg."""
+    cfg = BacktestConfig(
+        name="t",
+        symbols=["SPY"],
+        timeframe="1m",
+        horizons=[5],
+        range_start=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        range_end=datetime(2025, 1, 2, tzinfo=timezone.utc),
+        train_days=1, test_days=1, embargo_minutes=5, mode="rolling",
+        min_confidence=0.9,
+    )
+    overrides = {
+        "min_confidence": cfg.min_confidence,
+        "min_agreement": cfg.min_agreement,
+        "direction_band": cfg.direction_band,
+        "min_signal_strength": cfg.min_signal_strength,
+        "max_position_pct": cfg.max_position_pct,
+        "max_positions": cfg.max_positions,
+        "max_exposure": cfg.max_exposure,
+    }
+    agg = SignalAggregator(runtime_config=_rc(), overrides=overrides)
+    predictions = [
+        {"direction": 1, "confidence": 0.80},
+        {"direction": 1, "confidence": 0.75},
+    ]
+    ts = datetime(2026, 4, 16, 14, 0, tzinfo=timezone.utc)
+    # min_confidence=0.9 override filters out both → no signal.
+    assert await agg.aggregate("SPY", ts, predictions) is None
+
+
+@pytest.mark.asyncio
+async def test_risk_manager_honors_backtest_overrides_end_to_end():
+    cfg = BacktestConfig(
+        name="t",
+        symbols=["SPY"],
+        timeframe="1m",
+        horizons=[5],
+        range_start=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        range_end=datetime(2025, 1, 2, tzinfo=timezone.utc),
+        train_days=1, test_days=1, embargo_minutes=5, mode="rolling",
+        min_signal_strength=0.95,
+    )
+    overrides = {
+        "min_confidence": cfg.min_confidence,
+        "min_agreement": cfg.min_agreement,
+        "direction_band": cfg.direction_band,
+        "min_signal_strength": cfg.min_signal_strength,
+        "max_position_pct": cfg.max_position_pct,
+        "max_positions": cfg.max_positions,
+        "max_exposure": cfg.max_exposure,
+    }
+    from shared.models import TradingSignal
+    rm = RiskManager(runtime_config=_rc(), overrides=overrides)
+    sig = TradingSignal(
+        symbol="SPY",
+        timestamp=datetime(2026, 4, 13, 16, 0, tzinfo=timezone.utc),
+        direction=1, strength=0.9, contributing_predictions=3,
+    )
+    # min_signal_strength=0.95 override rejects a 0.9 strength signal.
+    approved, reason, _ = await rm.check_entry(
+        sig, {"equity": 100000.0, "buying_power": 200000.0}, [], current_price=420.0,
+    )
+    assert approved is False
+    assert "weak" in reason.lower()

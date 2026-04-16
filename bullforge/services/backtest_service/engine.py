@@ -49,6 +49,13 @@ class BacktestConfig:
     slippage_bps: float = 5.0
     max_volume_pct: float = 0.10
     periods_per_year: int = 390 * 252  # 1m equities default
+    min_confidence: Optional[float] = None
+    min_agreement: Optional[int] = None
+    direction_band: Optional[float] = None
+    min_signal_strength: Optional[float] = None
+    max_position_pct: Optional[float] = None
+    max_positions: Optional[int] = None
+    max_exposure: Optional[float] = None
 
 
 class BacktestEngine:
@@ -141,14 +148,25 @@ class BacktestEngine:
             starting_cash=cfg.starting_cash, fill_model=fill_model,
         )
         tracker = PositionTracker(broker)
-        risk = RiskManager(runtime_config=self._rc)
+        overrides = {
+            "min_confidence": cfg.min_confidence,
+            "min_agreement": cfg.min_agreement,
+            "direction_band": cfg.direction_band,
+            "min_signal_strength": cfg.min_signal_strength,
+            "max_position_pct": cfg.max_position_pct,
+            "max_positions": cfg.max_positions,
+            "max_exposure": cfg.max_exposure,
+        }
+        risk = RiskManager(runtime_config=self._rc, overrides=overrides)
         executor = OrderExecutor(
             broker=broker, risk_manager=risk, position_tracker=tracker,
             db=self._db, core=_NoopReconciler(),
         )
 
         equity = EquityTracker()
-        aggregator = SignalAggregator()
+        aggregator = SignalAggregator(
+            runtime_config=self._rc, overrides=overrides,
+        )
         completed_trades: list[dict] = []
         open_trade: dict[str, dict] = {}
 
@@ -196,7 +214,7 @@ class BacktestEngine:
                 }
                 for p in preds
             ]
-            signal = aggregator.aggregate(symbol, ts, pred_dicts)
+            signal = await aggregator.aggregate(symbol, ts, pred_dicts)
             if signal is not None and nxt is not None:
                 order = await executor.process_signal(signal, bar["close"])
                 if order is not None:
