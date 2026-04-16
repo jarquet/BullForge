@@ -44,6 +44,7 @@ class BacktestConfig:
     test_days: int
     embargo_minutes: int
     mode: str                # "rolling" | "anchored"
+    custom_name: str | None = None
     starting_cash: float = 100_000.0
     slippage_bps: float = 5.0
     max_volume_pct: float = 0.10
@@ -66,6 +67,7 @@ class BacktestEngine:
     async def run(self, cfg: BacktestConfig) -> int:
         run_id = await self._results.insert_run(
             name=cfg.name,
+            custom_name=cfg.custom_name,
             symbols=cfg.symbols, timeframe=cfg.timeframe, horizons=cfg.horizons,
             range_start=cfg.range_start, range_end=cfg.range_end,
             train_days=cfg.train_days, test_days=cfg.test_days,

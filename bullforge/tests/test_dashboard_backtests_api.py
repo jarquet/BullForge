@@ -114,6 +114,56 @@ async def test_equity_route(aiohttp_client, app):
 
 
 @pytest.mark.asyncio
+async def test_create_composes_full_name_with_custom(aiohttp_client, app):
+    app["jobs_db"].insert_job = AsyncMock(return_value=42)
+    client = await aiohttp_client(app)
+    resp = await client.post("/api/backtests", json={
+        "name": "my-tag", "symbols": ["SPY", "QQQ"], "timeframe": "1m",
+        "horizons": [5, 30], "range_start": "2025-01-02T00:00:00+00:00",
+        "range_end":   "2025-06-30T00:00:00+00:00",
+        "train_days": 60, "test_days": 5, "embargo_min": 30, "mode": "rolling",
+    })
+    assert resp.status == 201
+    body = await resp.json()
+    assert body["custom_name"] == "my-tag"
+    assert body["name"] == "my-tag__SPY-QQQ_1m_2025-01-02_2025-06-30_h5-30"
+    kwargs = app["jobs_db"].insert_job.await_args.kwargs
+    assert kwargs["custom_name"] == "my-tag"
+    assert kwargs["name"].startswith("my-tag__")
+
+
+@pytest.mark.asyncio
+async def test_create_blank_name_generates_random_tag(aiohttp_client, app):
+    app["jobs_db"].insert_job = AsyncMock(return_value=43)
+    client = await aiohttp_client(app)
+    resp = await client.post("/api/backtests", json={
+        "name": "", "symbols": ["SPY"], "timeframe": "1m",
+        "horizons": [5], "range_start": "2025-01-02T00:00:00+00:00",
+        "range_end":   "2025-01-10T00:00:00+00:00",
+        "train_days": 1, "test_days": 1, "embargo_min": 5, "mode": "rolling",
+    })
+    assert resp.status == 201
+    body = await resp.json()
+    assert len(body["custom_name"]) == 8
+    assert body["custom_name"].isalnum()
+    assert body["name"].startswith(body["custom_name"] + "__")
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_invalid_custom_name(aiohttp_client, app):
+    client = await aiohttp_client(app)
+    resp = await client.post("/api/backtests", json={
+        "name": "has spaces!", "symbols": ["SPY"], "timeframe": "1m",
+        "horizons": [5], "range_start": "2025-01-02T00:00:00+00:00",
+        "range_end":   "2025-01-10T00:00:00+00:00",
+        "train_days": 1, "test_days": 1, "embargo_min": 5, "mode": "rolling",
+    })
+    assert resp.status == 400
+    body = await resp.json()
+    assert "name" in body["errors"]
+
+
+@pytest.mark.asyncio
 async def test_trades_route(aiohttp_client, app):
     app["results_db"].list_trades = AsyncMock(return_value=[])
     client = await aiohttp_client(app)

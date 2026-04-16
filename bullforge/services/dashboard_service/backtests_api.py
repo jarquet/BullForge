@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import secrets
+import string
 from datetime import datetime
 
 from aiohttp import web
@@ -57,6 +60,7 @@ async def _list(request: web.Request) -> web.Response:
                 "kind": "job",
                 "id": j["id"],
                 "name": j["name"],
+                "custom_name": j.get("custom_name"),
                 "symbols": cfg.get("symbols", []),
                 "range_start": cfg.get("range_start"),
                 "range_end": cfg.get("range_end"),
@@ -78,6 +82,7 @@ async def _list(request: web.Request) -> web.Response:
                 "kind": "run",
                 "id": r["id"],
                 "name": r["name"],
+                "custom_name": r.get("custom_name"),
                 "symbols": r["symbols"],
                 "range_start": _iso(r["range_start"]),
                 "range_end": _iso(r["range_end"]),
@@ -90,11 +95,36 @@ async def _list(request: web.Request) -> web.Response:
     return web.json_response({"rows": rows})
 
 
+_CUSTOM_NAME_ALPHABET = string.ascii_lowercase + string.digits
+_CUSTOM_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+
+
+def _random_custom_name() -> str:
+    return "".join(
+        secrets.choice(_CUSTOM_NAME_ALPHABET) for _ in range(8)
+    )
+
+
+def _compose_full_name(
+    custom: str, symbols: list[str], timeframe: str,
+    horizons: list[int], range_start: str, range_end: str,
+) -> str:
+    # symbols: at most 3 inline, else "N-syms"
+    if len(symbols) <= 3:
+        syms = "-".join(s.replace("/", "") for s in symbols)
+    else:
+        syms = f"{len(symbols)}syms"
+    start = range_start[:10]
+    end = range_end[:10]
+    hz = "-".join(str(h) for h in sorted(horizons))
+    return f"{custom}__{syms}_{timeframe}_{start}_{end}_h{hz}"
+
+
 def _validate_new_job(body: dict) -> dict:
     errors: dict[str, str] = {}
-    name = (body.get("name") or "").strip()
-    if not name:
-        errors["name"] = "required"
+    custom_name = (body.get("name") or "").strip()
+    if custom_name and not _CUSTOM_NAME_RE.match(custom_name):
+        errors["name"] = "allowed chars: letters, digits, _ or -, up to 32 chars"
     symbols = body.get("symbols") or []
     if not isinstance(symbols, list) or not symbols:
         errors["symbols"] = "at least one required"
@@ -141,8 +171,22 @@ async def _create(request: web.Request) -> web.Response:
         "range_start", "range_end",
         "train_days", "test_days", "embargo_min", "mode",
     )}
-    job_id = await jobs.insert_job(name=body["name"], config=config)
-    return web.json_response({"job_id": job_id}, status=201)
+    custom_name = (body.get("name") or "").strip() or _random_custom_name()
+    full_name = _compose_full_name(
+        custom=custom_name,
+        symbols=config["symbols"],
+        timeframe=config["timeframe"],
+        horizons=config["horizons"],
+        range_start=config["range_start"],
+        range_end=config["range_end"],
+    )
+    job_id = await jobs.insert_job(
+        name=full_name, custom_name=custom_name, config=config,
+    )
+    return web.json_response(
+        {"job_id": job_id, "name": full_name, "custom_name": custom_name},
+        status=201,
+    )
 
 
 async def _detail(request: web.Request) -> web.Response:
