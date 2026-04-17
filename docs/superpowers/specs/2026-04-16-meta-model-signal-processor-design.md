@@ -75,13 +75,15 @@ Future estimator plugins are added by: (1) implementing `MetaEstimator`, (2) reg
 - Time-of-day bucket (e.g., 15-minute bins).
 - Minutes since market open.
 - Minutes to market close.
-- Weekday (0-4).
+- Weekday (0-6).
 
 ### Symbol state features
 
 - Current realized volatility (N-bar).
 - ATR / price ratio.
 - Distance from 50-bar SMA (normalized).
+- Distance from 200-bar SMA (normalized).
+- Distance from 200-day SMA (normalized).
 
 ## Labels
 
