@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
@@ -12,6 +14,8 @@ from shared.config import Settings
 from datetime import datetime, timedelta, timezone
 
 from shared.models import Bar, FeatureRow, Label, ModelMetadata, Prediction, Order, Trade, ModelStatus, MetaFeatureRow, MetaSignalShadow
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -52,6 +56,81 @@ def _normalize_alpaca_status(raw: str) -> str:
     return mapped
 
 
+def _quote_ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _build_add_column_ddl(table: str, col: asyncpg.Record) -> str:
+    udt = col["udt_name"]
+    data_type = col["data_type"]
+
+    if data_type == "ARRAY":
+        element = udt.lstrip("_")
+        type_sql = f"{element}[]"
+    elif data_type == "USER-DEFINED":
+        type_sql = udt
+    elif udt in ("varchar", "bpchar") and col["character_maximum_length"]:
+        type_sql = f"{udt}({col['character_maximum_length']})"
+    elif udt == "numeric" and col["numeric_precision"] is not None:
+        if col["numeric_scale"] is not None:
+            type_sql = f"numeric({col['numeric_precision']},{col['numeric_scale']})"
+        else:
+            type_sql = f"numeric({col['numeric_precision']})"
+    else:
+        type_sql = udt
+
+    parts = [
+        f"ALTER TABLE backtest.{_quote_ident(table)}",
+        f"ADD COLUMN IF NOT EXISTS {_quote_ident(col['column_name'])} {type_sql}",
+    ]
+    if col["column_default"] is not None:
+        parts.append(f"DEFAULT {col['column_default']}")
+    if col["is_nullable"] == "NO":
+        parts.append("NOT NULL")
+    return " ".join(parts)
+
+
+_INDEX_HEAD_RE = re.compile(
+    r"^CREATE (?:UNIQUE )?INDEX \S+ ON (?:ONLY )?\S+\s+",
+    re.IGNORECASE,
+)
+
+
+def _index_body(indexdef: str) -> str:
+    """
+    Returns the portion of a pg_indexes.indexdef after the
+    `CREATE [UNIQUE] INDEX <name> ON <schema>.<table> ` prefix. Two indexes
+    with the same body differ only by schema/name and are equivalent.
+    """
+    return _INDEX_HEAD_RE.sub("", indexdef, count=1)
+
+
+_INDEX_REWRITE_RE = re.compile(
+    r"^(CREATE (?:UNIQUE )?INDEX )(\S+)( ON (?:ONLY )?)(\S+)(\s)",
+    re.IGNORECASE,
+)
+
+
+def _rewrite_index_for_backtest(
+    indexdef: str, orig_name: str, table: str
+) -> Optional[str]:
+    """
+    Rewrites a public-schema index DDL to target backtest.<table>, using
+    CREATE INDEX IF NOT EXISTS and a non-colliding index name.
+    Returns None if the DDL doesn't match the expected shape.
+    """
+    m = _INDEX_REWRITE_RE.match(indexdef)
+    if not m:
+        return None
+    new_name = orig_name if orig_name.startswith("backtest_") else f"backtest_{orig_name}"
+    create_prefix, _name, on_middle, _target, trailing_ws = m.groups()
+    head = (
+        f"{create_prefix}IF NOT EXISTS {new_name}"
+        f"{on_middle}backtest.{_quote_ident(table)}{trailing_ws}"
+    )
+    return head + indexdef[m.end():]
+
+
 class Database:
     def __init__(self, settings: Settings, *, sandbox: bool = False):
         self._settings = settings
@@ -76,6 +155,7 @@ class Database:
         # migrations (incl. 013 which creates the `backtest` schema).
         if not self._sandbox:
             await self._run_migrations()
+            await self._sync_sandbox_schema()
 
     async def disconnect(self) -> None:
         if self.pool:
@@ -89,6 +169,114 @@ class Database:
             for sql_file in sql_files:
                 sql = sql_file.read_text()
                 await conn.execute(sql)
+
+    async def _sync_sandbox_schema(self) -> None:
+        """
+        Ensures every table in the `backtest` schema structurally matches its
+        `public` namesake: any column present in public but missing in backtest
+        is added; any index defined on public but not on backtest is created.
+
+        This exists because migration 014 seeds `backtest.<table>` via
+        `LIKE public.<table> INCLUDING ALL` — a one-time snapshot. Later
+        migrations that `ALTER TABLE <name>` without a schema qualifier hit
+        only `public`, so the sandbox copy silently drifts. The backtest
+        worker writes via `search_path=backtest,public`, so drift surfaces
+        as `UndefinedColumnError` on inserts.
+
+        Runs after `_run_migrations()` on every live-pool `connect()`. Idempotent.
+        All DDL uses IF NOT EXISTS, so concurrent workers are safe.
+
+        Only ADD COLUMN and CREATE INDEX drift is repaired automatically.
+        Column drops, type changes, default changes, and constraint drift
+        are logged as warnings for human attention — those are rare and
+        have too many safe-rollout variants to auto-apply.
+        """
+        async with self.pool.acquire() as conn:
+            tables = await conn.fetch(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'backtest' AND table_type = 'BASE TABLE'"
+            )
+            for row in tables:
+                await self._sync_sandbox_table(conn, row["table_name"])
+
+    async def _sync_sandbox_table(self, conn: asyncpg.Connection, table: str) -> None:
+        public_exists = await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema = 'public' AND table_name = $1)",
+            table,
+        )
+        if not public_exists:
+            logger.warning(
+                "sync_sandbox: backtest.%s has no public counterpart; skipping",
+                table,
+            )
+            return
+        await self._sync_sandbox_columns(conn, table)
+        await self._sync_sandbox_indexes(conn, table)
+
+    async def _sync_sandbox_columns(self, conn: asyncpg.Connection, table: str) -> None:
+        rows = await conn.fetch(
+            """
+            SELECT table_schema, column_name, data_type, udt_name,
+                   is_nullable, column_default, character_maximum_length,
+                   numeric_precision, numeric_scale
+            FROM information_schema.columns
+            WHERE table_name = $1 AND table_schema IN ('public', 'backtest')
+            """,
+            table,
+        )
+        public = {r["column_name"]: r for r in rows if r["table_schema"] == "public"}
+        backtest = {r["column_name"]: r for r in rows if r["table_schema"] == "backtest"}
+
+        for name in sorted(set(public) - set(backtest)):
+            stmt = _build_add_column_ddl(table, public[name])
+            logger.info("sync_sandbox: %s", stmt)
+            await conn.execute(stmt)
+
+        for name in sorted(set(backtest) - set(public)):
+            logger.warning(
+                "sync_sandbox: backtest.%s.%s has no public counterpart; "
+                "manual review required (may be safe to DROP)",
+                table, name,
+            )
+
+        for name in sorted(set(public) & set(backtest)):
+            p, b = public[name], backtest[name]
+            for attr in ("udt_name", "is_nullable", "column_default",
+                         "character_maximum_length", "numeric_precision",
+                         "numeric_scale"):
+                if p[attr] != b[attr]:
+                    logger.warning(
+                        "sync_sandbox: attribute drift on backtest.%s.%s (%s): "
+                        "public=%r backtest=%r; manual ALTER required",
+                        table, name, attr, p[attr], b[attr],
+                    )
+
+    async def _sync_sandbox_indexes(self, conn: asyncpg.Connection, table: str) -> None:
+        rows = await conn.fetch(
+            """
+            SELECT schemaname, indexname, indexdef
+            FROM pg_indexes
+            WHERE tablename = $1 AND schemaname IN ('public', 'backtest')
+            """,
+            table,
+        )
+        public_idx = [r for r in rows if r["schemaname"] == "public"]
+        backtest_bodies = {_index_body(r["indexdef"]) for r in rows if r["schemaname"] == "backtest"}
+
+        for r in public_idx:
+            body = _index_body(r["indexdef"])
+            if body in backtest_bodies:
+                continue
+            new_ddl = _rewrite_index_for_backtest(r["indexdef"], r["indexname"], table)
+            if new_ddl is None:
+                logger.warning(
+                    "sync_sandbox: could not rewrite index %r for backtest; skipping",
+                    r["indexname"],
+                )
+                continue
+            logger.info("sync_sandbox: %s", new_ddl)
+            await conn.execute(new_ddl)
 
     async def insert_bar(self, bar: Bar) -> None:
         table = "bars_1m" if bar.timeframe == "1m" else "bars_daily"
