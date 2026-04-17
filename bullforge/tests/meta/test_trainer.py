@@ -69,6 +69,16 @@ async def test_train_exec_produces_metadata():
     assert result is not None
     assert result.model_type == "meta_exec"
 
+@pytest.mark.asyncio
+async def test_train_entry_sets_estimator_type():
+    db, store = _mock_db(), _mock_model_store()
+    trainer = MetaTrainer(db=db, model_store=store,
+                          sub_model_pairs={"long": [(0.001, 0.001)] * 7})
+    result = await trainer.train_entry(symbol="AAPL", direction=1,
+                                        estimator_type="lightgbm", as_of=_ts())
+    assert result.estimator_type == "lightgbm"
+
+
 def test_model_store_saves_and_loads_calibrated_entry(tmp_path):
     from services.model_service.meta.calibrator import CalibratedEntryEstimator
     from services.model_service.meta.estimators.lightgbm import LightGBMEntryEstimator

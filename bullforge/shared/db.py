@@ -374,8 +374,8 @@ class Database:
                 INSERT INTO model_registry
                     (symbol, timeframe, horizon_minutes, model_type, artifact_path,
                      metrics, feature_columns, trained_at, train_samples, test_samples,
-                     is_active)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                     is_active, estimator_type)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 RETURNING id
                 """,
                 meta.symbol,
@@ -389,6 +389,7 @@ class Database:
                 meta.train_samples,
                 meta.test_samples,
                 meta.is_active,
+                meta.estimator_type,
             )
         return row_id
 
@@ -403,7 +404,7 @@ class Database:
                 """
                 SELECT id, symbol, timeframe, horizon_minutes, model_type,
                        artifact_path, metrics, feature_columns, trained_at,
-                       train_samples, test_samples, is_active
+                       train_samples, test_samples, is_active, estimator_type
                 FROM model_registry
                 WHERE symbol = $1 AND timeframe = $2
                     AND horizon_minutes = $3 AND is_active = TRUE
@@ -429,6 +430,7 @@ class Database:
             train_samples=row["train_samples"],
             test_samples=row["test_samples"],
             is_active=row["is_active"],
+            estimator_type=row["estimator_type"],
         )
 
     async def query_all_active_models(self) -> List[ModelMetadata]:
@@ -437,7 +439,7 @@ class Database:
                 """
                 SELECT id, symbol, timeframe, horizon_minutes, model_type,
                        artifact_path, metrics, feature_columns, trained_at,
-                       train_samples, test_samples, is_active
+                       train_samples, test_samples, is_active, estimator_type
                 FROM model_registry
                 WHERE is_active = TRUE
                 ORDER BY symbol, timeframe, horizon_minutes
@@ -457,6 +459,7 @@ class Database:
                 train_samples=r["train_samples"],
                 test_samples=r["test_samples"],
                 is_active=r["is_active"],
+                estimator_type=r["estimator_type"],
             )
             for r in rows
         ]

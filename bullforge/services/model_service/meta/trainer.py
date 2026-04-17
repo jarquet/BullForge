@@ -56,14 +56,15 @@ class MetaTrainer:
                              model_type="meta_entry", artifact_path=artifact_path,
                              metrics=metrics, feature_columns=list(X.columns),
                              trained_at=trained_at, train_samples=len(X_train),
-                             test_samples=len(X_test), is_active=True)
+                             test_samples=len(X_test), is_active=True,
+                             estimator_type=estimator_type)
         row_id = await self._db.insert_model_metadata(meta)
         return ModelMetadata(id=row_id, symbol=meta.symbol, timeframe=meta.timeframe,
                              horizon_minutes=meta.horizon_minutes, model_type=meta.model_type,
                              artifact_path=meta.artifact_path, metrics=meta.metrics,
                              feature_columns=meta.feature_columns, trained_at=meta.trained_at,
                              train_samples=meta.train_samples, test_samples=meta.test_samples,
-                             is_active=meta.is_active)
+                             is_active=meta.is_active, estimator_type=meta.estimator_type)
 
     async def train_exec(self, symbol: str, direction: int, estimator_type: str,
                          as_of: datetime) -> Optional[ModelMetadata]:
@@ -97,16 +98,23 @@ class MetaTrainer:
                              model_type="meta_exec", artifact_path=artifact_path,
                              metrics=metrics, feature_columns=list(X.columns),
                              trained_at=trained_at, train_samples=len(X_train),
-                             test_samples=len(X_test), is_active=True)
+                             test_samples=len(X_test), is_active=True,
+                             estimator_type=estimator_type)
         row_id = await self._db.insert_model_metadata(meta)
         return ModelMetadata(id=row_id, symbol=meta.symbol, timeframe=meta.timeframe,
                              horizon_minutes=meta.horizon_minutes, model_type=meta.model_type,
                              artifact_path=meta.artifact_path, metrics=meta.metrics,
                              feature_columns=meta.feature_columns, trained_at=meta.trained_at,
                              train_samples=meta.train_samples, test_samples=meta.test_samples,
-                             is_active=meta.is_active)
+                             is_active=meta.is_active, estimator_type=meta.estimator_type)
 
     async def _build_entry_dataset(self, symbol: str, direction: int, as_of: datetime):
+        logger.warning(
+            "MetaTrainer._build_entry_dataset is using PLACEHOLDER random base-model "
+            "predictions — NOT suitable for production training. Real base-model replay "
+            "will be integrated in Plan B."
+        )
+        rng = np.random.RandomState(42)
         active_models = await self._db.query_all_active_models()
         symbol_models = [m for m in active_models
                          if m.symbol == symbol and m.model_type not in ("meta_entry", "meta_exec")]
@@ -151,8 +159,8 @@ class MetaTrainer:
             else:
                 y_val = 1 if label.forward_return < 0 else 0
 
-            predictions = [{"model_id": m.id, "direction": np.random.choice([-1, 0, 1]),
-                            "confidence": np.random.uniform(0.5, 0.9)} for m in symbol_models]
+            predictions = [{"model_id": m.id, "direction": rng.choice([-1, 0, 1]),
+                            "confidence": rng.uniform(0.5, 0.9)} for m in symbol_models]
             symbol_state = {
                 "realized_vol": fr.features.get("realized_vol", 0.02),
                 "atr_price_ratio": fr.features.get("atr_14", 2.0) / max(fr.features.get("sma_20", 150.0), 1.0),

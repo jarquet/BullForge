@@ -91,6 +91,7 @@ class ModelMetadata:
     train_samples: int
     test_samples: int
     is_active: bool = True
+    estimator_type: Optional[str] = None  # e.g., "lightgbm", "mlp", "baseline" for meta-models
     id: Optional[int] = None
 
     def __post_init__(self):
