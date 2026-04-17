@@ -84,8 +84,14 @@ function fmtDuration(seconds) {
 
 function fmtTime(iso) {
     if (!iso) return '--';
-    var d = new Date(iso);
-    return d.toLocaleString();
+    var hasTz = /[zZ]|[+-]\d\d:?\d\d$/.test(iso);
+    var d = new Date(hasTz ? iso : iso + 'Z');
+    if (isNaN(d.getTime())) return '--';
+    var pad = function (n) { return String(n).padStart(2, '0'); };
+    var local = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+                ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    var utc = d.toISOString().replace(/\.\d+Z$/, 'Z');
+    return '<time datetime="' + utc + '" title="UTC: ' + utc + '">' + local + '</time>';
 }
 
 function setPnlClass(el, value) {
