@@ -34,19 +34,19 @@
 
   const barsTb = document.querySelector("#freshness-bars tbody");
   barsTb.innerHTML = body.bars.map(b =>
-    `<tr><td>${b.symbol}</td><td>${b.last_bar}</td><td>${ageStr(b.age_seconds)}</td>` +
+    `<tr><td>${b.symbol}</td><td>${fmtTime(b.last_bar)}</td><td>${ageStr(b.age_seconds)}</td>` +
     `<td><span class="status-cell ${b.color}">${b.color}</span></td></tr>`
   ).join("");
 
   const featTb = document.querySelector("#freshness-features tbody");
   featTb.innerHTML = body.features.map(f =>
-    `<tr><td>${f.symbol}</td><td>${f.last_feature}</td><td>${ageStr(f.age_seconds)}</td>` +
+    `<tr><td>${f.symbol}</td><td>${fmtTime(f.last_feature)}</td><td>${ageStr(f.age_seconds)}</td>` +
     `<td><span class="status-cell ${f.color}">${f.color}</span></td></tr>`
   ).join("");
 
   const modTb = document.querySelector("#freshness-models tbody");
   modTb.innerHTML = body.models.map(m =>
-    `<tr><td>${m.label}</td><td>${m.trained_at}</td><td>${m.age_hours.toFixed(1)}</td>` +
+    `<tr><td>${m.label}</td><td>${fmtTime(m.trained_at)}</td><td>${m.age_hours.toFixed(1)}</td>` +
     `<td><span class="status-cell ${m.age_color}">${m.status}</span></td>` +
     `<td>${m.accuracy != null ? m.accuracy.toFixed(3) : "--"}</td>` +
     `<td>${m.f1_macro != null ? m.f1_macro.toFixed(3) : "--"}</td></tr>`
