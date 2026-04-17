@@ -344,7 +344,7 @@
         <td>${r.name}</td><td>${symsDisplay}</td><td>${range}</td>
         <td>${pnl}</td><td>${sharpe}</td><td>${dd}</td>
         <td>${ntr}</td><td>${hit}</td><td>${r.status}</td>
-        <td>${r.finished_at ? r.finished_at.replace('T',' ').slice(0,16) : '—'}</td>
+        <td>${fmtTime(r.finished_at)}</td>
       </tr>`;
     }).join('');
   }
