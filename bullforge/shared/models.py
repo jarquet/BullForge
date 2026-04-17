@@ -238,6 +238,66 @@ class Order:
             )
 
 
+VALID_META_SOURCES = {"replay", "live"}
+
+
+@dataclass(frozen=True)
+class MetaFeatureRow:
+    symbol: str
+    timestamp: datetime
+    direction: int  # 1=long, -1=short
+    feature_vector: dict[str, float]
+    source: str  # "replay" or "live"
+    entry_label: Optional[int] = None  # 1=hit target, 0=hit stop
+    optimal_pair_idx: Optional[int] = None
+    realized_ev: Optional[float] = None
+
+    def __post_init__(self):
+        if self.timestamp.tzinfo is None or self.timestamp.tzinfo != timezone.utc:
+            raise ValueError(
+                f"MetaFeatureRow timestamp must be UTC, got tzinfo={self.timestamp.tzinfo}"
+            )
+        if self.direction not in (-1, 1):
+            raise ValueError(
+                f"direction must be -1 or 1, got {self.direction}"
+            )
+        if not self.feature_vector:
+            raise ValueError("feature_vector must not be empty")
+        if self.source not in VALID_META_SOURCES:
+            raise ValueError(
+                f"source must be one of {VALID_META_SOURCES}, got {self.source!r}"
+            )
+
+
+@dataclass(frozen=True)
+class MetaSignalShadow:
+    symbol: str
+    timestamp: datetime
+    direction: int  # 1=long, -1=short
+    estimator_type: str
+    entry_probability: float
+    kelly_fraction: Optional[float] = None
+    pair_index: Optional[int] = None
+    target_pct: Optional[float] = None
+    stop_pct: Optional[float] = None
+    model_id: Optional[int] = None
+    id: Optional[int] = None
+
+    def __post_init__(self):
+        if self.timestamp.tzinfo is None or self.timestamp.tzinfo != timezone.utc:
+            raise ValueError(
+                f"MetaSignalShadow timestamp must be UTC, got tzinfo={self.timestamp.tzinfo}"
+            )
+        if self.direction not in (-1, 1):
+            raise ValueError(
+                f"direction must be -1 or 1, got {self.direction}"
+            )
+        if not (0.0 <= self.entry_probability <= 1.0):
+            raise ValueError(
+                f"entry_probability must be in [0.0, 1.0], got {self.entry_probability}"
+            )
+
+
 VALID_TRADE_SIDES = {"long", "short"}
 VALID_MODEL_STATUSES = {"active", "warned", "disabled"}
 
