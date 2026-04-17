@@ -11,7 +11,7 @@ import asyncpg
 from shared.config import Settings
 from datetime import datetime, timedelta, timezone
 
-from shared.models import Bar, FeatureRow, Label, ModelMetadata, Prediction, Order, Trade, ModelStatus
+from shared.models import Bar, FeatureRow, Label, ModelMetadata, Prediction, Order, Trade, ModelStatus, MetaFeatureRow, MetaSignalShadow
 
 
 @dataclass(frozen=True)
@@ -374,8 +374,8 @@ class Database:
                 INSERT INTO model_registry
                     (symbol, timeframe, horizon_minutes, model_type, artifact_path,
                      metrics, feature_columns, trained_at, train_samples, test_samples,
-                     is_active)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                     is_active, estimator_type)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 RETURNING id
                 """,
                 meta.symbol,
@@ -389,6 +389,7 @@ class Database:
                 meta.train_samples,
                 meta.test_samples,
                 meta.is_active,
+                meta.estimator_type,
             )
         return row_id
 
@@ -403,7 +404,7 @@ class Database:
                 """
                 SELECT id, symbol, timeframe, horizon_minutes, model_type,
                        artifact_path, metrics, feature_columns, trained_at,
-                       train_samples, test_samples, is_active
+                       train_samples, test_samples, is_active, estimator_type
                 FROM model_registry
                 WHERE symbol = $1 AND timeframe = $2
                     AND horizon_minutes = $3 AND is_active = TRUE
@@ -429,6 +430,7 @@ class Database:
             train_samples=row["train_samples"],
             test_samples=row["test_samples"],
             is_active=row["is_active"],
+            estimator_type=row["estimator_type"],
         )
 
     async def query_all_active_models(self) -> List[ModelMetadata]:
@@ -437,7 +439,7 @@ class Database:
                 """
                 SELECT id, symbol, timeframe, horizon_minutes, model_type,
                        artifact_path, metrics, feature_columns, trained_at,
-                       train_samples, test_samples, is_active
+                       train_samples, test_samples, is_active, estimator_type
                 FROM model_registry
                 WHERE is_active = TRUE
                 ORDER BY symbol, timeframe, horizon_minutes
@@ -457,6 +459,7 @@ class Database:
                 train_samples=r["train_samples"],
                 test_samples=r["test_samples"],
                 is_active=r["is_active"],
+                estimator_type=r["estimator_type"],
             )
             for r in rows
         ]
@@ -1259,3 +1262,130 @@ class Database:
                 d["metrics"] = json.loads(d["metrics"])
             result.append(d)
         return result
+
+    # ── Meta-feature methods ──────────────────────────────────────
+
+    async def insert_meta_feature(self, row: MetaFeatureRow) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO meta_features
+                    (symbol, timestamp, direction, feature_vector,
+                     entry_label, optimal_pair_idx, realized_ev, source)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ON CONFLICT (symbol, timestamp, direction) DO UPDATE SET
+                    feature_vector = EXCLUDED.feature_vector,
+                    entry_label = EXCLUDED.entry_label,
+                    optimal_pair_idx = EXCLUDED.optimal_pair_idx,
+                    realized_ev = EXCLUDED.realized_ev,
+                    source = EXCLUDED.source
+                """,
+                row.symbol, row.timestamp, row.direction,
+                json.dumps(row.feature_vector),
+                row.entry_label, row.optimal_pair_idx,
+                row.realized_ev, row.source,
+            )
+
+    async def insert_meta_features_batch(self, rows: list[MetaFeatureRow]) -> None:
+        if not rows:
+            return
+        async with self.pool.acquire() as conn:
+            await conn.executemany(
+                """
+                INSERT INTO meta_features
+                    (symbol, timestamp, direction, feature_vector,
+                     entry_label, optimal_pair_idx, realized_ev, source)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ON CONFLICT (symbol, timestamp, direction) DO UPDATE SET
+                    feature_vector = EXCLUDED.feature_vector,
+                    entry_label = EXCLUDED.entry_label,
+                    optimal_pair_idx = EXCLUDED.optimal_pair_idx,
+                    realized_ev = EXCLUDED.realized_ev,
+                    source = EXCLUDED.source
+                """,
+                [(r.symbol, r.timestamp, r.direction, json.dumps(r.feature_vector),
+                  r.entry_label, r.optimal_pair_idx, r.realized_ev, r.source) for r in rows],
+            )
+
+    async def query_meta_features(
+        self, symbol: str, direction: int, limit: int = 10000, source: Optional[str] = None,
+    ) -> list[MetaFeatureRow]:
+        cond = "WHERE symbol = $1 AND direction = $2"
+        params: list = [symbol, direction]
+        if source is not None:
+            cond += " AND source = $3"
+            params.append(source)
+        params.append(limit)
+        limit_param = f"${len(params)}"
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT symbol, timestamp, direction, feature_vector,
+                       entry_label, optimal_pair_idx, realized_ev, source
+                FROM meta_features {cond}
+                ORDER BY timestamp DESC LIMIT {limit_param}
+                """, *params,
+            )
+        return [
+            MetaFeatureRow(
+                symbol=r["symbol"], timestamp=r["timestamp"], direction=r["direction"],
+                feature_vector=json.loads(r["feature_vector"]), source=r["source"],
+                entry_label=r["entry_label"], optimal_pair_idx=r["optimal_pair_idx"],
+                realized_ev=r["realized_ev"],
+            ) for r in rows
+        ]
+
+    async def count_meta_features(self, symbol: str, direction: int) -> int:
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(
+                "SELECT COUNT(*) FROM meta_features WHERE symbol = $1 AND direction = $2",
+                symbol, direction,
+            )
+
+    # ── Meta-signal shadow methods ────────────────────────────────
+
+    async def insert_meta_signal_shadow(self, sig: MetaSignalShadow) -> int:
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(
+                """
+                INSERT INTO meta_signals_shadow
+                    (symbol, timestamp, direction, estimator_type,
+                     entry_probability, kelly_fraction, pair_index,
+                     target_pct, stop_pct, model_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                RETURNING id
+                """,
+                sig.symbol, sig.timestamp, sig.direction, sig.estimator_type,
+                sig.entry_probability, sig.kelly_fraction, sig.pair_index,
+                sig.target_pct, sig.stop_pct, sig.model_id,
+            )
+
+    async def query_meta_signals_shadow(
+        self, symbol: str, limit: int = 100, estimator_type: Optional[str] = None,
+    ) -> list[MetaSignalShadow]:
+        cond = "WHERE symbol = $1"
+        params: list = [symbol]
+        if estimator_type is not None:
+            cond += " AND estimator_type = $2"
+            params.append(estimator_type)
+        params.append(limit)
+        limit_param = f"${len(params)}"
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT id, symbol, timestamp, direction, estimator_type,
+                       entry_probability, kelly_fraction, pair_index,
+                       target_pct, stop_pct, model_id
+                FROM meta_signals_shadow {cond}
+                ORDER BY timestamp DESC LIMIT {limit_param}
+                """, *params,
+            )
+        return [
+            MetaSignalShadow(
+                id=r["id"], symbol=r["symbol"], timestamp=r["timestamp"],
+                direction=r["direction"], estimator_type=r["estimator_type"],
+                entry_probability=r["entry_probability"], kelly_fraction=r["kelly_fraction"],
+                pair_index=r["pair_index"], target_pct=r["target_pct"],
+                stop_pct=r["stop_pct"], model_id=r["model_id"],
+            ) for r in rows
+        ]

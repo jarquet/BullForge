@@ -178,6 +178,48 @@ CONFIG_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "ISO-8601 UTC timestamp of the most recent completed retrain cycle. Read-only from user perspective; written by the scheduler.",
         "reference": "https://en.wikipedia.org/wiki/ISO_8601",
     },
+    "meta_min_confidence": {
+        "default": 0.55, "type": "float", "min": 0.0, "max": 1.0,
+        "label": "Meta Entry Min Confidence",
+        "description": "Minimum calibrated probability from the meta-entry model required to emit a trade signal. Higher values = fewer but more confident trades.",
+        "reference": "https://en.wikipedia.org/wiki/Probabilistic_classification",
+    },
+    "meta_kelly_cap_multiple": {
+        "default": 0.25, "type": "float", "min": 0.0, "max": 1.0,
+        "label": "Kelly Cap Multiple",
+        "description": "Fraction of full-Kelly sizing to use. 0.25 = quarter-Kelly (conservative). Full Kelly (1.0) is mathematically optimal but extremely aggressive on estimated probabilities.",
+        "reference": "https://en.wikipedia.org/wiki/Kelly_criterion",
+    },
+    "meta_hysteresis_bars": {
+        "default": 5, "type": "int", "min": 0, "max": 100,
+        "label": "Meta Hysteresis Window (bars)",
+        "description": "Suppress direction flips on the same symbol within N bars. Prevents flip-flopping when base predictions are noisy.",
+        "reference": "https://en.wikipedia.org/wiki/Hysteresis",
+    },
+    "meta_cold_start_min_rows": {
+        "default": 2000, "type": "int", "min": 100, "max": 100000,
+        "label": "Meta Cold-Start Min Rows",
+        "description": "Minimum labeled training rows (replay + live) before a meta-model is eligible for promotion. LightGBM default: 2000; MLP may need higher (5000+).",
+        "reference": "https://en.wikipedia.org/wiki/Cold_start_(recommender_systems)",
+    },
+    "meta_cold_start_min_backtest_ev": {
+        "default": 0.001, "type": "float", "min": 0.0, "max": 1.0,
+        "label": "Meta Cold-Start Min Backtest EV",
+        "description": "Minimum expected value per signal on backtest required for promotion eligibility. Configurable per symbol via dashboard overrides.",
+        "reference": "https://en.wikipedia.org/wiki/Expected_value",
+    },
+    "meta_live_weight_multiplier": {
+        "default": 3.0, "type": "float", "min": 1.0, "max": 20.0,
+        "label": "Meta Live Row Weight Multiplier",
+        "description": "Training weight applied to live inference rows relative to backtest-replay rows. Higher values make the meta-model adapt faster to live conditions.",
+        "reference": "https://en.wikipedia.org/wiki/Weighted_least_squares",
+    },
+    "meta_rolling_accuracy_window_days": {
+        "default": 30, "type": "int", "min": 7, "max": 365,
+        "label": "Meta Rolling Accuracy Window (days)",
+        "description": "Rolling window in calendar days for computing per-sub-model live accuracy and calibration error features.",
+        "reference": "https://en.wikipedia.org/wiki/Moving_average",
+    },
 }
 
 
