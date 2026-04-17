@@ -185,7 +185,7 @@ async function loadOverview() {
             '</tr>';
     }).join('');
 
-    $('last-updated').textContent = 'Updated: ' + new Date().toLocaleTimeString();
+    $('last-updated').innerHTML = 'Updated: ' + fmtTime(new Date().toISOString());
 }
 
 // -- Trading --------------------------------------------------------------
