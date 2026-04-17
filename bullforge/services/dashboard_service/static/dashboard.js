@@ -35,6 +35,10 @@ document.querySelectorAll('.tab').forEach(btn => {
 });
 
 window.addEventListener('DOMContentLoaded', () => {
+    var tzEl = document.getElementById('tz-badge');
+    if (tzEl) {
+        tzEl.textContent = 'TZ: ' + Intl.DateTimeFormat().resolvedOptions().timeZone;
+    }
     const hash = window.location.hash || '';
     if (hash.startsWith('#backtests')) {
         const btn = document.querySelector('[data-tab="backtests"]');
