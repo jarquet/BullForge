@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>fmtTime tests</title>
+<style>body{font-family:monospace}.pass{color:green}.fail{color:red}</style>
+</head>
+<body>
+<h1>fmtTime() tests</h1>
+<div id="results"></div>
+<script src="/static/dashboard.js"></script>
+<script>
+(function () {
+  const results = document.getElementById('results');
+  let passed = 0, failed = 0;
+
+  function assert(name, actual, expected) {
+    const ok = actual === expected;
+    const div = document.createElement('div');
+    div.className = ok ? 'pass' : 'fail';
+    div.textContent = (ok ? 'PASS' : 'FAIL') + ' — ' + name +
+      (ok ? '' : '\n  expected: ' + expected + '\n  actual:   ' + actual);
+    div.style.whiteSpace = 'pre';
+    results.appendChild(div);
+    if (ok) passed++; else failed++;
+    console.assert(ok, name, {expected, actual});
+  }
+
+  function assertMatch(name, actual, regex) {
+    const ok = regex.test(actual);
+    const div = document.createElement('div');
+    div.className = ok ? 'pass' : 'fail';
+    div.textContent = (ok ? 'PASS' : 'FAIL') + ' — ' + name +
+      (ok ? '' : '\n  pattern: ' + regex + '\n  actual:  ' + actual);
+    div.style.whiteSpace = 'pre';
+    results.appendChild(div);
+    if (ok) passed++; else failed++;
+    console.assert(ok, name, {pattern: regex.source, actual});
+  }
+
+  // Null / empty
+  assert('null returns --', fmtTime(null), '--');
+  assert('undefined returns --', fmtTime(undefined), '--');
+  assert('empty string returns --', fmtTime(''), '--');
+
+  // Garbage input
+  assert('garbage returns --', fmtTime('not-a-date'), '--');
+
+  // Aware ISO with Z — same instant regardless of browser TZ
+  assertMatch('aware Z: tooltip has UTC',
+    fmtTime('2026-04-16T19:46:35Z'),
+    /title="UTC: 2026-04-16T19:46:35Z"/);
+  assertMatch('aware Z: returns <time> tag',
+    fmtTime('2026-04-16T19:46:35Z'),
+    /^<time datetime="2026-04-16T19:46:35Z">.*<\/time>$/);
+  assertMatch('aware Z: local body is YYYY-MM-DD HH:MM:SS',
+    fmtTime('2026-04-16T19:46:35Z'),
+    />\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}</);
+
+  // Naive ISO (no Z, no offset) MUST be treated as UTC, same as aware case above
+  assert('naive == aware Z (same instant)',
+    fmtTime('2026-04-16T19:46:35'),
+    fmtTime('2026-04-16T19:46:35Z'));
+
+  // Aware with explicit offset
+  assertMatch('aware +00:00: tooltip is UTC Z form',
+    fmtTime('2026-04-16T19:46:35+00:00'),
+    /title="UTC: 2026-04-16T19:46:35Z"/);
+
+  // Milliseconds stripped from UTC tooltip
+  assertMatch('millis stripped',
+    fmtTime('2026-04-16T19:46:35.123Z'),
+    /title="UTC: 2026-04-16T19:46:35Z"/);
+
+  const summary = document.createElement('h2');
+  summary.textContent = passed + ' passed, ' + failed + ' failed';
+  summary.className = failed === 0 ? 'pass' : 'fail';
+  results.appendChild(summary);
+})();
+</script>
+</body>
+</html>
