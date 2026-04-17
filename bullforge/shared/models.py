@@ -98,7 +98,10 @@ class ModelMetadata:
             raise ValueError(
                 f"ModelMetadata trained_at must be UTC, got tzinfo={self.trained_at.tzinfo}"
             )
-        if self.horizon_minutes <= 0:
+        _meta_types = ("meta_entry", "meta_exec")
+        if self.horizon_minutes < 0 or (
+            self.horizon_minutes == 0 and self.model_type not in _meta_types
+        ):
             raise ValueError(
                 f"horizon_minutes must be positive, got {self.horizon_minutes}"
             )
