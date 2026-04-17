@@ -68,3 +68,17 @@ async def test_train_exec_produces_metadata():
     result = await trainer.train_exec(symbol="AAPL", direction=1, estimator_type="lightgbm", as_of=_ts())
     assert result is not None
     assert result.model_type == "meta_exec"
+
+def test_model_store_saves_and_loads_calibrated_entry(tmp_path):
+    from services.model_service.meta.calibrator import CalibratedEntryEstimator
+    from services.model_service.meta.estimators.lightgbm import LightGBMEntryEstimator
+    from services.model_service.model_store import ModelStore
+    X, y = pd.DataFrame({"f1": np.random.rand(100)}), pd.Series(np.random.choice([0, 1], 100))
+    base = LightGBMEntryEstimator()
+    cal = CalibratedEntryEstimator(base)
+    cal.fit(X, y, X_cal=X[:20], y_cal=y[:20])
+    store = ModelStore(str(tmp_path))
+    path = store.save(cal, "AAPL", "1m", 0, "meta_entry_lightgbm")
+    loaded = store.load(path)
+    proba = loaded.predict_proba(X[:5])
+    assert proba.shape == (5, 2)
