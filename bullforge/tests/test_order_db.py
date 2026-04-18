@@ -241,16 +241,19 @@ async def test_insert_order_writes_origin_and_reconcile_fields(
     oid = await db.insert_order(order)
     assert oid == 99
 
-    # Verify positional args: args[0] is SQL, args[1..15] are parameters
+    # Verify positional args: args[0] is SQL, args[1..17] are parameters
     # Column order: symbol, side, quantity, order_type, submitted_at, signal_strength,
     #              alpaca_order_id, status, filled_at, filled_price, filled_quantity,
-    #              limit_price, origin, last_reconciled_at, reconcile_source
+    #              limit_price, origin, last_reconciled_at, reconcile_source,
+    #              backtest_run_id, fold_index
     call_args = conn.fetchval.await_args.args
-    assert len(call_args) == 16  # SQL + 15 params
+    assert len(call_args) == 18  # SQL + 17 params
     assert "INSERT INTO orders" in call_args[0]  # SQL
     assert call_args[13] == "external"  # origin at position 13
     assert call_args[14] is None  # last_reconciled_at at position 14
     assert call_args[15] == "submit"  # reconcile_source at position 15
+    assert call_args[16] is None  # backtest_run_id at position 16
+    assert call_args[17] is None  # fold_index at position 17
 
 
 @pytest.mark.asyncio
