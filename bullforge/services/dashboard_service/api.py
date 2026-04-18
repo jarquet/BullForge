@@ -9,6 +9,7 @@ from shared.db import Database
 from shared.time_window import parse_time_window
 
 from services.dashboard_service.backtests_api import register_backtests_routes
+from services.dashboard_service.models_api import register_models_routes
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ def create_api_app(db: Database) -> web.Application:
     app.router.add_get("/api/halts", _handle_halts)
 
     register_backtests_routes(app)
+    register_models_routes(app)
 
     return app
 
