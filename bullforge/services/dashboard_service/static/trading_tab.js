@@ -43,7 +43,86 @@
 
   var handlers = {
     overview: async function () {
-      panel().innerHTML = '<p class="empty-state">Overview sub-tab placeholder (Task 4).</p>';
+      panel().innerHTML =
+        '<div class="card-grid">' +
+          '<div class="card"><h3>Total Trades</h3><div id="tov-total-trades" class="metric-value">--</div></div>' +
+          '<div class="card"><h3>Win Rate</h3><div id="tov-win-rate" class="metric-value">--</div></div>' +
+          '<div class="card"><h3>Total P&amp;L</h3><div id="tov-total-pnl" class="metric-value">--</div></div>' +
+          '<div class="card"><h3>Profit Factor</h3><div id="tov-profit-factor" class="metric-value">--</div></div>' +
+          '<div class="card"><h3>Sharpe Ratio</h3><div id="tov-sharpe" class="metric-value">--</div></div>' +
+          '<div class="card"><h3>Avg Win</h3><div id="tov-avg-win" class="metric-value">--</div></div>' +
+          '<div class="card"><h3>Avg Loss</h3><div id="tov-avg-loss" class="metric-value">--</div></div>' +
+          '<div class="card"><h3>Avg Hold</h3><div id="tov-avg-hold" class="metric-value">--</div></div>' +
+        '</div>' +
+        '<div class="card-grid">' +
+          '<div class="card"><h3>Current Streak</h3><div id="tov-cur-streak" class="metric-value">--</div></div>' +
+          '<div class="card"><h3>Longest Win Streak</h3><div id="tov-long-win" class="metric-value">--</div></div>' +
+          '<div class="card"><h3>Longest Loss Streak</h3><div id="tov-long-loss" class="metric-value">--</div></div>' +
+          '<div class="card"><h3>Exposure Now</h3><div id="tov-exposure" class="metric-value">--</div></div>' +
+        '</div>' +
+        '<h3 style="margin-top:1rem;">Per-Symbol Breakdown</h3>' +
+        '<div id="tov-symbols" class="symbol-grid"></div>';
+
+      // Reuse existing /api/metrics/trading and /api/metrics/symbols endpoints.
+      var [trading, symbols, streaks, exposure] = await Promise.all([
+        fetchJSON('/api/metrics/trading?window=all'),
+        fetchJSON('/api/metrics/symbols'),
+        fetchJSON('/api/trading/streaks'),
+        fetchJSON('/api/trading/exposure'),
+      ]);
+
+      function fmtMoney(n) {
+        if (n == null) return '--';
+        var sign = n >= 0 ? '' : '-';
+        return sign + '$' + Math.abs(n).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      }
+      function fmtPct(n) { return n == null ? '--' : (n * 100).toFixed(1) + '%'; }
+      function fmtDur(s) {
+        if (s == null) return '--';
+        if (s < 60) return s + 's';
+        if (s < 3600) return Math.floor(s / 60) + 'm';
+        return Math.floor(s / 3600) + 'h';
+      }
+
+      var m = trading.metrics || {};
+      $('tov-total-trades').textContent = m.total_trades != null ? m.total_trades : '--';
+      $('tov-win-rate').textContent = fmtPct(m.win_rate);
+      $('tov-total-pnl').innerHTML = fmtMoney(m.total_pnl);
+      $('tov-total-pnl').className = 'metric-value ' + (m.total_pnl >= 0 ? 'positive' : 'negative');
+      $('tov-profit-factor').textContent = m.profit_factor != null ? m.profit_factor.toFixed(2) : '--';
+      $('tov-sharpe').textContent = m.sharpe_ratio != null ? m.sharpe_ratio.toFixed(2) : '--';
+      $('tov-avg-win').innerHTML = fmtMoney(m.avg_win);
+      $('tov-avg-loss').innerHTML = fmtMoney(m.avg_loss);
+      $('tov-avg-hold').textContent = fmtDur(m.avg_hold_duration_seconds);
+
+      // Streaks
+      var streakText = streaks.current_streak_kind === 'win'
+        ? '+' + streaks.current_streak_length + ' wins'
+        : (streaks.current_streak_kind === 'loss'
+            ? '-' + streaks.current_streak_length + ' losses'
+            : '--');
+      $('tov-cur-streak').innerHTML = '<span class="' +
+        (streaks.current_streak_kind === 'win' ? 'positive' : 'negative') +
+        '">' + streakText + '</span>';
+      $('tov-long-win').innerHTML = '<span class="positive">' + streaks.longest_win_streak + '</span>';
+      $('tov-long-loss').innerHTML = '<span class="negative">' + streaks.longest_loss_streak + '</span>';
+
+      // Exposure now = last point in exposure timeline.
+      var now_pct = exposure.length > 0 ? exposure[exposure.length - 1].total_exposure_pct : 0;
+      $('tov-exposure').textContent = (now_pct * 100).toFixed(1) + '%';
+
+      // Per-symbol grid.
+      var symNames = Object.keys(symbols).sort();
+      $('tov-symbols').innerHTML = symNames.map(function (sym) {
+        var s = symbols[sym].metrics || {};
+        var pnlCls = (s.total_pnl || 0) >= 0 ? 'positive' : 'negative';
+        return '<a class="symbol-card" href="#trading/symbols/' + sym + '">' +
+          '<div class="symbol-name">' + sym + '</div>' +
+          '<div class="symbol-stat">Trades: ' + (s.total_trades || 0) + '</div>' +
+          '<div class="symbol-stat">Win: ' + fmtPct(s.win_rate) + '</div>' +
+          '<div class="symbol-stat ' + pnlCls + '">P&L: ' + fmtMoney(s.total_pnl) + '</div>' +
+          '</a>';
+      }).join('');
     },
     equity: async function () {
       panel().innerHTML = '<p class="empty-state">Equity Curve sub-tab placeholder (Task 5).</p>';
