@@ -22,6 +22,21 @@ ALTER TABLE backtest.predictions    ADD COLUMN IF NOT EXISTS fold_index INTEGER;
 ALTER TABLE backtest.orders         ADD COLUMN IF NOT EXISTS backtest_run_id BIGINT;
 ALTER TABLE backtest.orders         ADD COLUMN IF NOT EXISTS fold_index INTEGER;
 
+-- Drop unscoped indexes inherited from `LIKE public.<t> INCLUDING ALL` in
+-- migration 014. These enforced cross-run uniqueness on
+-- (symbol, timeframe, horizon_minutes, model_type) WHERE is_active = TRUE,
+-- preventing concurrent runs on overlapping combos. The scoped index created
+-- below replaces the constraint with the right granularity.
+--
+-- Postgres auto-renames indexes when copying via LIKE INCLUDING ALL based on
+-- the columns, not the original name. We drop them by their actual names.
+DROP INDEX IF EXISTS backtest.idx_model_registry_active;
+DROP INDEX IF EXISTS backtest.backtest_idx_model_registry_active;
+DROP INDEX IF EXISTS backtest.model_registry_symbol_timeframe_horizon_minutes_model_type_idx;
+DROP INDEX IF EXISTS backtest.idx_model_registry_meta_active;
+DROP INDEX IF EXISTS backtest.backtest_idx_model_registry_meta_active;
+DROP INDEX IF EXISTS backtest.model_registry_symbol_timeframe_horizon_minutes_model_type_estimator_type_idx;
+
 -- Wipe intermediate backtest data. User-visible backtest results live in
 -- public.backtest_trades / backtest_equity / backtest_folds (already
 -- run_id-scoped) and are NOT touched.

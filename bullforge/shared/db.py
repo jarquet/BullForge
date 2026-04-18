@@ -285,6 +285,23 @@ class Database:
 
         for r in public_idx:
             body = _index_body(r["indexdef"])
+
+            # Skip unscoped partial unique indexes on model_registry that would
+            # enforce cross-run uniqueness. These are replaced by scoped versions
+            # in migration 018 that include (backtest_run_id, fold_index).
+            # The unscoped indexes block concurrent backtest runs on overlapping
+            # (symbol, timeframe, horizon_minutes, model_type) combos.
+            if table == "model_registry" and "WHERE" in r["indexdef"] and "is_active" in r["indexdef"]:
+                # Only skip if there's a scoped equivalent in backtest
+                scoped_pattern = f"(backtest_run_id, fold_index"
+                scoped_exists = any(scoped_pattern in _index_body(row["indexdef"])
+                                   for row in rows
+                                   if row["schemaname"] == "backtest" and "WHERE" in row["indexdef"])
+                if scoped_exists:
+                    logger.info("sync_sandbox: skipping unscoped unique index %s on %s; "
+                               "scoped version exists in backtest", r["indexname"], table)
+                    continue
+
             if body in backtest_bodies:
                 continue
             new_ddl = _rewrite_index_for_backtest(r["indexdef"], r["indexname"], table)
