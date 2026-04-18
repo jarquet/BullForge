@@ -32,6 +32,24 @@ from services.monitoring_service.telegram_alerts import (
 logger = logging.getLogger(__name__)
 
 
+HELP_TEXT = (
+    "BullForge commands:\n"
+    "/help — this list\n"
+    "/status — equity, exposure %, trades/win-rate/PnL today, "
+    "model counts (active/warned/disabled), max bar age, "
+    "active halt count, last retrain time\n"
+    "/positions — open broker positions with symbol, side, "
+    "quantity, and market value\n"
+    "/trades — last 5 closed trades with entry/exit prices, "
+    "PnL, and hold duration\n"
+    "/models — configured models with type, symbol, timeframe, "
+    "horizon, status, and latest metrics\n"
+    "/halt — trigger a manual full trading halt (tier 5)\n"
+    "/resume — clear all active halts and resume trading\n"
+    "/start — welcome message with this chat's ID"
+)
+
+
 def _build_keyboard(
     buttons: list[list[tuple[str, str]]],
 ) -> InlineKeyboardMarkup:
@@ -165,8 +183,7 @@ class TelegramBot:
         await update.message.reply_text(
             f"BullForge monitoring bot active.\n"
             f"Chat ID: {chat_id}\n\n"
-            f"Commands:\n"
-            f"/status — View system status\n"
+            f"Type /help for the full command list."
         )
 
     async def _cmd_status(
@@ -339,6 +356,12 @@ async def handle_resume(
     await update.message.reply_text("Trading resumed. All halts cleared.")
 
 
+async def handle_help(
+    update, context, *, db, broker_client, runtime_config, halt_manager,
+):
+    await update.message.reply_text(HELP_TEXT)
+
+
 async def _wrap(
     fn, update: Update, context: ContextTypes.DEFAULT_TYPE, *, deps,
 ):
@@ -373,4 +396,7 @@ def register_handlers(
     )
     app.add_handler(
         CommandHandler("resume", partial(_wrap, handle_resume, deps=deps))
+    )
+    app.add_handler(
+        CommandHandler("help", partial(_wrap, handle_help, deps=deps))
     )

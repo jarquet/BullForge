@@ -4,7 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 from services.monitoring_service.telegram_bot import (
     handle_status, handle_positions, handle_trades,
-    handle_models, handle_halt, handle_resume,
+    handle_models, handle_halt, handle_resume, handle_help,
+    register_handlers, HELP_TEXT,
 )
 
 
@@ -94,6 +95,36 @@ async def test_trades_empty(update, context, deps):
     await handle_trades(update, context, **deps)
     sent = update.message.reply_text.call_args[0][0]
     assert "No recent trades" in sent
+
+
+@pytest.mark.asyncio
+async def test_help_lists_all_user_facing_commands(update, context, deps):
+    await handle_help(update, context, **deps)
+    update.message.reply_text.assert_awaited_once()
+    sent = update.message.reply_text.call_args[0][0]
+    for cmd in (
+        "/help", "/status", "/positions", "/trades",
+        "/models", "/halt", "/resume",
+    ):
+        assert cmd in sent, f"{cmd} missing from /help response"
+
+
+def test_help_text_covers_every_registered_command():
+    registered: set[str] = set()
+
+    class _FakeApp:
+        def add_handler(self, handler):
+            registered.update(handler.commands)
+
+    register_handlers(
+        _FakeApp(),
+        db=MagicMock(), broker_client=MagicMock(),
+        runtime_config=MagicMock(), halt_manager=MagicMock(),
+    )
+    for cmd in registered:
+        assert f"/{cmd}" in HELP_TEXT, (
+            f"/{cmd} is registered but not described in HELP_TEXT"
+        )
 
 
 @pytest.mark.asyncio
