@@ -88,49 +88,20 @@
 
     <!-- Trading Tab -->
     <section id="tab-trading" class="tab-content">
-        <div class="window-selector">
-            <button class="window-btn active" data-window="all">All Time</button>
-            <button class="window-btn" data-window="last_50">Last 50</button>
-            <button class="window-btn" data-window="last_20">Last 20</button>
+        <div class="subtab-bar" id="trading-subtabs">
+            <button class="subtab active" data-subtab="overview">Overview</button>
+            <button class="subtab" data-subtab="equity">Equity Curve</button>
+            <button class="subtab" data-subtab="distributions">Distributions</button>
+            <button class="subtab" data-subtab="streaks">Streaks &amp; Exposure</button>
+            <button class="subtab" data-subtab="heatmaps">Heatmaps</button>
+            <button class="subtab" data-subtab="benchmark">Benchmark</button>
         </div>
-
-        <div class="card-grid">
-            <div class="card">
-                <h3>Total Trades</h3>
-                <div id="tr-total-trades" class="metric-value">--</div>
-            </div>
-            <div class="card">
-                <h3>Win Rate</h3>
-                <div id="tr-win-rate" class="metric-value">--</div>
-            </div>
-            <div class="card">
-                <h3>Total P&amp;L</h3>
-                <div id="tr-total-pnl" class="metric-value">--</div>
-            </div>
-            <div class="card">
-                <h3>Profit Factor</h3>
-                <div id="tr-profit-factor" class="metric-value">--</div>
-            </div>
-            <div class="card">
-                <h3>Sharpe Ratio</h3>
-                <div id="tr-sharpe" class="metric-value">--</div>
-            </div>
-            <div class="card">
-                <h3>Avg Win</h3>
-                <div id="tr-avg-win" class="metric-value">--</div>
-            </div>
-            <div class="card">
-                <h3>Avg Loss</h3>
-                <div id="tr-avg-loss" class="metric-value">--</div>
-            </div>
-            <div class="card">
-                <h3>Avg Hold Time</h3>
-                <div id="tr-avg-hold" class="metric-value">--</div>
-            </div>
+        <div class="subtab-toolbar" id="trading-toolbar">
+            <span class="toolbar-label">Window:</span>
+            <span id="trading-timewindow-slot"></span>
+            <span id="trading-refresh-slot" class="toolbar-right"></span>
         </div>
-
-        <h2>Per-Symbol Breakdown</h2>
-        <div id="tr-symbols" class="symbol-grid"></div>
+        <div id="trading-panel"></div>
     </section>
 
     <!-- Models Tab -->
@@ -239,6 +210,7 @@
     <script src="/static/components/drilldown.js"></script>
     <script src="/static/dashboard.js"></script>
     <script src="/static/models_tab.js"></script>
+    <script src="/static/trading_tab.js"></script>
     <script src="/static/backtests.js?v=2"></script>
 </body>
 </html>
