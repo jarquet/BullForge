@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>TimeWindow tests</title>
+<style>body{font-family:monospace}.pass{color:green}.fail{color:red}
+#host{border:1px solid #888;padding:1em;margin:1em 0;display:inline-block}
+</style>
+</head>
+<body>
+<h1>TimeWindow tests</h1>
+<div id="host"></div>
+<div id="results"></div>
+<script src="/static/components/timewindow.js"></script>
+<script>
+(function () {
+  var results = document.getElementById('results');
+  var host = document.getElementById('host');
+  var passed = 0, failed = 0;
+
+  function assert(name, cond, detail) {
+    var ok = !!cond;
+    var div = document.createElement('div');
+    div.className = ok ? 'pass' : 'fail';
+    div.style.whiteSpace = 'pre';
+    div.textContent = (ok ? 'PASS' : 'FAIL') + ' — ' + name + (ok || !detail ? '' : '\n  ' + detail);
+    results.appendChild(div);
+    if (ok) passed++; else failed++;
+  }
+
+  // Clear any prior sessionStorage for determinism.
+  sessionStorage.removeItem('tw.test');
+
+  var lastEvent = null;
+  var tw = window.TimeWindow.create({
+    mountEl: host,
+    storageKey: 'tw.test',
+    onChange: function (range) { lastEvent = range; },
+  });
+
+  assert('mounts a <select> element', host.querySelector('select') !== null);
+
+  var presets = Array.prototype.map.call(host.querySelectorAll('select option'),
+    function (o) { return o.value; });
+  assert('has expected presets',
+    presets.indexOf('1d') >= 0 && presets.indexOf('7d') >= 0 &&
+    presets.indexOf('30d') >= 0 && presets.indexOf('90d') >= 0 &&
+    presets.indexOf('180d') >= 0 && presets.indexOf('1y') >= 0 &&
+    presets.indexOf('all') >= 0 && presets.indexOf('custom') >= 0,
+    'presets found: ' + presets.join(','));
+
+  tw.setPreset('7d');
+  assert('setPreset fires onChange', lastEvent !== null);
+  assert('7d preset has from and to',
+    lastEvent && lastEvent.from && lastEvent.to,
+    'got: ' + JSON.stringify(lastEvent));
+
+  // Window of 7d means to - from ≈ 7 * 86400 * 1000 ms.
+  var diff = new Date(lastEvent.to) - new Date(lastEvent.from);
+  var expected = 7 * 86400 * 1000;
+  assert('7d preset diff is ~7 days',
+    Math.abs(diff - expected) < 60 * 1000,
+    'diff ms: ' + diff);
+
+  tw.setPreset('all');
+  assert('all preset has from=null and to=null',
+    lastEvent && lastEvent.from === null && lastEvent.to === null,
+    'got: ' + JSON.stringify(lastEvent));
+
+  // Persistence across a fresh instance.
+  tw.setPreset('30d');
+  var tw2 = window.TimeWindow.create({
+    mountEl: document.createElement('div'),
+    storageKey: 'tw.test',
+    onChange: function () {},
+  });
+  assert('preset persisted via sessionStorage',
+    tw2.getCurrentPreset() === '30d',
+    'got: ' + tw2.getCurrentPreset());
+
+  // Custom range
+  tw.setCustom('2026-04-01T00:00:00Z', '2026-04-17T00:00:00Z');
+  assert('custom range sets preset to custom',
+    tw.getCurrentPreset() === 'custom');
+  assert('custom range fires onChange with exact values',
+    lastEvent.from === '2026-04-01T00:00:00Z' &&
+    lastEvent.to === '2026-04-17T00:00:00Z',
+    'got: ' + JSON.stringify(lastEvent));
+
+  sessionStorage.removeItem('tw.test');
+  var summary = document.createElement('div');
+  summary.style.marginTop = '1em';
+  summary.textContent = 'Results: ' + passed + ' passed, ' + failed + ' failed';
+  results.appendChild(summary);
+  document.title = failed === 0 ? 'PASS — TimeWindow tests' : 'FAIL — TimeWindow tests';
+})();
+</script>
+</body>
+</html>

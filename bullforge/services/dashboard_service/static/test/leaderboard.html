@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Leaderboard tests</title>
+<style>
+body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; }
+.pass { color: #2ecc71; } .fail { color: #e74c3c; }
+#host { background: #16213e; padding: 1em; margin: 1em 0; }
+</style>
+</head>
+<body>
+<h1>Leaderboard tests</h1>
+<div id="host"></div>
+<div id="results"></div>
+<script src="/static/components/leaderboard.js"></script>
+<script>
+(function () {
+  var host = document.getElementById('host');
+  var results = document.getElementById('results');
+  var passed = 0, failed = 0;
+  function assert(name, cond, detail) {
+    var ok = !!cond;
+    var div = document.createElement('div');
+    div.className = ok ? 'pass' : 'fail';
+    div.style.whiteSpace = 'pre';
+    div.textContent = (ok ? 'PASS' : 'FAIL') + ' — ' + name + (ok || !detail ? '' : '\n  ' + detail);
+    results.appendChild(div);
+    if (ok) passed++; else failed++;
+  }
+
+  var rows = [
+    {symbol: 'AAPL', horizon: 5, accuracy: 0.62, pnl: 123.45},
+    {symbol: 'MSFT', horizon: 5, accuracy: 0.58, pnl: -45.10},
+    {symbol: 'SPY',  horizon: 10, accuracy: 0.71, pnl: 210.00},
+  ];
+
+  var lb = window.Leaderboard.create({
+    mountEl: host,
+    columns: [
+      {key: 'symbol', label: 'Symbol', sortable: true},
+      {key: 'horizon', label: 'Horizon', sortable: true},
+      {key: 'accuracy', label: 'Accuracy', sortable: true,
+       render: function (v) { return (v * 100).toFixed(1) + '%'; }},
+      {key: 'pnl', label: 'P&L', sortable: true,
+       render: function (v) { return (v >= 0 ? '+' : '') + '$' + v.toFixed(2); }},
+    ],
+    rows: rows,
+    getRowHref: function (r) { return '#models/' + r.symbol; },
+  });
+
+  assert('renders a table', host.querySelector('table') !== null);
+  assert('renders N rows', host.querySelectorAll('tbody tr').length === 3);
+
+  // Click sort on accuracy.
+  var accHeader = host.querySelectorAll('thead th')[2];
+  accHeader.click();
+  var cells = host.querySelectorAll('tbody tr td:first-child');
+  assert('sort by accuracy desc places SPY first',
+    cells[0].textContent === 'SPY',
+    'got: ' + cells[0].textContent);
+
+  accHeader.click();  // toggle asc
+  cells = host.querySelectorAll('tbody tr td:first-child');
+  assert('sort by accuracy asc places MSFT first',
+    cells[0].textContent === 'MSFT',
+    'got: ' + cells[0].textContent);
+
+  // Row href
+  var firstLink = host.querySelector('tbody tr td a');
+  assert('rows are clickable links via getRowHref',
+    firstLink && firstLink.getAttribute('href') === '#models/MSFT',
+    'first row link: ' + (firstLink && firstLink.getAttribute('href')));
+
+  // Re-render updates data.
+  lb.update([{symbol: 'NVDA', horizon: 5, accuracy: 0.9, pnl: 1000}]);
+  assert('update() replaces rows', host.querySelectorAll('tbody tr').length === 1);
+
+  var summary = document.createElement('div');
+  summary.style.marginTop = '1em';
+  summary.textContent = 'Results: ' + passed + ' passed, ' + failed + ' failed';
+  results.appendChild(summary);
+  document.title = failed === 0 ? 'PASS — Leaderboard tests' : 'FAIL — Leaderboard tests';
+})();
+</script>
+</body>
+</html>

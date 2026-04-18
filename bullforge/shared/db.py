@@ -1355,21 +1355,29 @@ class Database:
         scope: str,
         window: str,
         limit: int = 60,
+        *,
+        from_dt: Optional[datetime] = None,
+        to_dt: Optional[datetime] = None,
     ) -> list[dict]:
+        query = """
+            SELECT id, timestamp, category, scope, window, metrics
+            FROM metric_snapshots
+            WHERE category = $1 AND scope = $2 AND window = $3
+        """
+        args: list = [category, scope, window]
+        idx = 4
+        if from_dt is not None:
+            query += f" AND timestamp >= ${idx}"
+            args.append(from_dt)
+            idx += 1
+        if to_dt is not None:
+            query += f" AND timestamp < ${idx}"
+            args.append(to_dt)
+            idx += 1
+        query += f" ORDER BY timestamp DESC LIMIT ${idx}"
+        args.append(limit)
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT id, timestamp, category, scope, "window", metrics
-                FROM metric_snapshots
-                WHERE category = $1 AND scope = $2 AND "window" = $3
-                ORDER BY timestamp DESC
-                LIMIT $4
-                """,
-                category,
-                scope,
-                window,
-                limit,
-            )
+            rows = await conn.fetch(query, *args)
         return [
             {
                 "id": r["id"],
@@ -1377,7 +1385,7 @@ class Database:
                 "category": r["category"],
                 "scope": r["scope"],
                 "window": r["window"],
-                "metrics": json.loads(r["metrics"]),
+                "metrics": json.loads(r["metrics"]) if isinstance(r["metrics"], str) else r["metrics"],
             }
             for r in rows
         ]

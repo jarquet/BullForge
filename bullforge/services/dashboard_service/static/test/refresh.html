@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Refresh tests</title>
+<style>body{font-family:monospace}.pass{color:green}.fail{color:red}
+#host{border:1px solid #888;padding:1em;margin:1em 0;display:inline-block}
+</style>
+</head>
+<body>
+<h1>Refresh tests</h1>
+<div id="host"></div>
+<div id="results"></div>
+<script src="/static/components/refresh.js"></script>
+<script>
+(function () {
+  var results = document.getElementById('results');
+  var host = document.getElementById('host');
+  var passed = 0, failed = 0;
+
+  function assert(name, cond, detail) {
+    var ok = !!cond;
+    var div = document.createElement('div');
+    div.className = ok ? 'pass' : 'fail';
+    div.style.whiteSpace = 'pre';
+    div.textContent = (ok ? 'PASS' : 'FAIL') + ' — ' + name + (ok || !detail ? '' : '\n  ' + detail);
+    results.appendChild(div);
+    if (ok) passed++; else failed++;
+  }
+
+  sessionStorage.removeItem('refresh.test');
+
+  var fireCount = 0;
+  var ctrl = window.Refresh.create({
+    mountEl: host,
+    storageKey: 'refresh.test',
+    onRefresh: function () { fireCount++; },
+    tickMs: 100,  // 100ms for test purposes
+    initialIntervalSec: 0.1,  // 100ms
+  });
+
+  assert('has interval selector', host.querySelector('select') !== null);
+  assert('has pause button', host.querySelector('button') !== null);
+
+  // Let it fire a couple of times.
+  setTimeout(function () {
+    assert('fires onRefresh while running', fireCount >= 1,
+      'fired ' + fireCount + ' times in 250ms');
+
+    ctrl.pause();
+    var beforePause = fireCount;
+    setTimeout(function () {
+      assert('does not fire while paused', fireCount === beforePause,
+        'paused, but fired ' + (fireCount - beforePause) + ' more times');
+
+      // Persistence.
+      var ctrl2 = window.Refresh.create({
+        mountEl: document.createElement('div'),
+        storageKey: 'refresh.test',
+        onRefresh: function () {},
+        tickMs: 100,
+        initialIntervalSec: 30,
+      });
+      assert('paused state persists', ctrl2.isPaused() === true);
+      ctrl2.destroy();
+      ctrl.destroy();
+
+      sessionStorage.removeItem('refresh.test');
+      var summary = document.createElement('div');
+      summary.style.marginTop = '1em';
+      summary.textContent = 'Results: ' + passed + ' passed, ' + failed + ' failed';
+      results.appendChild(summary);
+      document.title = failed === 0 ? 'PASS — Refresh tests' : 'FAIL — Refresh tests';
+    }, 250);
+  }, 250);
+})();
+</script>
+</body>
+</html>

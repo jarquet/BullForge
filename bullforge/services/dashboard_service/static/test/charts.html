@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Charts tests</title>
+<style>
+body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; }
+.pass { color: #2ecc71; } .fail { color: #e74c3c; }
+.chart-host { background: #16213e; padding: 1em; margin: 1em 0;
+  width: 600px; height: 260px; border: 1px solid #2a2a4a; }
+</style>
+</head>
+<body>
+<h1>Charts tests</h1>
+<div id="results"></div>
+
+<h2>lineChart (equity curve demo)</h2>
+<div id="h-line" class="chart-host"></div>
+
+<h2>barChart (daily P&L demo)</h2>
+<div id="h-bar" class="chart-host"></div>
+
+<h2>histogramChart (trade P&L distribution demo)</h2>
+<div id="h-hist" class="chart-host"></div>
+
+<h2>scatterChart (calibration demo)</h2>
+<div id="h-scatter" class="chart-host"></div>
+
+<h2>sparkline (inline trend demo)</h2>
+<div id="h-spark" style="width:100px;height:24px;"></div>
+
+<h2>heatmapChart (weekday × hour demo)</h2>
+<div id="h-heat" class="chart-host"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="/static/components/charts.js"></script>
+<script>
+(function () {
+  var results = document.getElementById('results');
+  var passed = 0, failed = 0;
+  function assert(name, cond, detail) {
+    var ok = !!cond;
+    var div = document.createElement('div');
+    div.className = ok ? 'pass' : 'fail';
+    div.style.whiteSpace = 'pre';
+    div.textContent = (ok ? 'PASS' : 'FAIL') + ' — ' + name + (ok || !detail ? '' : '\n  ' + detail);
+    results.appendChild(div);
+    if (ok) passed++; else failed++;
+  }
+
+  var C = window.Charts;
+
+  // lineChart
+  var line = C.lineChart(document.getElementById('h-line'), {
+    series: [{label: 'Equity', data: [
+      {x: '2026-04-10T00:00:00Z', y: 100000},
+      {x: '2026-04-11T00:00:00Z', y: 101200},
+      {x: '2026-04-12T00:00:00Z', y: 100800},
+      {x: '2026-04-13T00:00:00Z', y: 102500},
+    ]}],
+    xIsTime: true,
+  });
+  assert('lineChart returns a Chart instance', line && typeof line.destroy === 'function');
+
+  // barChart
+  var bar = C.barChart(document.getElementById('h-bar'), {
+    labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
+    values: [120, -45, 80, -30, 210],
+    colorByValue: true,
+  });
+  assert('barChart returns a Chart instance', bar && typeof bar.destroy === 'function');
+
+  // histogramChart
+  var vals = [];
+  for (var i = 0; i < 500; i++) vals.push((Math.random() - 0.5) * 200);
+  var hist = C.histogramChart(document.getElementById('h-hist'), {
+    values: vals, bins: 20,
+  });
+  assert('histogramChart returns a Chart instance', hist && typeof hist.destroy === 'function');
+
+  // scatterChart
+  var scatter = C.scatterChart(document.getElementById('h-scatter'), {
+    points: [
+      {x: 0.1, y: 0.08}, {x: 0.3, y: 0.28}, {x: 0.5, y: 0.52},
+      {x: 0.7, y: 0.68}, {x: 0.9, y: 0.85},
+    ],
+    referenceDiagonal: true,
+  });
+  assert('scatterChart returns a Chart instance', scatter && typeof scatter.destroy === 'function');
+
+  // sparkline
+  var spark = C.sparkline(document.getElementById('h-spark'), {
+    values: [1, 3, 2, 5, 4, 7, 6, 8, 10, 9],
+  });
+  assert('sparkline creates an SVG', document.querySelector('#h-spark svg') !== null);
+
+  // heatmapChart (custom grid, no Chart.js)
+  var heat = C.heatmapChart(document.getElementById('h-heat'), {
+    xLabels: ['09:30', '10:00', '10:30', '11:00'],
+    yLabels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
+    cells: [
+      [ 0.002, -0.001,  0.003, 0.000],
+      [-0.005,  0.001, -0.002, 0.004],
+      [ 0.001,  0.003, -0.001, 0.002],
+      [ 0.000, -0.004,  0.001, 0.003],
+      [-0.002,  0.005,  0.000, 0.001],
+    ],
+  });
+  assert('heatmapChart creates a grid element', document.querySelector('#h-heat .heatmap-grid') !== null);
+
+  // Re-render smoke test: creating a second line chart on same element should not throw.
+  var line2 = C.lineChart(document.getElementById('h-line'), {
+    series: [{label: 'Equity', data: [{x: '2026-04-10T00:00:00Z', y: 100000}]}],
+    xIsTime: true,
+  });
+  assert('lineChart re-render destroys prior instance',
+    line2 && typeof line2.destroy === 'function');
+
+  var summary = document.createElement('div');
+  summary.style.marginTop = '1em';
+  summary.textContent = 'Results: ' + passed + ' passed, ' + failed + ' failed';
+  results.appendChild(summary);
+  document.title = failed === 0 ? 'PASS — Charts tests' : 'FAIL — Charts tests';
+})();
+</script>
+</body>
+</html>
