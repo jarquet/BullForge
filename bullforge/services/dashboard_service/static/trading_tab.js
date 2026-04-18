@@ -172,7 +172,61 @@
       await render();
     },
     distributions: async function () {
-      panel().innerHTML = '<p class="empty-state">Distributions sub-tab placeholder (Task 6).</p>';
+      panel().innerHTML =
+        '<h3>Daily P&L</h3>' +
+        '<div id="dist-daily-host" class="chart-host" style="width:100%;height:220px;"></div>' +
+        '<h3 style="margin-top:1rem;">Trade P&L histogram</h3>' +
+        '<div id="dist-hist-host" class="chart-host" style="width:100%;height:240px;"></div>' +
+        '<div id="dist-hist-summary" style="color:var(--text-muted);font-size:0.85rem;"></div>' +
+        '<h3 style="margin-top:1rem;">Hold-time buckets</h3>' +
+        '<div id="dist-hold-host" class="chart-host" style="width:100%;height:220px;"></div>' +
+        '<h3 style="margin-top:1rem;">Side breakdown</h3>' +
+        '<div id="dist-side"></div>';
+
+      var data = await fetchJSON('/api/trading/distributions');
+
+      // Daily P&L bars.
+      window.Charts.barChart($('dist-daily-host'), {
+        labels: data.daily_pnl.map(function (d) {
+          return (d.date || '').slice(0, 10);
+        }),
+        values: data.daily_pnl.map(function (d) { return d.pnl; }),
+        colorByValue: true, yLabel: 'P&L ($)',
+      });
+
+      // Histogram.
+      var hist = data.trade_pnl_histogram;
+      window.Charts.barChart($('dist-hist-host'), {
+        labels: hist.labels.map(function (v) { return String(v); }),
+        values: hist.counts, colorByValue: false, yLabel: 'Count',
+      });
+      $('dist-hist-summary').textContent =
+        'Median: $' + hist.median.toFixed(2) + ' · Mean: $' + hist.mean.toFixed(2);
+
+      // Hold-time buckets.
+      window.Charts.barChart($('dist-hold-host'), {
+        labels: data.hold_time_buckets.map(function (b) {
+          return b.bucket + ' (' + b.trades + ')';
+        }),
+        values: data.hold_time_buckets.map(function (b) { return b.avg_pnl; }),
+        colorByValue: true, yLabel: 'Avg P&L per trade ($)',
+      });
+
+      // Side breakdown table.
+      $('dist-side').innerHTML =
+        '<table class="data-table" style="max-width:500px;"><thead><tr>' +
+        '<th>Side</th><th>Trades</th><th>Wins</th><th>Win Rate</th>' +
+        '<th>Total P&L</th><th>Avg P&L</th>' +
+        '</tr></thead><tbody>' +
+        data.side_breakdown.map(function (s) {
+          var cls = (s.total_pnl || 0) >= 0 ? 'positive' : 'negative';
+          return '<tr><td>' + s.side + '</td>' +
+            '<td>' + s.trades + '</td>' +
+            '<td>' + s.wins + '</td>' +
+            '<td>' + (s.win_rate * 100).toFixed(1) + '%</td>' +
+            '<td class="' + cls + '">$' + s.total_pnl.toFixed(2) + '</td>' +
+            '<td>$' + s.avg_pnl.toFixed(2) + '</td></tr>';
+        }).join('') + '</tbody></table>';
     },
     streaks: async function () {
       panel().innerHTML = '<p class="empty-state">Streaks & Exposure sub-tab placeholder (Task 7).</p>';
