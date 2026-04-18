@@ -125,7 +125,51 @@
       }).join('');
     },
     equity: async function () {
-      panel().innerHTML = '<p class="empty-state">Equity Curve sub-tab placeholder (Task 5).</p>';
+      panel().innerHTML =
+        '<p class="subtitle">Realized equity over time. Drawdown shaded where below trailing peak. Toggle SPY overlay to compare.</p>' +
+        '<div style="margin-bottom:0.5rem;">' +
+        '<label><input type="checkbox" id="eq-spy-toggle"> Overlay SPY buy-and-hold</label>' +
+        '</div>' +
+        '<div id="eq-chart-host" class="chart-host" style="width:100%;height:420px;"></div>' +
+        '<div id="eq-stats" style="margin-top:0.5rem;color:var(--text-muted);"></div>';
+
+      async function render() {
+        var includeSpy = $('eq-spy-toggle').checked;
+        var equityData = await fetchJSON('/api/trading/equity');
+        var series = [{
+          label: 'Realized equity',
+          data: equityData.map(function (p) {
+            return {x: p.timestamp, y: p.realized_equity};
+          }),
+          color: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#00b4d8',
+        }];
+        if (includeSpy) {
+          var bench = await fetchJSON('/api/trading/benchmark');
+          series.push({
+            label: 'SPY buy-and-hold',
+            data: bench.spy_series.map(function (p) {
+              return {x: p.timestamp, y: p.equity};
+            }),
+            color: getComputedStyle(document.documentElement).getPropertyValue('--yellow').trim() || '#f39c12',
+          });
+        }
+        window.Charts.lineChart($('eq-chart-host'), {
+          series: series, xIsTime: true, yLabel: 'Equity ($)',
+        });
+
+        if (equityData.length > 0) {
+          var last = equityData[equityData.length - 1];
+          $('eq-stats').textContent =
+            'Current equity: $' + last.realized_equity.toFixed(2) +
+            ' · Peak: $' + last.trailing_peak.toFixed(2) +
+            ' · Drawdown: ' + (last.drawdown * 100).toFixed(2) + '%' +
+            ' · Trades plotted: ' + equityData.length;
+        } else {
+          $('eq-stats').textContent = 'No closed trades in window.';
+        }
+      }
+      $('eq-spy-toggle').onchange = render;
+      await render();
     },
     distributions: async function () {
       panel().innerHTML = '<p class="empty-state">Distributions sub-tab placeholder (Task 6).</p>';
