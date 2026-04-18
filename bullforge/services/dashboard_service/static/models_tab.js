@@ -220,7 +220,44 @@
       });
     },
     timeseries: async function () {
-      panel().innerHTML = '<p class="empty-state">Time-series sub-tab placeholder (Task 10).</p>';
+      panel().innerHTML =
+        '<div class="timeseries-panel">' +
+        '<p class="subtitle">Daily accuracy and signal count for a single model over the selected window.</p>' +
+        '<div class="model-selector"><label>Model: </label>' +
+        '<select id="ts-model-select"></select></div>' +
+        '<div id="ts-acc-host" class="chart-host" style="width:100%;height:220px;margin-top:1rem;"></div>' +
+        '<div id="ts-count-host" class="chart-host" style="width:100%;height:180px;margin-top:1rem;"></div>' +
+        '</div>';
+
+      var models = await fetchJSON('/api/models');
+      var select = $('ts-model-select');
+      select.innerHTML = models.map(function (m) {
+        return '<option value="' + m.model_id + '">' +
+          m.symbol + ' · ' + m.timeframe + ' · ' + m.horizon_minutes + 'm · ' + m.model_type +
+          '</option>';
+      }).join('');
+
+      async function load() {
+        var mid = select.value;
+        var hist = await fetchJSON('/api/models/' + mid + '/history');
+        window.Charts.lineChart($('ts-acc-host'), {
+          series: [{
+            label: 'Accuracy',
+            data: hist.map(function (h) { return {x: h.date, y: h.accuracy}; }),
+          }],
+          xIsTime: true,
+          yLabel: 'Daily accuracy',
+        });
+        window.Charts.barChart($('ts-count-host'), {
+          labels: hist.map(function (h) { return h.date.slice(0, 10); }),
+          values: hist.map(function (h) { return h.total; }),
+          yLabel: 'Signal count (per day)',
+          colorByValue: false,
+        });
+      }
+
+      select.onchange = load;
+      await load();
     },
     regime: async function () {
       panel().innerHTML = '<p class="empty-state">Regime sub-tab placeholder (Task 11).</p>';
