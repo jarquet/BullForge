@@ -13,7 +13,7 @@ import asyncpg
 from shared.config import Settings
 from datetime import datetime, timedelta, timezone
 
-from shared.models import Bar, FeatureRow, Label, ModelMetadata, Prediction, Order, Trade, ModelStatus, MetaFeatureRow, MetaSignalShadow
+from shared.models import Bar, FeatureRow, Label, ModelMetadata, Prediction, Order, Trade, ModelStatus, MetaFeatureRow, MetaSignalShadow, BacktestScope
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,25 @@ def _normalize_alpaca_status(raw: str) -> str:
     if mapped is None:
         raise ValueError(f"unknown Alpaca order status: {raw!r}")
     return mapped
+
+
+def _scope_filter(
+    scope: Optional[BacktestScope], *, next_arg: int,
+) -> tuple[str, tuple]:
+    """Returns a (' AND backtest_run_id ... AND fold_index ...', args) pair to
+    append to an existing parameterized WHERE clause.
+
+    `next_arg` is the 1-based index of the next placeholder. For scope=None,
+    the clause pins both columns to NULL so live reads never leak sandbox
+    rows; for a set scope, the clause equates both columns to the scope's
+    ids via $N and $N+1.
+    """
+    if scope is None:
+        return " AND backtest_run_id IS NULL AND fold_index IS NULL", ()
+    return (
+        f" AND backtest_run_id = ${next_arg} AND fold_index = ${next_arg + 1}",
+        (scope.backtest_run_id, scope.fold_index),
+    )
 
 
 def _quote_ident(name: str) -> str:
@@ -555,15 +574,22 @@ class Database:
             )
         return [dict(r) for r in rows]
 
-    async def insert_model_metadata(self, meta: ModelMetadata) -> int:
+    async def insert_model_metadata(
+        self,
+        meta: ModelMetadata,
+        *,
+        scope: Optional[BacktestScope] = None,
+    ) -> int:
+        run_id = scope.backtest_run_id if scope else None
+        fold = scope.fold_index if scope else None
         async with self.pool.acquire() as conn:
             row_id = await conn.fetchval(
                 """
                 INSERT INTO model_registry
                     (symbol, timeframe, horizon_minutes, model_type, artifact_path,
                      metrics, feature_columns, trained_at, train_samples, test_samples,
-                     is_active, estimator_type)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                     is_active, estimator_type, backtest_run_id, fold_index)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                 RETURNING id
                 """,
                 meta.symbol,
@@ -578,6 +604,8 @@ class Database:
                 meta.test_samples,
                 meta.is_active,
                 meta.estimator_type,
+                run_id,
+                fold,
             )
         return row_id
 
@@ -586,22 +614,25 @@ class Database:
         symbol: str,
         timeframe: str,
         horizon_minutes: int,
+        *,
+        scope: Optional[BacktestScope] = None,
     ) -> Optional[ModelMetadata]:
+        scope_clause, scope_args = _scope_filter(scope, next_arg=4)
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
-                """
+                f"""
                 SELECT id, symbol, timeframe, horizon_minutes, model_type,
                        artifact_path, metrics, feature_columns, trained_at,
-                       train_samples, test_samples, is_active, estimator_type
+                       train_samples, test_samples, is_active, estimator_type,
+                       backtest_run_id, fold_index
                 FROM model_registry
                 WHERE symbol = $1 AND timeframe = $2
                     AND horizon_minutes = $3 AND is_active = TRUE
+                    {scope_clause}
                 ORDER BY trained_at DESC
                 LIMIT 1
                 """,
-                symbol,
-                timeframe,
-                horizon_minutes,
+                symbol, timeframe, horizon_minutes, *scope_args,
             )
         if row is None:
             return None
@@ -621,17 +652,25 @@ class Database:
             estimator_type=row["estimator_type"],
         )
 
-    async def query_all_active_models(self) -> List[ModelMetadata]:
+    async def query_all_active_models(
+        self,
+        *,
+        scope: Optional[BacktestScope] = None,
+    ) -> List[ModelMetadata]:
+        scope_clause, scope_args = _scope_filter(scope, next_arg=1)
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                """
+                f"""
                 SELECT id, symbol, timeframe, horizon_minutes, model_type,
                        artifact_path, metrics, feature_columns, trained_at,
-                       train_samples, test_samples, is_active, estimator_type
+                       train_samples, test_samples, is_active, estimator_type,
+                       backtest_run_id, fold_index
                 FROM model_registry
                 WHERE is_active = TRUE
+                    {scope_clause}
                 ORDER BY symbol, timeframe, horizon_minutes
-                """
+                """,
+                *scope_args,
             )
         return [
             ModelMetadata(
@@ -657,18 +696,20 @@ class Database:
         symbol: str,
         timeframe: str,
         horizon_minutes: int,
+        *,
+        scope: Optional[BacktestScope] = None,
     ) -> None:
+        scope_clause, scope_args = _scope_filter(scope, next_arg=4)
         async with self.pool.acquire() as conn:
             await conn.execute(
-                """
+                f"""
                 UPDATE model_registry
                 SET is_active = FALSE
                 WHERE symbol = $1 AND timeframe = $2
                     AND horizon_minutes = $3 AND is_active = TRUE
+                    {scope_clause}
                 """,
-                symbol,
-                timeframe,
-                horizon_minutes,
+                symbol, timeframe, horizon_minutes, *scope_args,
             )
 
     async def insert_prediction(self, pred: Prediction) -> None:
