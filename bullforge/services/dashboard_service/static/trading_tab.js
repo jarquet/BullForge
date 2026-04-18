@@ -229,7 +229,48 @@
         }).join('') + '</tbody></table>';
     },
     streaks: async function () {
-      panel().innerHTML = '<p class="empty-state">Streaks & Exposure sub-tab placeholder (Task 7).</p>';
+      panel().innerHTML =
+        '<h3>Exposure over time (stacked by symbol)</h3>' +
+        '<div id="streak-exp-host" class="chart-host" style="width:100%;height:280px;"></div>' +
+        '<h3 style="margin-top:1rem;">Win/Loss ribbon (each cell = one trade)</h3>' +
+        '<div id="streak-ribbon" class="wl-ribbon"></div>' +
+        '<div id="streak-legend" style="color:var(--text-muted);font-size:0.85rem;margin-top:0.5rem;"></div>';
+
+      var [exp, streaks] = await Promise.all([
+        fetchJSON('/api/trading/exposure'),
+        fetchJSON('/api/trading/streaks'),
+      ]);
+
+      // Stacked line representation: one line per symbol (simpler than a
+      // true stacked area without additional Chart.js plugins).
+      var symbols = {};
+      exp.forEach(function (p) {
+        Object.keys(p.by_symbol || {}).forEach(function (sym) {
+          if (!symbols[sym]) symbols[sym] = [];
+          symbols[sym].push({x: p.timestamp, y: p.by_symbol[sym]});
+        });
+      });
+      // Also include the total line.
+      var totalSeries = exp.map(function (p) {
+        return {x: p.timestamp, y: p.total_exposure_pct};
+      });
+      var series = [{label: 'Total', data: totalSeries}];
+      Object.keys(symbols).sort().forEach(function (sym) {
+        series.push({label: sym, data: symbols[sym]});
+      });
+      window.Charts.lineChart($('streak-exp-host'), {
+        series: series, xIsTime: true, yLabel: 'Exposure (fraction of equity)',
+      });
+
+      // W/L ribbon: div per trade, colored green/red.
+      $('streak-ribbon').innerHTML = streaks.ribbon.map(function (r) {
+        var cls = r.win ? 'wl-win' : 'wl-loss';
+        var tip = (r.timestamp || '').slice(0, 19).replace('T', ' ');
+        return '<span class="wl-cell ' + cls + '" title="' + tip + '"></span>';
+      }).join('');
+      $('streak-legend').textContent =
+        streaks.ribbon.length + ' trades · longest win: ' + streaks.longest_win_streak +
+        ' · longest loss: ' + streaks.longest_loss_streak;
     },
     heatmaps: async function () {
       panel().innerHTML = '<p class="empty-state">Heatmaps sub-tab placeholder (Task 8).</p>';
