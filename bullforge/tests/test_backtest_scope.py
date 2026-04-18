@@ -144,3 +144,43 @@ async def test_deactivate_models_scoped_does_not_touch_other_runs():
             )
         await sandbox.disconnect()
         await live.disconnect()
+
+
+from shared.models import Prediction
+
+
+@pytest.mark.asyncio
+async def test_insert_prediction_sandbox_writes_scope():
+    settings = Settings()
+    live = Database(settings)
+    sandbox = Database(settings, sandbox=True)
+    await live.connect()
+    await sandbox.connect()
+    try:
+        scope = BacktestScope(backtest_run_id=999_301, fold_index=2)
+        pred = Prediction(
+            symbol="PREDTEST",
+            timestamp=datetime.now(timezone.utc),
+            timeframe="1m",
+            horizon_minutes=5,
+            model_id=1,
+            predicted_direction=1,
+            confidence=0.6,
+        )
+        await sandbox.insert_prediction(pred, scope=scope)
+        async with live.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """SELECT backtest_run_id, fold_index
+                   FROM backtest.predictions
+                   WHERE symbol='PREDTEST' AND timestamp=$1""",
+                pred.timestamp,
+            )
+        assert row["backtest_run_id"] == 999_301
+        assert row["fold_index"] == 2
+    finally:
+        async with live.pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM backtest.predictions WHERE symbol='PREDTEST'"
+            )
+        await sandbox.disconnect()
+        await live.disconnect()

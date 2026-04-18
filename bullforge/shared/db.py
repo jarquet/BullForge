@@ -712,36 +712,49 @@ class Database:
                 symbol, timeframe, horizon_minutes, *scope_args,
             )
 
-    async def insert_prediction(self, pred: Prediction) -> None:
+    async def insert_prediction(
+        self,
+        pred: Prediction,
+        *,
+        scope: Optional[BacktestScope] = None,
+    ) -> None:
+        run_id = scope.backtest_run_id if scope else None
+        fold = scope.fold_index if scope else None
         async with self.pool.acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO predictions
                     (symbol, timestamp, timeframe, horizon_minutes,
-                     model_id, predicted_direction, confidence)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                     model_id, predicted_direction, confidence,
+                     backtest_run_id, fold_index)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 ON CONFLICT (symbol, timestamp, timeframe, horizon_minutes)
                 DO UPDATE SET model_id = $5, predicted_direction = $6, confidence = $7
                 """,
-                pred.symbol,
-                pred.timestamp,
-                pred.timeframe,
-                pred.horizon_minutes,
-                pred.model_id,
-                pred.predicted_direction,
-                pred.confidence,
+                pred.symbol, pred.timestamp, pred.timeframe,
+                pred.horizon_minutes, pred.model_id,
+                pred.predicted_direction, pred.confidence,
+                run_id, fold,
             )
 
-    async def insert_predictions(self, preds: List[Prediction]) -> None:
+    async def insert_predictions(
+        self,
+        preds: List[Prediction],
+        *,
+        scope: Optional[BacktestScope] = None,
+    ) -> None:
         if not preds:
             return
+        run_id = scope.backtest_run_id if scope else None
+        fold = scope.fold_index if scope else None
         async with self.pool.acquire() as conn:
             await conn.executemany(
                 """
                 INSERT INTO predictions
                     (symbol, timestamp, timeframe, horizon_minutes,
-                     model_id, predicted_direction, confidence)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                     model_id, predicted_direction, confidence,
+                     backtest_run_id, fold_index)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 ON CONFLICT (symbol, timestamp, timeframe, horizon_minutes)
                 DO UPDATE SET model_id = $5, predicted_direction = $6, confidence = $7
                 """,
@@ -750,6 +763,7 @@ class Database:
                         p.symbol, p.timestamp, p.timeframe,
                         p.horizon_minutes, p.model_id,
                         p.predicted_direction, p.confidence,
+                        run_id, fold,
                     )
                     for p in preds
                 ],
@@ -761,21 +775,22 @@ class Database:
         timeframe: str,
         horizon_minutes: int,
         limit: int = 100,
+        *,
+        scope: Optional[BacktestScope] = None,
     ) -> List[Prediction]:
+        scope_clause, scope_args = _scope_filter(scope, next_arg=4)
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                """
+                f"""
                 SELECT symbol, timestamp, timeframe, horizon_minutes,
                        model_id, predicted_direction, confidence
                 FROM predictions
                 WHERE symbol = $1 AND timeframe = $2 AND horizon_minutes = $3
+                    {scope_clause}
                 ORDER BY timestamp DESC
-                LIMIT $4
+                LIMIT ${4 + len(scope_args)}
                 """,
-                symbol,
-                timeframe,
-                horizon_minutes,
-                limit,
+                symbol, timeframe, horizon_minutes, *scope_args, limit,
             )
         return [
             Prediction(
