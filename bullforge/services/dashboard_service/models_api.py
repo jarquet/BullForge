@@ -107,7 +107,8 @@ async def _handle_feature_importance(request: web.Request) -> web.Response:
     async with db.pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            SELECT artifact_path, feature_columns, model_type
+            SELECT artifact_path, feature_columns, model_type,
+                   symbol, timeframe, horizon_minutes, trained_at
             FROM model_registry WHERE id = $1 AND backtest_run_id IS NULL
             """,
             model_id,
@@ -125,28 +126,66 @@ async def _handle_feature_importance(request: web.Request) -> web.Response:
 
     # Load artifact once per request. For scale, swap in an LRU cache later.
     from services.model_service.model_store import ModelStore
+    import asyncio as _asyncio
     import json as _json
     store = ModelStore(artifacts_dir=str(row["artifact_path"]).rsplit("/", 1)[0])
     try:
-        model = store.load(row["artifact_path"])
+        pipeline = store.load(row["artifact_path"])
     except FileNotFoundError:
         raise web.HTTPNotFound(reason="artifact missing on disk")
 
-    # Sklearn pipelines: unwrap to last step.
-    if hasattr(model, "steps"):
-        model = model.steps[-1][1]
-
-    if not hasattr(model, "feature_importances_"):
-        return web.json_response({
-            "available": False,
-            "reason": f"{model.__class__.__name__} has no feature_importances_",
-            "features": [],
-        })
+    # Sklearn pipelines: the classifier is the last step. Keep a handle to
+    # both the pipeline (for permutation importance over scaler + model) and
+    # the bare classifier (for the native feature_importances_ fast path).
+    classifier = pipeline.steps[-1][1] if hasattr(pipeline, "steps") else pipeline
 
     features = _json.loads(row["feature_columns"]) if isinstance(
         row["feature_columns"], str,
     ) else row["feature_columns"]
-    importances = list(model.feature_importances_)
+
+    if hasattr(classifier, "feature_importances_"):
+        # Fast path for tree ensembles that publish impurity-based importances
+        # (GradientBoostingClassifier, LightGBM, RandomForest, etc.).
+        importances = list(classifier.feature_importances_)
+    else:
+        # Fallback for HistGradientBoostingClassifier and others that don't
+        # expose the attribute: permutation importance over the held-out slice
+        # of the training dataset (same 80/20 split the trainer used).
+        from services.model_service.dataset import DatasetBuilder, time_based_split
+        from sklearn.inspection import permutation_importance
+
+        builder = DatasetBuilder(db)
+        built = await builder.build(
+            row["symbol"], row["timeframe"], int(row["horizon_minutes"]),
+            as_of=row["trained_at"],
+        )
+        if built is None:
+            return web.json_response({
+                "available": False,
+                "reason": (
+                    f"{classifier.__class__.__name__} has no feature_importances_ "
+                    "and training dataset is no longer available for permutation importance"
+                ),
+                "features": [],
+            })
+        X, y = built
+        _, X_test, _, y_test = time_based_split(X, y, test_ratio=0.2)
+        if len(X_test) == 0:
+            return web.json_response({
+                "available": False,
+                "reason": "permutation importance needs non-empty test split",
+                "features": [],
+            })
+        loop = _asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: permutation_importance(
+                pipeline, X_test, y_test,
+                n_repeats=5, random_state=42, n_jobs=-1,
+            ),
+        )
+        importances = list(result.importances_mean)
+
     pairs = list(zip(features, importances))
     pairs.sort(key=lambda p: p[1], reverse=True)
     return web.json_response({
