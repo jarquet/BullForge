@@ -199,6 +199,19 @@ The Router component is the single parser of this convention.
 {"x_labels": ["Mon", "Tue", ...], "y_labels": ["09:30", "10:00", ...], "cells": [[-0.002, 0.005, ...], [0.003, -0.001, ...]]}
 ```
 
+## Dependencies
+
+**Depends on:** Backtest Run/Fold Scoping ([design](2026-04-17-backtest-run-scoping-design.md), [plan](../plans/2026-04-17-backtest-run-scoping.md)). All dashboard endpoints reading `model_registry`, `predictions`, or `orders` must be scope-aware once scoping lands:
+
+- **Live-data endpoints** (`/api/models/*`, `/api/trading/*`): pass `scope=None` (the default) so `_scope_filter` adds `AND backtest_run_id IS NULL AND fold_index IS NULL`. Any raw SQL in new handlers must include the NULL filter explicitly.
+- **Backtest-data endpoints** (`/api/backtests/{id}/*`): construct `BacktestScope(run_id, fold_index)` from the route params and thread it through Database methods. Per-fold drill-downs must pin `fold_index`; per-run aggregates pin `backtest_run_id` only.
+- **Live-vs-backtest overlay** (Plan 4, sub-tab 6): queries both paths in one handler — live side uses `scope=None`, backtest side uses `BacktestScope(run_id, fold_index=None)` to aggregate across folds.
+- **Signal-to-trade funnel** (Plan 4, sub-tab 7): reads counts from scoped `predictions` and `orders`; must be written scope-aware on first draft.
+
+Plan 1 stubs all dashboard endpoints as HTTP 501, so the dependency is binding starting at Plan 2 (Models domain) and Plan 4 (Backtests domain). Plan 3 (Trading domain) is live-only and uses `scope=None` throughout.
+
+**Recommended merge order:** Backtest Run/Fold Scoping merges before Dashboard Plan 2 / Plan 4 begin implementation, so scoped endpoints are written correctly on first draft rather than rewritten during a later scoping retrofit.
+
 ## Error Handling
 
 - Stubbed endpoints return HTTP 501 with `{"error": "not_implemented", "enabled_after_plan": "plan_N"}`. Frontend detects this and shows a clear "feature coming in Plan N" placeholder, not a red error.
