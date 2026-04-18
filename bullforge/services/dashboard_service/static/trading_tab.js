@@ -333,7 +333,7 @@
     panel().innerHTML = '';
     var dd = window.DrillDown.create({
       mountEl: panel(),
-      title: symbol,
+      title: 'Symbol: ' + symbol,
       backHref: '#trading/overview',
       breadcrumbs: [
         {label: 'Trading', href: '#trading'},
@@ -341,8 +341,84 @@
         {label: symbol},
       ],
     });
-    dd.getContentSlot().innerHTML =
-      '<p class="empty-state">Per-symbol drill-down placeholder (Task 10).</p>';
+    var slot = dd.getContentSlot();
+    slot.innerHTML =
+      '<section class="drill-section"><h3>Equity (this symbol)</h3>' +
+      '<div id="ds-eq" class="chart-host" style="width:100%;height:240px;"></div></section>' +
+      '<section class="drill-section"><h3>Win rate over time</h3>' +
+      '<div id="ds-wr" class="chart-host" style="width:100%;height:220px;"></div></section>' +
+      '<section class="drill-section"><h3>Side breakdown</h3>' +
+      '<div id="ds-side"></div></section>' +
+      '<section class="drill-section"><h3>Recent trades</h3>' +
+      '<div id="ds-trades-host"></div></section>';
+
+    var data = await fetchJSON('/api/trading/symbols/' + encodeURIComponent(symbol));
+
+    // Equity series for this symbol.
+    window.Charts.lineChart($('ds-eq'), {
+      series: [{
+        label: symbol + ' equity',
+        data: data.equity_series.map(function (p) {
+          return {x: p.timestamp, y: p.equity};
+        }),
+      }],
+      xIsTime: true, yLabel: 'P&L ($)',
+    });
+
+    // Win rate over time.
+    window.Charts.lineChart($('ds-wr'), {
+      series: [{
+        label: 'Daily win rate',
+        data: data.win_rate_over_time.map(function (r) {
+          return {x: r.date, y: r.win_rate};
+        }),
+      }],
+      xIsTime: true, yLabel: 'Win rate',
+    });
+
+    // Side breakdown table.
+    $('ds-side').innerHTML =
+      '<table class="data-table" style="max-width:500px;"><thead><tr>' +
+      '<th>Side</th><th>Trades</th><th>Wins</th><th>Win Rate</th><th>Total P&L</th>' +
+      '</tr></thead><tbody>' +
+      data.side_breakdown.map(function (s) {
+        var cls = (s.total_pnl || 0) >= 0 ? 'positive' : 'negative';
+        return '<tr><td>' + s.side + '</td>' +
+          '<td>' + s.trades + '</td>' +
+          '<td>' + s.wins + '</td>' +
+          '<td>' + (s.win_rate * 100).toFixed(1) + '%</td>' +
+          '<td class="' + cls + '">$' + s.total_pnl.toFixed(2) + '</td></tr>';
+      }).join('') + '</tbody></table>';
+
+    // Trades table via Leaderboard component.
+    window.Leaderboard.create({
+      mountEl: $('ds-trades-host'),
+      columns: [
+        {key: 'entry_time', label: 'Entry', sortable: true,
+         render: function (v) { return window.fmtTime ? window.fmtTime(v) : v; }},
+        {key: 'side', label: 'Side', sortable: true},
+        {key: 'entry_price', label: 'Entry $', sortable: true,
+         render: function (v) { return v != null ? v.toFixed(2) : '--'; }},
+        {key: 'exit_price', label: 'Exit $', sortable: true,
+         render: function (v) { return v != null ? v.toFixed(2) : '--'; }},
+        {key: 'quantity', label: 'Qty', sortable: true},
+        {key: 'pnl', label: 'P&L', sortable: true,
+         render: function (v) {
+           if (v == null) return '--';
+           var cls = v >= 0 ? 'positive' : 'negative';
+           return '<span class="' + cls + '">$' + v.toFixed(2) + '</span>';
+         }},
+        {key: 'hold_duration_seconds', label: 'Hold', sortable: true,
+         render: function (s) {
+           if (s == null) return '--';
+           if (s < 60) return s + 's';
+           if (s < 3600) return Math.floor(s / 60) + 'm';
+           return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm';
+         }},
+      ],
+      rows: data.trades,
+      initialSort: {key: 'entry_time', order: 'desc'},
+    });
   }
 
   async function render() {
