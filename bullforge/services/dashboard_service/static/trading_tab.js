@@ -286,7 +286,45 @@
       });
     },
     benchmark: async function () {
-      panel().innerHTML = '<p class="empty-state">Benchmark sub-tab placeholder (Task 9).</p>';
+      panel().innerHTML =
+        '<h3>Strategy equity vs SPY buy-and-hold</h3>' +
+        '<div id="bench-chart-host" class="chart-host" style="width:100%;height:340px;"></div>' +
+        '<h3 style="margin-top:1rem;">Stats</h3>' +
+        '<div id="bench-stats"></div>';
+
+      var data = await fetchJSON('/api/trading/benchmark');
+      var series = [
+        {
+          label: 'Strategy',
+          data: data.strategy_series.map(function (p) {
+            return {x: p.timestamp, y: p.equity};
+          }),
+          color: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#00b4d8',
+        },
+        {
+          label: 'SPY buy-and-hold',
+          data: data.spy_series.map(function (p) {
+            return {x: p.timestamp, y: p.equity};
+          }),
+          color: getComputedStyle(document.documentElement).getPropertyValue('--yellow').trim() || '#f39c12',
+        },
+      ];
+      window.Charts.lineChart($('bench-chart-host'), {
+        series: series, xIsTime: true, yLabel: 'Equity ($)',
+      });
+
+      var s = data.stats;
+      function pct(x) { return (x * 100).toFixed(2) + '%'; }
+      function num(x) { return x.toFixed(3); }
+      $('bench-stats').innerHTML =
+        '<table class="data-table" style="max-width:400px;"><tbody>' +
+        '<tr><td>Annualized return</td><td class="' + (s.annualized_return >= 0 ? 'positive' : 'negative') + '">' + pct(s.annualized_return) + '</td></tr>' +
+        '<tr><td>Annualized volatility</td><td>' + pct(s.annualized_vol) + '</td></tr>' +
+        '<tr><td>Sharpe</td><td>' + num(s.sharpe) + '</td></tr>' +
+        '<tr><td>Max drawdown</td><td class="negative">' + pct(s.max_drawdown) + '</td></tr>' +
+        '<tr><td>Beta (vs SPY)</td><td>' + num(s.beta) + '</td></tr>' +
+        '<tr><td>Alpha (vs SPY)</td><td class="' + (s.alpha >= 0 ? 'positive' : 'negative') + '">' + pct(s.alpha) + '</td></tr>' +
+        '</tbody></table>';
     },
   };
 
