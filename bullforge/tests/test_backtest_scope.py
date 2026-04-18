@@ -223,3 +223,51 @@ async def test_insert_order_sandbox_writes_scope():
             )
         await sandbox.disconnect()
         await live.disconnect()
+
+
+import asyncio
+
+
+@pytest.mark.asyncio
+async def test_concurrent_sandbox_writes_do_not_cross_contaminate():
+    """
+    Simulates two concurrent backtest runs training a model for the same
+    (symbol, timeframe, horizon). Each deactivates models within its own
+    scope, inserts its own, then reads back. Neither should see the other's
+    model as active.
+    """
+    settings = Settings()
+    live = Database(settings)
+    sandbox_a = Database(settings, sandbox=True)
+    sandbox_b = Database(settings, sandbox=True)
+    await live.connect()
+    await sandbox_a.connect()
+    await sandbox_b.connect()
+    try:
+        scope_a = BacktestScope(backtest_run_id=999_501, fold_index=0)
+        scope_b = BacktestScope(backtest_run_id=999_502, fold_index=0)
+
+        async def run_one(sandbox: Database, scope: BacktestScope, tag: str):
+            await sandbox.deactivate_models("RACE", "1m", 5, scope=scope)
+            await sandbox.insert_model_metadata(
+                _meta(symbol="RACE", artifact_path=f"/tmp/{tag}.joblib"),
+                scope=scope,
+            )
+            await asyncio.sleep(0)
+            models = await sandbox.query_all_active_models(scope=scope)
+            return [m.artifact_path for m in models]
+
+        paths_a, paths_b = await asyncio.gather(
+            run_one(sandbox_a, scope_a, "A"),
+            run_one(sandbox_b, scope_b, "B"),
+        )
+        assert paths_a == ["/tmp/A.joblib"], paths_a
+        assert paths_b == ["/tmp/B.joblib"], paths_b
+    finally:
+        async with live.pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM backtest.model_registry WHERE symbol='RACE'"
+            )
+        await sandbox_a.disconnect()
+        await sandbox_b.disconnect()
+        await live.disconnect()
