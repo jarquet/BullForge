@@ -273,7 +273,17 @@
         ' · longest loss: ' + streaks.longest_loss_streak;
     },
     heatmaps: async function () {
-      panel().innerHTML = '<p class="empty-state">Heatmaps sub-tab placeholder (Task 8).</p>';
+      panel().innerHTML =
+        '<h3>Weekday × half-hour (UTC) average trade P&L</h3>' +
+        '<p class="subtitle">Color intensity scales with |avg P&L|. Green = positive, red = negative. Empty cells: no trades.</p>' +
+        '<div id="heat-time-host" class="chart-host" style="width:100%;min-height:260px;"></div>';
+
+      var heat = await fetchJSON('/api/trading/heatmap?kind=time');
+      window.Charts.heatmapChart($('heat-time-host'), {
+        xLabels: heat.x_labels,
+        yLabels: heat.y_labels,
+        cells: heat.cells,
+      });
     },
     benchmark: async function () {
       panel().innerHTML = '<p class="empty-state">Benchmark sub-tab placeholder (Task 9).</p>';
