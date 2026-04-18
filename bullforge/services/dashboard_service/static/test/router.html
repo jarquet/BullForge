@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Router tests</title>
+<style>body{font-family:monospace}.pass{color:green}.fail{color:red}</style>
+</head>
+<body>
+<h1>Router tests</h1>
+<div id="results"></div>
+<script src="/static/components/router.js"></script>
+<script>
+(function () {
+  var results = document.getElementById('results');
+  var passed = 0, failed = 0;
+
+  function assertDeep(name, actual, expected) {
+    var a = JSON.stringify(actual);
+    var e = JSON.stringify(expected);
+    var ok = a === e;
+    var div = document.createElement('div');
+    div.className = ok ? 'pass' : 'fail';
+    div.style.whiteSpace = 'pre';
+    div.textContent = (ok ? 'PASS' : 'FAIL') + ' — ' + name +
+      (ok ? '' : '\n  expected: ' + e + '\n  actual:   ' + a);
+    results.appendChild(div);
+    if (ok) passed++; else failed++;
+  }
+
+  var R = window.Router;
+
+  assertDeep('empty hash → overview',
+    R.parse(''),
+    {tab: 'overview', subtab: null, entity_kind: null, entity_id: null, query: {}});
+
+  assertDeep('#models → models tab',
+    R.parse('#models'),
+    {tab: 'models', subtab: null, entity_kind: null, entity_id: null, query: {}});
+
+  assertDeep('#models/leaderboard → subtab',
+    R.parse('#models/leaderboard'),
+    {tab: 'models', subtab: 'leaderboard', entity_kind: null, entity_id: null, query: {}});
+
+  assertDeep('#models/42 → numeric entity',
+    R.parse('#models/42'),
+    {tab: 'models', subtab: null, entity_kind: 'models', entity_id: '42', query: {}});
+
+  assertDeep('#trading/symbols/AAPL → entity kind + id',
+    R.parse('#trading/symbols/AAPL'),
+    {tab: 'trading', subtab: null, entity_kind: 'symbols', entity_id: 'AAPL', query: {}});
+
+  assertDeep('#backtests/17/folds → entity + subtab',
+    R.parse('#backtests/17/folds'),
+    {tab: 'backtests', subtab: 'folds', entity_kind: 'backtests', entity_id: '17', query: {}});
+
+  assertDeep('#backtests/compare?ids=17,22 → compare with query',
+    R.parse('#backtests/compare?ids=17,22'),
+    {tab: 'backtests', subtab: 'compare', entity_kind: null, entity_id: null, query: {ids: '17,22'}});
+
+  assertDeep('#unknown → unknown tab pass-through',
+    R.parse('#garbage'),
+    {tab: 'garbage', subtab: null, entity_kind: null, entity_id: null, query: {}});
+
+  // Subscribe/notify
+  var captured = null;
+  var unsubscribe = R.subscribe(function (route) { captured = route; });
+  R.navigate('#models/calibration');
+  assertDeep('navigate fires subscribers',
+    captured,
+    {tab: 'models', subtab: 'calibration', entity_kind: null, entity_id: null, query: {}});
+  unsubscribe();
+  R.navigate('#trading');
+  // After unsubscribe, captured should still reflect the earlier notification.
+  assertDeep('unsubscribe stops notifications',
+    captured,
+    {tab: 'models', subtab: 'calibration', entity_kind: null, entity_id: null, query: {}});
+
+  // Summary
+  var summary = document.createElement('div');
+  summary.style.marginTop = '1em';
+  summary.textContent = 'Results: ' + passed + ' passed, ' + failed + ' failed';
+  results.appendChild(summary);
+  if (failed === 0) document.title = 'PASS — Router tests';
+  else document.title = 'FAIL — Router tests';
+})();
+</script>
+</body>
+</html>
