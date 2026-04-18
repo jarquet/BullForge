@@ -260,7 +260,56 @@
       await load();
     },
     regime: async function () {
-      panel().innerHTML = '<p class="empty-state">Regime sub-tab placeholder (Task 11).</p>';
+      panel().innerHTML =
+        '<div class="regime-panel">' +
+        '<p class="subtitle">Per-regime accuracy and P&L. Regime classified by SPY 50-bar SMA at prediction time (bull/bear/neutral/unknown).</p>' +
+        '<div class="model-selector"><label>Model: </label>' +
+        '<select id="regime-model-select"></select></div>' +
+        '<div id="regime-acc-host" class="chart-host" style="width:100%;height:260px;margin-top:1rem;"></div>' +
+        '<div id="regime-pnl-host" class="chart-host" style="width:100%;height:260px;margin-top:1rem;"></div>' +
+        '<div id="regime-table" style="margin-top:1rem;"></div>' +
+        '</div>';
+
+      var models = await fetchJSON('/api/models');
+      var select = $('regime-model-select');
+      select.innerHTML = models.map(function (m) {
+        return '<option value="' + m.model_id + '">' +
+          m.symbol + ' · ' + m.timeframe + ' · ' + m.horizon_minutes + 'm · ' + m.model_type +
+          '</option>';
+      }).join('');
+
+      async function load() {
+        var mid = select.value;
+        var rows = await fetchJSON('/api/models/' + mid + '/regime_breakdown');
+        var labels = rows.map(function (r) { return r.regime; });
+        var accs = rows.map(function (r) { return r.accuracy * 100; });
+        var pnls = rows.map(function (r) { return r.cumulative_pnl_pct * 100; });
+
+        window.Charts.barChart($('regime-acc-host'), {
+          labels: labels, values: accs,
+          yLabel: 'Accuracy (%)', colorByValue: false,
+        });
+        window.Charts.barChart($('regime-pnl-host'), {
+          labels: labels, values: pnls,
+          yLabel: 'Cumulative P&L (%)', colorByValue: true,
+        });
+
+        $('regime-table').innerHTML =
+          '<table class="data-table"><thead><tr>' +
+          '<th>Regime</th><th>Signals</th><th>Correct</th><th>Accuracy</th><th>Cumulative P&L</th>' +
+          '</tr></thead><tbody>' +
+          rows.map(function (r) {
+            return '<tr><td>' + r.regime + '</td>' +
+              '<td>' + r.count + '</td>' +
+              '<td>' + r.correct + '</td>' +
+              '<td>' + (r.accuracy * 100).toFixed(1) + '%</td>' +
+              '<td>' + (r.cumulative_pnl_pct * 100).toFixed(2) + '%</td></tr>';
+          }).join('') +
+          '</tbody></table>';
+      }
+
+      select.onchange = load;
+      await load();
     },
     featimp: async function () {
       panel().innerHTML = '<p class="empty-state">Feature Importance sub-tab placeholder (Task 12).</p>';
