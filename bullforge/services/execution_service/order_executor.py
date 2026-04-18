@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from shared.db import Database
-from shared.models import Order, TradingSignal
+from shared.models import BacktestScope, Order, TradingSignal
 from services.execution_service.alpaca_broker import AlpacaBroker
 from services.execution_service.reconciler_core import ReconcilerCore
 from services.execution_service.risk_manager import RiskManager
@@ -23,12 +23,15 @@ class OrderExecutor:
         position_tracker: PositionTracker,
         db: Database,
         core: ReconcilerCore,
+        *,
+        scope: Optional[BacktestScope] = None,
     ):
         self._broker = broker
         self._risk = risk_manager
         self._tracker = position_tracker
         self._db = db
         self._core = core
+        self._scope = scope
 
     async def process_signal(
         self, signal: TradingSignal, current_price: float,
@@ -71,7 +74,7 @@ class OrderExecutor:
             signal_strength=signal.strength,
             alpaca_order_id=alpaca_id, status="submitted",
         )
-        order_id = await self._db.insert_order_if_new(order)
+        order_id = await self._db.insert_order_if_new(order, scope=self._scope)
 
         try:
             snap = await self._broker.get_order(alpaca_id)
@@ -89,7 +92,7 @@ class OrderExecutor:
 
         if order_id is None:
             # Stream already inserted this row; fetch it as the authoritative record.
-            return await self._db.get_order_by_alpaca_id(alpaca_id)
+            return await self._db.get_order_by_alpaca_id(alpaca_id, scope=self._scope)
         return replace(order, id=order_id)
 
     async def _execute_close(self, signal: TradingSignal, position: dict) -> Optional[Order]:
@@ -108,7 +111,7 @@ class OrderExecutor:
             signal_strength=signal.strength,
             alpaca_order_id=alpaca_id, status="submitted",
         )
-        order_id = await self._db.insert_order_if_new(order)
+        order_id = await self._db.insert_order_if_new(order, scope=self._scope)
 
         try:
             snap = await self._broker.get_order(alpaca_id)
@@ -126,5 +129,5 @@ class OrderExecutor:
 
         if order_id is None:
             # Stream already inserted this row; fetch it as the authoritative record.
-            return await self._db.get_order_by_alpaca_id(alpaca_id)
+            return await self._db.get_order_by_alpaca_id(alpaca_id, scope=self._scope)
         return replace(order, id=order_id)
