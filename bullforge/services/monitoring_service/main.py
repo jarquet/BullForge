@@ -19,6 +19,7 @@ from services.monitoring_service.health import create_health_app
 from services.monitoring_service.metrics import MetricsComputer
 from services.monitoring_service.fidelity import FidelityTracker
 from services.monitoring_service.halt_manager import HaltManager
+from services.monitoring_service.accuracy_snapshot import persist_daily_accuracy
 from services.monitoring_service.telegram_bot import TelegramBot
 
 logging.basicConfig(
@@ -103,6 +104,12 @@ async def monitoring_loop(
                     reason=reason,
                     updated_at=now,
                 ))
+
+            # 3b. Persist daily per-model accuracy snapshot for dashboard history.
+            try:
+                await persist_daily_accuracy(db)
+            except Exception:
+                logger.exception("Error persisting per-model accuracy snapshot")
 
             # 4. Evaluate halt conditions
             current_drawdown = 0.0

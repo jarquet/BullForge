@@ -9,6 +9,7 @@ from shared.db import Database
 from shared.time_window import parse_time_window
 
 from services.dashboard_service.backtests_api import register_backtests_routes
+from services.dashboard_service.models_api import register_models_routes
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ def create_api_app(db: Database) -> web.Application:
     app.router.add_get("/api/halts", _handle_halts)
 
     register_backtests_routes(app)
+    register_models_routes(app)
 
     return app
 
@@ -148,14 +150,21 @@ async def _handle_metrics_history(request: web.Request) -> web.Response:
 async def _handle_models(request: web.Request) -> web.Response:
     db: Database = request.app["db"]
     details = await db.query_model_details()
+    model_ids = [d["model_id"] for d in details]
+    extra = await db.query_models_with_leaderboard_stats(model_ids)
+
     payload = []
     for d in details:
+        mid = d["model_id"]
+        stats = extra.get(mid, {})
+        backtested = float((d.get("metrics") or {}).get("accuracy", 0.0))
+        live = stats.get("live_accuracy_7d", 0.0)
         label = (
             f"{d['model_type']} \u00b7 {d['symbol']} \u00b7 "
             f"{d['timeframe']} \u00b7 {d['horizon_minutes']}m"
         )
         payload.append({
-            "model_id": d["model_id"],
+            "model_id": mid,
             "label": label,
             "symbol": d["symbol"],
             "timeframe": d["timeframe"],
@@ -171,6 +180,12 @@ async def _handle_models(request: web.Request) -> web.Response:
                 d["status_updated_at"].isoformat()
                 if d.get("status_updated_at") else None
             ),
+            "backtested_accuracy": backtested,
+            "live_accuracy_7d": live,
+            "fidelity_delta": backtested - live,
+            "signals_7d": stats.get("signals_7d", 0),
+            "simulated_pnl_7d_pct": stats.get("simulated_pnl_7d_pct", 0.0),
+            "accuracy_sparkline_30d": stats.get("accuracy_sparkline_30d", []),
         })
     return web.json_response(payload)
 

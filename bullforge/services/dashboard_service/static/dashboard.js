@@ -254,21 +254,6 @@ async function loadTrading() {
     }
 }
 
-// -- Models ---------------------------------------------------------------
-
-async function loadModels() {
-    var models = await api('/api/models');
-    var tbody = $('models-table').querySelector('tbody');
-    tbody.innerHTML = models.map(function(m) {
-        return '<tr>' +
-            '<td>' + m.label + '</td>' +
-            '<td><span class="status-cell ' + m.status + '">' + m.status + '</span></td>' +
-            '<td>' + m.reason + '</td>' +
-            '<td>' + fmtTime(m.status_updated_at) + '</td>' +
-            '</tr>';
-    }).join('');
-}
-
 // -- Trades ---------------------------------------------------------------
 
 async function loadTrades() {
@@ -348,7 +333,6 @@ async function refreshAll() {
         await Promise.all([
             loadOverview(),
             loadTrading(),
-            loadModels(),
             loadTrades(),
             loadOrders(),
             loadHalts(),
