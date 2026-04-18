@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from aiohttp import web
 
 from shared.db import Database
+from shared.time_window import parse_time_window
 
 from services.dashboard_service.backtests_api import register_backtests_routes
 
@@ -128,7 +129,12 @@ async def _handle_metrics_history(request: web.Request) -> web.Response:
     window = request.query.get("window", "all")
     limit = min(int(request.query.get("limit", "60")), 500)
 
-    snapshots = await db.query_metric_snapshots(category, scope, window, limit)
+    from_dt, to_dt = parse_time_window(request)
+
+    snapshots = await db.query_metric_snapshots(
+        category, scope, window, limit,
+        from_dt=from_dt, to_dt=to_dt,
+    )
 
     return web.json_response([
         {

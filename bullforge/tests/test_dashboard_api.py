@@ -222,3 +222,32 @@ async def test_api_halts(client, mock_db):
     assert "active" in data
     assert "history" in data
     assert isinstance(data["history"], list)
+
+
+@pytest.mark.asyncio
+async def test_metrics_history_accepts_time_window(aiohttp_client, mock_db):
+    from services.dashboard_service.api import create_api_app
+    app = create_api_app(mock_db)
+    client = await aiohttp_client(app)
+    resp = await client.get(
+        "/api/metrics/history"
+        "?category=trading&window=all"
+        "&from=2026-04-01T00:00:00Z&to=2026-04-17T00:00:00Z",
+    )
+    assert resp.status == 200
+
+    call = mock_db.query_metric_snapshots.call_args
+    kwargs = call.kwargs
+    assert kwargs.get("from_dt") == datetime(2026, 4, 1, 0, 0, 0, tzinfo=timezone.utc)
+    assert kwargs.get("to_dt") == datetime(2026, 4, 17, 0, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_metrics_history_rejects_malformed_from(aiohttp_client, mock_db):
+    from services.dashboard_service.api import create_api_app
+    app = create_api_app(mock_db)
+    client = await aiohttp_client(app)
+    resp = await client.get(
+        "/api/metrics/history?category=trading&from=not-a-date",
+    )
+    assert resp.status == 400
