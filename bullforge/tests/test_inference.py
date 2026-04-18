@@ -136,3 +136,34 @@ async def test_predict_fills_missing_features(mock_db, mock_model_store):
 
     predictions = await engine.predict("SPY", "1m")
     assert len(predictions) == 2  # Still produces predictions
+
+
+from unittest.mock import AsyncMock, MagicMock
+
+from shared.models import BacktestScope
+from services.model_service.inference import InferenceEngine
+
+
+@pytest.mark.asyncio
+async def test_inference_engine_scoped_load_queries_with_scope():
+    db = MagicMock()
+    db.query_all_active_models = AsyncMock(return_value=[])
+    store = MagicMock()
+    scope = BacktestScope(backtest_run_id=11, fold_index=4)
+
+    engine = InferenceEngine(db, store, scope=scope)
+    await engine.load_models()
+
+    db.query_all_active_models.assert_awaited_once_with(scope=scope)
+
+
+@pytest.mark.asyncio
+async def test_inference_engine_live_load_queries_without_scope():
+    db = MagicMock()
+    db.query_all_active_models = AsyncMock(return_value=[])
+    store = MagicMock()
+
+    engine = InferenceEngine(db, store)
+    await engine.load_models()
+
+    db.query_all_active_models.assert_awaited_once_with(scope=None)
