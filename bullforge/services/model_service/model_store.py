@@ -3,10 +3,12 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import joblib
 import torch
 
+from shared.models import BacktestScope
 from services.model_service.lstm_model import LSTMClassifier
 
 logger = logging.getLogger(__name__)
@@ -18,7 +20,8 @@ class ModelStore:
         self._dir.mkdir(parents=True, exist_ok=True)
 
     def save(self, model: object, symbol: str, timeframe: str,
-             horizon_minutes: int, model_type: str) -> str:
+             horizon_minutes: int, model_type: str,
+             *, scope: Optional[BacktestScope] = None) -> str:
         now = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         if isinstance(model, LSTMClassifier):
             ext = "pt"
@@ -26,7 +29,14 @@ class ModelStore:
             ext = "joblib"
         safe_symbol = symbol.replace("/", "-")
         filename = f"{model_type}_{safe_symbol}_{timeframe}_{horizon_minutes}m_{now}.{ext}"
-        path = self._dir / filename
+        if scope is None:
+            path = self._dir / filename
+        else:
+            path = (self._dir / "backtest"
+                    / str(scope.backtest_run_id)
+                    / f"fold_{scope.fold_index}"
+                    / filename)
+        path.parent.mkdir(parents=True, exist_ok=True)
         if isinstance(model, LSTMClassifier):
             torch.save(model, path)
         else:
