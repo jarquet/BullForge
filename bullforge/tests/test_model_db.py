@@ -81,6 +81,7 @@ async def test_query_active_model(settings, mock_pool):
         "train_samples": 800,
         "test_samples": 200,
         "is_active": True,
+        "estimator_type": None,
     })
     db = Database(settings)
     db.pool = pool
@@ -258,6 +259,7 @@ async def test_query_all_active_models(settings, mock_pool):
             "train_samples": 800,
             "test_samples": 200,
             "is_active": True,
+            "estimator_type": None,
         },
         {
             "id": 2,
@@ -272,6 +274,7 @@ async def test_query_all_active_models(settings, mock_pool):
             "train_samples": 750,
             "test_samples": 190,
             "is_active": True,
+            "estimator_type": None,
         },
     ])
     db = Database(settings)
