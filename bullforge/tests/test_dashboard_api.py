@@ -98,6 +98,9 @@ def mock_db():
         },
     ])
 
+    # Leaderboard stats (Task 4)
+    db.query_models_with_leaderboard_stats = AsyncMock(return_value={})
+
     return db
 
 
