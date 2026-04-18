@@ -184,3 +184,42 @@ async def test_insert_prediction_sandbox_writes_scope():
             )
         await sandbox.disconnect()
         await live.disconnect()
+
+
+from shared.models import Order
+
+
+@pytest.mark.asyncio
+async def test_insert_order_sandbox_writes_scope():
+    settings = Settings()
+    live = Database(settings)
+    sandbox = Database(settings, sandbox=True)
+    await live.connect()
+    await sandbox.connect()
+    try:
+        scope = BacktestScope(backtest_run_id=999_401, fold_index=1)
+        order = Order(
+            symbol="ORDERTEST",
+            side="buy",
+            quantity=1.0,
+            order_type="market",
+            submitted_at=datetime.now(timezone.utc),
+            signal_strength=0.5,
+            alpaca_order_id="scope-test-1",
+        )
+        row_id = await sandbox.insert_order_if_new(order, scope=scope)
+        assert row_id is not None
+        async with live.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT backtest_run_id, fold_index FROM backtest.orders WHERE id=$1",
+                row_id,
+            )
+        assert row["backtest_run_id"] == 999_401
+        assert row["fold_index"] == 1
+    finally:
+        async with live.pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM backtest.orders WHERE alpaca_order_id='scope-test-1'"
+            )
+        await sandbox.disconnect()
+        await live.disconnect()

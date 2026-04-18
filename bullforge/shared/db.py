@@ -805,7 +805,14 @@ class Database:
             for r in rows
         ]
 
-    async def insert_order(self, order: Order) -> int:
+    async def insert_order(
+        self,
+        order: Order,
+        *,
+        scope: Optional[BacktestScope] = None,
+    ) -> int:
+        run_id = scope.backtest_run_id if scope else None
+        fold = scope.fold_index if scope else None
         async with self.pool.acquire() as conn:
             row_id = await conn.fetchval(
                 """
@@ -813,41 +820,42 @@ class Database:
                     (symbol, side, quantity, order_type, submitted_at,
                      signal_strength, alpaca_order_id, status,
                      filled_at, filled_price, filled_quantity, limit_price,
-                     origin, last_reconciled_at, reconcile_source)
+                     origin, last_reconciled_at, reconcile_source,
+                     backtest_run_id, fold_index)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                        $13, $14, $15)
+                        $13, $14, $15, $16, $17)
                 RETURNING id
                 """,
-                order.symbol,
-                order.side,
-                order.quantity,
-                order.order_type,
-                order.submitted_at,
-                order.signal_strength,
-                order.alpaca_order_id,
-                order.status,
-                order.filled_at,
-                order.filled_price,
-                order.filled_quantity,
-                order.limit_price,
-                order.origin,
-                order.last_reconciled_at,
+                order.symbol, order.side, order.quantity, order.order_type,
+                order.submitted_at, order.signal_strength,
+                order.alpaca_order_id, order.status,
+                order.filled_at, order.filled_price, order.filled_quantity,
+                order.limit_price, order.origin, order.last_reconciled_at,
                 order.reconcile_source,
+                run_id, fold,
             )
         return row_id
 
-    async def insert_order_if_new(self, order: Order) -> Optional[int]:
+    async def insert_order_if_new(
+        self,
+        order: Order,
+        *,
+        scope: Optional[BacktestScope] = None,
+    ) -> Optional[int]:
         """INSERT that does nothing on alpaca_order_id conflict.
         Returns the inserted row id, or None if a row already existed."""
+        run_id = scope.backtest_run_id if scope else None
+        fold = scope.fold_index if scope else None
         async with self.pool.acquire() as conn:
             return await conn.fetchval(
                 """
                 INSERT INTO orders
                   (symbol, side, quantity, order_type, submitted_at,
                    signal_strength, alpaca_order_id, status,
-                   origin, last_reconciled_at, reconcile_source)
+                   origin, last_reconciled_at, reconcile_source,
+                   backtest_run_id, fold_index)
                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,
-                        COALESCE($9,'internal'),$10,$11)
+                        COALESCE($9,'internal'),$10,$11,$12,$13)
                 ON CONFLICT (alpaca_order_id) WHERE alpaca_order_id IS NOT NULL DO NOTHING
                 RETURNING id
                 """,
@@ -855,6 +863,7 @@ class Database:
                 order.submitted_at, order.signal_strength,
                 order.alpaca_order_id, order.status,
                 order.origin, order.last_reconciled_at, order.reconcile_source,
+                run_id, fold,
             )
 
     async def update_order_status(
@@ -864,22 +873,23 @@ class Database:
         filled_at: Optional[datetime] = None,
         filled_price: Optional[float] = None,
         filled_quantity: Optional[float] = None,
+        *,
+        scope: Optional[BacktestScope] = None,
     ) -> None:
+        scope_clause, scope_args = _scope_filter(scope, next_arg=6)
         async with self.pool.acquire() as conn:
             await conn.execute(
-                """
+                f"""
                 UPDATE orders
                 SET status = $2,
                     filled_at = COALESCE($3, filled_at),
                     filled_price = COALESCE($4, filled_price),
                     filled_quantity = COALESCE($5, filled_quantity)
                 WHERE id = $1
+                    {scope_clause}
                 """,
-                order_id,
-                status,
-                filled_at,
-                filled_price,
-                filled_quantity,
+                order_id, status, filled_at, filled_price, filled_quantity,
+                *scope_args,
             )
 
     async def query_orders(
@@ -887,6 +897,8 @@ class Database:
         symbol: Optional[str] = None,
         status: Optional[str] = None,
         limit: int = 100,
+        *,
+        scope: Optional[BacktestScope] = None,
     ) -> list[Order]:
         query = """SELECT id, symbol, side, quantity, order_type, submitted_at,
                           signal_strength, alpaca_order_id, status,
@@ -905,6 +917,11 @@ class Database:
             query += f" AND status = ${idx}"
             args.append(status)
             idx += 1
+
+        scope_clause, scope_args = _scope_filter(scope, next_arg=idx)
+        query += scope_clause
+        args.extend(scope_args)
+        idx += len(scope_args)
 
         query += f" ORDER BY submitted_at DESC LIMIT ${idx}"
         args.append(limit)
@@ -933,18 +950,25 @@ class Database:
             for r in rows
         ]
 
-    async def get_order_by_alpaca_id(self, alpaca_order_id: str) -> Optional[Order]:
+    async def get_order_by_alpaca_id(
+        self,
+        alpaca_order_id: str,
+        *,
+        scope: Optional[BacktestScope] = None,
+    ) -> Optional[Order]:
+        scope_clause, scope_args = _scope_filter(scope, next_arg=2)
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
-                """
+                f"""
                 SELECT id, symbol, side, quantity, order_type, submitted_at,
                        signal_strength, alpaca_order_id, status,
                        filled_at, filled_price, filled_quantity, limit_price,
                        origin, last_reconciled_at, reconcile_source
                 FROM orders
                 WHERE alpaca_order_id = $1
+                    {scope_clause}
                 """,
-                alpaca_order_id,
+                alpaca_order_id, *scope_args,
             )
         if row is None:
             return None
