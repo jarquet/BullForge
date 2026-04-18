@@ -98,7 +98,54 @@
       });
     },
     fidelity: async function () {
-      panel().innerHTML = '<p class="empty-state">Fidelity sub-tab placeholder (Task 7).</p>';
+      panel().innerHTML =
+        '<div class="fidelity-panel">' +
+        '<p class="subtitle">Per-model live accuracy (7-day rolling) vs backtested baseline. Red line = warning margin, dashed red = critical margin.</p>' +
+        '<div class="model-selector"><label>Models: </label>' +
+        '<select id="fidelity-model-select" multiple size="6" style="min-width:400px;"></select>' +
+        '<button id="fidelity-refresh">Load</button></div>' +
+        '<div id="fidelity-chart-host" class="chart-host" style="width:100%;height:360px;margin-top:1rem;"></div>' +
+        '</div>';
+
+      var models = await fetchJSON('/api/models');
+      var select = $('fidelity-model-select');
+      select.innerHTML = models.map(function (m) {
+        return '<option value="' + m.model_id + '" selected>' +
+          m.symbol + ' · ' + m.timeframe + ' · ' + m.horizon_minutes + 'm · ' + m.model_type +
+          '</option>';
+      }).join('');
+      // Cap to first 8 selected by default for rendering performance.
+      Array.prototype.slice.call(select.options).forEach(function (o, i) {
+        if (i >= 8) o.selected = false;
+      });
+
+      async function load() {
+        var selected = Array.prototype.filter.call(select.options,
+          function (o) { return o.selected; }).map(function (o) { return o.value; });
+        var series = [];
+        for (var i = 0; i < selected.length; i++) {
+          var mid = selected[i];
+          var hist = await fetchJSON('/api/models/' + mid + '/history');
+          var m = models.filter(function (mm) {
+            return String(mm.model_id) === String(mid);
+          })[0];
+          var label = m ? (m.symbol + ' · ' + m.horizon_minutes + 'm') : ('#' + mid);
+          series.push({
+            label: label,
+            data: hist.map(function (h) {
+              return {x: h.date, y: h.accuracy};
+            }),
+          });
+        }
+        window.Charts.lineChart($('fidelity-chart-host'), {
+          series: series,
+          xIsTime: true,
+          yLabel: 'Accuracy',
+        });
+      }
+
+      $('fidelity-refresh').onclick = load;
+      await load();
     },
     calibration: async function () {
       panel().innerHTML = '<p class="empty-state">Calibration sub-tab placeholder (Task 8).</p>';
