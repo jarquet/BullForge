@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 import traceback
 from datetime import datetime
@@ -49,9 +50,10 @@ async def run_one(
     jobs: BacktestJobsDB,
     *,
     engine_factory: Callable[[BacktestConfig], BacktestEngine],
+    worker_pool: str,
 ) -> bool:
-    """Claim and run exactly one job. Returns True iff a job was processed."""
-    job = await jobs.claim_next()
+    """Claim and run exactly one job from `worker_pool`. Returns True iff a job was processed."""
+    job = await jobs.claim_next(worker_pool=worker_pool)
     if job is None:
         return False
 
@@ -83,6 +85,13 @@ async def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     settings = Settings()
+
+    worker_pool = os.getenv("BACKTEST_WORKER_POOL", "cpu").lower()
+    if worker_pool not in ("cpu", "gpu"):
+        raise ValueError(
+            f"BACKTEST_WORKER_POOL must be 'cpu' or 'gpu', got {worker_pool!r}"
+        )
+    logger.info("starting backtest worker for pool=%s", worker_pool)
 
     live_db = Database(settings)
     await live_db.connect()  # runs migrations, incl. backtest schema
@@ -118,7 +127,9 @@ async def main() -> None:
 
     try:
         while not stop.is_set():
-            did = await run_one(jobs, engine_factory=_engine_factory)
+            did = await run_one(
+                jobs, engine_factory=_engine_factory, worker_pool=worker_pool,
+            )
             if not did:
                 try:
                     await asyncio.wait_for(

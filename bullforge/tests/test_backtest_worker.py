@@ -10,7 +10,7 @@ class FakeJobs:
         self.completed = None
         self.failed = None
         self.linked = None
-    async def claim_next(self):
+    async def claim_next(self, *, worker_pool):
         j, self._job = self._job, None
         return j
     async def link_run(self, *, job_id, run_id):
@@ -43,7 +43,9 @@ async def test_run_one_success():
 
     engine.run = AsyncMock(side_effect=fake_run)
 
-    got = await run_one(jobs, engine_factory=lambda cfg: engine)
+    got = await run_one(
+        jobs, engine_factory=lambda cfg: engine, worker_pool="cpu",
+    )
     assert got is True
     assert jobs.linked == (7, 42)
     assert jobs.completed == (7, 42)
@@ -53,7 +55,9 @@ async def test_run_one_success():
 async def test_run_one_idle_when_no_job():
     jobs = FakeJobs(None)
     engine = AsyncMock()
-    got = await run_one(jobs, engine_factory=lambda cfg: engine)
+    got = await run_one(
+        jobs, engine_factory=lambda cfg: engine, worker_pool="cpu",
+    )
     assert got is False
     assert jobs.completed is None
     engine.run.assert_not_called()
@@ -73,7 +77,9 @@ async def test_run_one_failure_marks_failed():
     })
     engine = AsyncMock()
     engine.run = AsyncMock(side_effect=RuntimeError("boom"))
-    await run_one(jobs, engine_factory=lambda cfg: engine)
+    await run_one(
+        jobs, engine_factory=lambda cfg: engine, worker_pool="cpu",
+    )
     assert jobs.failed is not None
     assert "boom" in jobs.failed[1]
 
