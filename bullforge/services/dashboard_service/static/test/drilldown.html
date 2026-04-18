@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>DrillDown tests</title>
+<style>
+body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; }
+.pass { color: #2ecc71; } .fail { color: #e74c3c; }
+#host { background: #16213e; padding: 1em; margin: 1em 0; }
+</style>
+</head>
+<body>
+<h1>DrillDown tests</h1>
+<div id="host"></div>
+<div id="results"></div>
+<script src="/static/components/drilldown.js"></script>
+<script>
+(function () {
+  var host = document.getElementById('host');
+  var results = document.getElementById('results');
+  var passed = 0, failed = 0;
+  function assert(name, cond, detail) {
+    var ok = !!cond;
+    var div = document.createElement('div');
+    div.className = ok ? 'pass' : 'fail';
+    div.style.whiteSpace = 'pre';
+    div.textContent = (ok ? 'PASS' : 'FAIL') + ' — ' + name + (ok || !detail ? '' : '\n  ' + detail);
+    results.appendChild(div);
+    if (ok) passed++; else failed++;
+  }
+
+  var dd = window.DrillDown.create({
+    mountEl: host,
+    title: 'Model #42 — AAPL · 1m · 5m',
+    backHref: '#models/leaderboard',
+    breadcrumbs: [
+      {label: 'Models', href: '#models'},
+      {label: 'Leaderboard', href: '#models/leaderboard'},
+      {label: 'AAPL · 1m · 5m'},
+    ],
+  });
+
+  assert('renders back button', host.querySelector('.dd-back') !== null);
+  assert('renders title', host.querySelector('.dd-title').textContent.indexOf('AAPL') >= 0);
+  assert('renders breadcrumbs',
+    host.querySelectorAll('.dd-breadcrumbs a').length === 2);
+  assert('last breadcrumb has no link',
+    host.querySelectorAll('.dd-breadcrumbs > *').length === 3 &&
+    host.querySelectorAll('.dd-breadcrumbs a').length === 2);
+
+  var contentSlot = dd.getContentSlot();
+  contentSlot.innerHTML = '<p>hello world</p>';
+  assert('getContentSlot returns writable element',
+    contentSlot.innerHTML === '<p>hello world</p>');
+  assert('contentSlot is inside mountEl',
+    host.contains(contentSlot));
+
+  // Update title.
+  dd.setTitle('New title');
+  assert('setTitle updates DOM',
+    host.querySelector('.dd-title').textContent === 'New title');
+
+  var summary = document.createElement('div');
+  summary.style.marginTop = '1em';
+  summary.textContent = 'Results: ' + passed + ' passed, ' + failed + ' failed';
+  results.appendChild(summary);
+  document.title = failed === 0 ? 'PASS — DrillDown tests' : 'FAIL — DrillDown tests';
+})();
+</script>
+</body>
+</html>
