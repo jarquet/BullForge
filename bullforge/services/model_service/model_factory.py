@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Optional
 
-from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -16,8 +16,8 @@ def create_model(model_type: str, runtime_config: Optional[dict] = None) -> obje
     if model_type == "gradient_boost":
         return Pipeline([
             ("scaler", StandardScaler()),
-            ("classifier", GradientBoostingClassifier(
-                n_estimators=100, max_depth=3, learning_rate=0.1, random_state=42,
+            ("classifier", HistGradientBoostingClassifier(
+                max_iter=100, max_depth=3, learning_rate=0.1, random_state=42,
             )),
         ])
     if model_type == "logistic_regression":
