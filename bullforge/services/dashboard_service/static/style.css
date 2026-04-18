@@ -378,3 +378,26 @@ h2 {
 
 .dd-back { cursor: pointer; }
 .dd-back:hover { text-decoration: underline; }
+
+.warning { color: var(--yellow); }
+.muted { color: var(--text-muted); }
+.positive { color: var(--green); }
+.negative { color: var(--red); }
+
+.leaderboard-table td,
+.leaderboard-table th {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.85rem;
+}
+.leaderboard-table th { color: var(--text-muted); text-align: left; }
+.leaderboard-table tbody tr:hover { background: rgba(255,255,255,0.03); }
+.leaderboard-table a { color: var(--accent); text-decoration: none; }
+.leaderboard-table a:hover { text-decoration: underline; }
+
+.sparkline-cell {
+    display: inline-block;
+    width: 80px;
+    height: 20px;
+    vertical-align: middle;
+}

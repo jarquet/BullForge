@@ -44,7 +44,58 @@
   // Sub-tab handlers are plugged in by later tasks (Tasks 6-12).
   var handlers = {
     leaderboard: async function () {
-      panel().innerHTML = '<p class="empty-state">Leaderboard sub-tab placeholder (Task 6).</p>';
+      panel().innerHTML = '<div id="models-lb-host"></div>';
+      var rows = await fetchJSON('/api/models');
+      var host = $('models-lb-host');
+      window.Leaderboard.create({
+        mountEl: host,
+        columns: [
+          {key: 'symbol', label: 'Symbol', sortable: true},
+          {key: 'timeframe', label: 'TF', sortable: true},
+          {key: 'horizon_minutes', label: 'Horizon', sortable: true,
+           render: function (v) { return v + 'm'; }},
+          {key: 'model_type', label: 'Type', sortable: true},
+          {key: 'status', label: 'Status', sortable: true,
+           render: function (v) {
+             return '<span class="status-cell ' + v + '">' + v + '</span>';
+           }},
+          {key: 'live_accuracy_7d', label: 'Live 7d', sortable: true,
+           render: function (v) { return (v * 100).toFixed(1) + '%'; }},
+          {key: 'backtested_accuracy', label: 'Backtest', sortable: true,
+           render: function (v) { return (v * 100).toFixed(1) + '%'; }},
+          {key: 'fidelity_delta', label: 'Δ (bt−live)', sortable: true,
+           render: function (v) {
+             var cls = v > 0.05 ? 'negative' : (v > 0.02 ? 'warning' : '');
+             return '<span class="' + cls + '">' + (v * 100).toFixed(1) + '%</span>';
+           }},
+          {key: 'signals_7d', label: 'Signals 7d', sortable: true},
+          {key: 'simulated_pnl_7d_pct', label: 'Sim P&L 7d', sortable: true,
+           render: function (v) {
+             var cls = v >= 0 ? 'positive' : 'negative';
+             return '<span class="' + cls + '">' + (v * 100).toFixed(2) + '%</span>';
+           }},
+          {key: 'accuracy_sparkline_30d', label: '30d', sortable: false,
+           render: function (values, row) {
+             if (!values || values.length === 0) return '<span class="muted">—</span>';
+             return '<span class="sparkline-cell" data-mid="' + row.model_id + '"></span>';
+           }},
+        ],
+        rows: rows,
+        getRowHref: function (row) { return '#models/' + row.model_id; },
+        initialSort: {key: 'fidelity_delta', order: 'desc'},
+      });
+      // Render sparklines after leaderboard inserts the cells.
+      host.querySelectorAll('.sparkline-cell').forEach(function (el) {
+        var row = rows.filter(function (r) {
+          return String(r.model_id) === el.getAttribute('data-mid');
+        })[0];
+        if (row && row.accuracy_sparkline_30d && row.accuracy_sparkline_30d.length > 0) {
+          el.style.display = 'inline-block';
+          el.style.width = '80px';
+          el.style.height = '20px';
+          window.Charts.sparkline(el, {values: row.accuracy_sparkline_30d});
+        }
+      });
     },
     fidelity: async function () {
       panel().innerHTML = '<p class="empty-state">Fidelity sub-tab placeholder (Task 7).</p>';
