@@ -401,3 +401,16 @@ h2 {
     height: 20px;
     vertical-align: middle;
 }
+
+.drill-section {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
+.drill-section h3 {
+    margin: 0 0 0.5rem 0;
+    font-size: 1rem;
+    color: var(--accent);
+}

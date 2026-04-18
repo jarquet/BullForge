@@ -355,18 +355,144 @@
   async function renderDrillDown(modelId) {
     state.currentDrillId = modelId;
     panel().innerHTML = '';
+    var models = await fetchJSON('/api/models');
+    var m = models.filter(function (x) { return String(x.model_id) === String(modelId); })[0];
+    var title = m
+      ? ('Model #' + modelId + ' — ' + m.symbol + ' · ' + m.timeframe + ' · ' + m.horizon_minutes + 'm · ' + m.model_type)
+      : ('Model #' + modelId);
+
     var dd = window.DrillDown.create({
       mountEl: panel(),
-      title: 'Model #' + modelId,
+      title: title,
       backHref: '#models/leaderboard',
       breadcrumbs: [
         {label: 'Models', href: '#models'},
         {label: 'Leaderboard', href: '#models/leaderboard'},
-        {label: 'Model #' + modelId},
+        {label: m ? (m.symbol + ' · ' + m.horizon_minutes + 'm') : ('#' + modelId)},
       ],
     });
-    dd.getContentSlot().innerHTML =
-      '<p class="empty-state">Per-model drill-down placeholder (Task 13).</p>';
+    var slot = dd.getContentSlot();
+    slot.innerHTML =
+      '<section class="drill-section"><h3>Accuracy over time</h3>' +
+      '<div id="dd-ts" class="chart-host" style="width:100%;height:240px;"></div></section>' +
+      '<section class="drill-section"><h3>Calibration</h3>' +
+      '<div id="dd-cal-metrics" style="color:var(--text-muted);"></div>' +
+      '<div id="dd-cal" class="chart-host" style="width:100%;height:300px;"></div></section>' +
+      '<section class="drill-section"><h3>Simulated P&L</h3>' +
+      '<div id="dd-pnl-summary" style="color:var(--text-muted);"></div>' +
+      '<div id="dd-pnl" class="chart-host" style="width:100%;height:240px;"></div></section>' +
+      '<section class="drill-section"><h3>Regime breakdown</h3>' +
+      '<div id="dd-regime-chart" class="chart-host" style="width:100%;height:220px;"></div>' +
+      '<div id="dd-regime-table"></div></section>' +
+      '<section class="drill-section"><h3>Feature importance (top 20)</h3>' +
+      '<div id="dd-fi" class="chart-host" style="width:100%;height:480px;"></div>' +
+      '<div id="dd-fi-note" style="color:var(--text-muted);"></div></section>' +
+      '<section class="drill-section"><h3>Recent signals (last 100)</h3>' +
+      '<div id="dd-sig-host"></div></section>';
+
+    // Fire all fetches in parallel.
+    var [hist, cal, sim, regime, fi, sig] = await Promise.all([
+      fetchJSON('/api/models/' + modelId + '/history'),
+      fetchJSON('/api/models/' + modelId + '/calibration'),
+      fetchJSON('/api/models/' + modelId + '/simulated_pnl'),
+      fetchJSON('/api/models/' + modelId + '/regime_breakdown'),
+      fetchJSON('/api/models/' + modelId + '/feature_importance'),
+      fetchJSON('/api/models/' + modelId + '/signal_history?limit=100'),
+    ]);
+
+    // Accuracy over time.
+    window.Charts.lineChart($('dd-ts'), {
+      series: [{
+        label: 'Accuracy',
+        data: hist.map(function (h) { return {x: h.date, y: h.accuracy}; }),
+      }],
+      xIsTime: true, yLabel: 'Daily accuracy',
+    });
+
+    // Calibration.
+    $('dd-cal-metrics').textContent =
+      'Samples: ' + cal.sample_size + ' · Calibration error: ' + (cal.calibration_error * 100).toFixed(2) + '%';
+    window.Charts.scatterChart($('dd-cal'), {
+      points: cal.bins.filter(function (b) { return b.count > 0; })
+        .map(function (b) {
+          return {x: b.avg_confidence, y: b.hit_rate, r: Math.min(10, 3 + Math.sqrt(b.count))};
+        }),
+      referenceDiagonal: true,
+      xLabel: 'Predicted confidence', yLabel: 'Actual hit rate',
+    });
+
+    // Simulated P&L.
+    $('dd-pnl-summary').textContent =
+      'Signals: ' + sim.signal_count +
+      ' · Cumulative P&L: ' + (sim.cumulative_pnl_pct * 100).toFixed(2) + '%' +
+      ' · Avg per signal: ' + (sim.avg_pnl_pct * 100).toFixed(3) + '%' +
+      ' · Win rate: ' + (sim.win_rate * 100).toFixed(1) + '%';
+    window.Charts.barChart($('dd-pnl'), {
+      labels: sim.daily_series.map(function (d) { return d.date.slice(0, 10); }),
+      values: sim.daily_series.map(function (d) { return d.pnl_pct * 100; }),
+      yLabel: 'Daily P&L (%)', colorByValue: true,
+    });
+
+    // Regime.
+    window.Charts.barChart($('dd-regime-chart'), {
+      labels: regime.map(function (r) { return r.regime; }),
+      values: regime.map(function (r) { return r.accuracy * 100; }),
+      yLabel: 'Accuracy (%)', colorByValue: false,
+    });
+    $('dd-regime-table').innerHTML =
+      '<table class="data-table"><thead><tr>' +
+      '<th>Regime</th><th>Signals</th><th>Accuracy</th><th>P&L</th>' +
+      '</tr></thead><tbody>' +
+      regime.map(function (r) {
+        return '<tr><td>' + r.regime + '</td>' +
+          '<td>' + r.count + '</td>' +
+          '<td>' + (r.accuracy * 100).toFixed(1) + '%</td>' +
+          '<td>' + (r.cumulative_pnl_pct * 100).toFixed(2) + '%</td></tr>';
+      }).join('') +
+      '</tbody></table>';
+
+    // Feature importance.
+    if (fi.available) {
+      $('dd-fi-note').textContent = '';
+      window.Charts.barChart($('dd-fi'), {
+        labels: fi.features.map(function (f) { return f.name; }).reverse(),
+        values: fi.features.map(function (f) { return f.importance; }).reverse(),
+        yLabel: 'Importance', colorByValue: false,
+      });
+    } else {
+      $('dd-fi').innerHTML = '';
+      $('dd-fi-note').textContent = fi.reason || 'Feature importance not available.';
+    }
+
+    // Signal history.
+    window.Leaderboard.create({
+      mountEl: $('dd-sig-host'),
+      columns: [
+        {key: 'timestamp', label: 'Time', sortable: true,
+         render: function (v) { return window.fmtTime ? window.fmtTime(v) : v; }},
+        {key: 'symbol', label: 'Symbol', sortable: true},
+        {key: 'predicted_direction', label: 'Dir', sortable: true,
+         render: function (v) { return v === 1 ? '↑' : (v === -1 ? '↓' : '→'); }},
+        {key: 'confidence', label: 'Conf', sortable: true,
+         render: function (v) { return (v * 100).toFixed(1) + '%'; }},
+        {key: 'entry_price', label: 'Entry', sortable: false,
+         render: function (v) { return v != null ? v.toFixed(2) : '—'; }},
+        {key: 'exit_price', label: 'Exit', sortable: false,
+         render: function (v) { return v != null ? v.toFixed(2) : '—'; }},
+        {key: 'is_correct', label: 'Hit?', sortable: false,
+         render: function (v) {
+           if (v === null || v === undefined) return '—';
+           return v ? '<span class="positive">✓</span>' : '<span class="negative">✗</span>';
+         }},
+        {key: 'pnl_pct', label: 'P&L', sortable: true,
+         render: function (v) {
+           if (v === null || v === undefined) return '—';
+           var cls = v >= 0 ? 'positive' : 'negative';
+           return '<span class="' + cls + '">' + (v * 100).toFixed(3) + '%</span>';
+         }},
+      ],
+      rows: sig,
+    });
   }
 
   async function render() {
