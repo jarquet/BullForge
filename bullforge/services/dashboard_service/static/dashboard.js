@@ -188,71 +188,6 @@ async function loadOverview() {
     $('last-updated').innerHTML = 'Updated: ' + fmtTime(new Date().toISOString());
 }
 
-// -- Trading --------------------------------------------------------------
-
-var currentWindow = 'all';
-
-document.querySelectorAll('.window-btn').forEach(function(btn) {
-    btn.addEventListener('click', function() {
-        document.querySelectorAll('.window-btn').forEach(function(b) { b.classList.remove('active'); });
-        btn.classList.add('active');
-        currentWindow = btn.dataset.window;
-        loadTrading();
-    });
-});
-
-async function loadTrading() {
-    var data = await api('/api/metrics/trading?window=' + currentWindow);
-    var m = data.metrics;
-
-    if (!m) {
-        ['tr-total-trades', 'tr-win-rate', 'tr-total-pnl', 'tr-profit-factor',
-         'tr-sharpe', 'tr-avg-win', 'tr-avg-loss', 'tr-avg-hold'].forEach(function(id) {
-            setHtml(id, '--');
-        });
-        return;
-    }
-
-    setHtml('tr-total-trades', m.total_trades);
-    setHtml('tr-win-rate', fmtPct(m.win_rate));
-
-    var pnl = $('tr-total-pnl');
-    pnl.innerHTML = fmtMoney(m.total_pnl);
-    setPnlClass(pnl, m.total_pnl);
-
-    setHtml('tr-profit-factor', fmt(m.profit_factor));
-    setHtml('tr-sharpe', fmt(m.sharpe_ratio));
-
-    var avgWin = $('tr-avg-win');
-    avgWin.innerHTML = fmtMoney(m.avg_win);
-    setPnlClass(avgWin, m.avg_win);
-
-    var avgLoss = $('tr-avg-loss');
-    avgLoss.innerHTML = fmtMoney(m.avg_loss);
-    setPnlClass(avgLoss, m.avg_loss);
-
-    setHtml('tr-avg-hold', fmtDuration(m.avg_hold_duration_seconds));
-
-    // Per-symbol breakdown
-    var symbols = await api('/api/metrics/symbols');
-    var grid = $('tr-symbols');
-    var entries = Object.entries(symbols);
-    if (entries.length === 0) {
-        grid.innerHTML = '<p class="empty-state">No symbol data yet</p>';
-    } else {
-        grid.innerHTML = entries.map(function(entry) {
-            var sym = entry[0];
-            var sm = entry[1].metrics;
-            return '<div class="symbol-card">' +
-                '<h3>' + sym + '</h3>' +
-                '<div class="stat"><span class="stat-label">Trades</span><span>' + sm.total_trades + '</span></div>' +
-                '<div class="stat"><span class="stat-label">Win Rate</span><span>' + fmtPct(sm.win_rate) + '</span></div>' +
-                '<div class="stat"><span class="stat-label">P&L</span><span>' + fmtMoney(sm.total_pnl) + '</span></div>' +
-                '<div class="stat"><span class="stat-label">Profit Factor</span><span>' + fmt(sm.profit_factor) + '</span></div>' +
-                '</div>';
-        }).join('');
-    }
-}
 
 // -- Trades ---------------------------------------------------------------
 
@@ -332,7 +267,6 @@ async function refreshAll() {
     try {
         await Promise.all([
             loadOverview(),
-            loadTrading(),
             loadTrades(),
             loadOrders(),
             loadHalts(),

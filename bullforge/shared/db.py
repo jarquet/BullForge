@@ -1259,6 +1259,565 @@ class Database:
             for r in rows
         ]
 
+    async def insert_trade_with_exit(self, trade: Trade) -> int:
+        """Insert a trade already marked closed (exit_time, exit_price, pnl set)."""
+        async with self.pool.acquire() as conn:
+            row_id = await conn.fetchval(
+                """
+                INSERT INTO trades
+                    (symbol, side, entry_time, entry_price, quantity, entry_order_id,
+                     exit_time, exit_price, pnl, hold_duration_seconds, exit_order_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                RETURNING id
+                """,
+                trade.symbol, trade.side, trade.entry_time,
+                trade.entry_price, trade.quantity, trade.entry_order_id,
+                trade.exit_time, trade.exit_price, trade.pnl,
+                trade.hold_duration_seconds, trade.exit_order_id,
+            )
+        return row_id
+
+    async def query_equity_curve(
+        self,
+        starting_equity: float,
+        from_dt: Optional[datetime] = None,
+        to_dt: Optional[datetime] = None,
+        max_points: int = 2000,
+    ) -> list[dict]:
+        """Equity curve walked from closed trades.
+
+        Returns list of {timestamp, realized_pnl, realized_equity, drawdown,
+        trailing_peak}. Downsampled to at most max_points via LTTB-like
+        thinning (uniform stride — acceptable for our scale).
+        """
+        query = """
+            SELECT exit_time, pnl
+            FROM trades
+            WHERE exit_time IS NOT NULL AND pnl IS NOT NULL
+        """
+        args: list = []
+        idx = 1
+        if from_dt is not None:
+            query += f" AND exit_time >= ${idx}"
+            args.append(from_dt); idx += 1
+        if to_dt is not None:
+            query += f" AND exit_time < ${idx}"
+            args.append(to_dt); idx += 1
+        query += " ORDER BY exit_time ASC"
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(query, *args)
+
+        series: list[dict] = []
+        equity = starting_equity
+        peak = starting_equity
+        for r in rows:
+            equity += float(r["pnl"])
+            if equity > peak:
+                peak = equity
+            drawdown = (equity - peak) / peak if peak > 0 else 0.0
+            series.append({
+                "timestamp": r["exit_time"],
+                "realized_pnl": float(r["pnl"]),
+                "realized_equity": equity,
+                "trailing_peak": peak,
+                "drawdown": drawdown,
+            })
+
+        if len(series) > max_points:
+            stride = len(series) // max_points
+            series = series[::stride]
+        return series
+
+    async def query_distributions(
+        self,
+        from_dt: Optional[datetime] = None,
+        to_dt: Optional[datetime] = None,
+    ) -> dict:
+        """Daily P&L, trade P&L histogram, hold-time buckets, and side breakdown.
+
+        Returns {daily_pnl, trade_pnl_histogram, hold_time_buckets,
+        side_breakdown}. Each sub-object shaped for direct Chart.js rendering.
+        """
+        base_where = "WHERE exit_time IS NOT NULL AND pnl IS NOT NULL"
+        args: list = []
+        idx = 1
+        if from_dt is not None:
+            base_where += f" AND exit_time >= ${idx}"
+            args.append(from_dt); idx += 1
+        if to_dt is not None:
+            base_where += f" AND exit_time < ${idx}"
+            args.append(to_dt); idx += 1
+
+        async with self.pool.acquire() as conn:
+            daily = await conn.fetch(
+                f"""
+                SELECT DATE_TRUNC('day', exit_time) AS date,
+                       SUM(pnl) AS pnl, COUNT(*) AS trades
+                FROM trades {base_where}
+                GROUP BY DATE_TRUNC('day', exit_time)
+                ORDER BY date ASC
+                """,
+                *args,
+            )
+            all_trades = await conn.fetch(
+                f"""SELECT pnl, hold_duration_seconds, side FROM trades {base_where}""",
+                *args,
+            )
+
+        pnls = [float(t["pnl"]) for t in all_trades]
+        holds = [int(t["hold_duration_seconds"]) for t in all_trades
+                 if t["hold_duration_seconds"] is not None]
+
+        # Trade P&L histogram (20 bins).
+        if pnls:
+            lo, hi = min(pnls), max(pnls)
+            if lo == hi:
+                lo -= 1.0; hi += 1.0
+            bins = 20
+            width = (hi - lo) / bins
+            counts = [0] * bins
+            for v in pnls:
+                i = min(bins - 1, int((v - lo) / width))
+                counts[i] += 1
+            labels = [round(lo + i * width, 2) for i in range(bins)]
+        else:
+            labels, counts = [], []
+
+        # Hold-time buckets: <5m, 5-30m, 30m-2h, 2h-8h, 8h-1d, overnight, multi-day.
+        hold_buckets = [
+            ("<5m", 0, 300),
+            ("5-30m", 300, 1800),
+            ("30m-2h", 1800, 7200),
+            ("2h-8h", 7200, 28800),
+            ("8h-1d", 28800, 86400),
+            ("overnight", 86400, 172800),
+            ("multi-day", 172800, 10**9),
+        ]
+        hold_table = []
+        for name, lo_s, hi_s in hold_buckets:
+            bucket_trades = [t for t in all_trades
+                              if t["hold_duration_seconds"] is not None
+                              and lo_s <= t["hold_duration_seconds"] < hi_s]
+            n = len(bucket_trades)
+            avg_pnl = (sum(float(t["pnl"]) for t in bucket_trades) / n) if n > 0 else 0.0
+            hold_table.append({"bucket": name, "trades": n, "avg_pnl": avg_pnl})
+
+        # Side breakdown.
+        def side_stats(side):
+            rows = [t for t in all_trades if t["side"] == side]
+            n = len(rows)
+            wins = sum(1 for t in rows if float(t["pnl"]) > 0)
+            total_pnl = sum(float(t["pnl"]) for t in rows)
+            return {
+                "side": side,
+                "trades": n,
+                "wins": wins,
+                "win_rate": (wins / n) if n > 0 else 0.0,
+                "total_pnl": total_pnl,
+                "avg_pnl": (total_pnl / n) if n > 0 else 0.0,
+            }
+
+        return {
+            "daily_pnl": [
+                {"date": r["date"], "pnl": float(r["pnl"]), "trades": r["trades"]}
+                for r in daily
+            ],
+            "trade_pnl_histogram": {
+                "labels": labels, "counts": counts,
+                "median": sorted(pnls)[len(pnls) // 2] if pnls else 0.0,
+                "mean": (sum(pnls) / len(pnls)) if pnls else 0.0,
+            },
+            "hold_time_buckets": hold_table,
+            "side_breakdown": [side_stats("long"), side_stats("short")],
+        }
+
+    async def query_streaks(
+        self,
+        from_dt: Optional[datetime] = None,
+        to_dt: Optional[datetime] = None,
+    ) -> dict:
+        """Current streak (kind + length), longest streaks, and W/L ribbon.
+
+        Returns {current_streak_kind: 'win'|'loss', current_streak_length,
+        longest_win_streak, longest_loss_streak, ribbon: [{timestamp, win}]}.
+        """
+        query = (
+            "SELECT exit_time, pnl FROM trades "
+            "WHERE exit_time IS NOT NULL AND pnl IS NOT NULL"
+        )
+        args: list = []
+        idx = 1
+        if from_dt is not None:
+            query += f" AND exit_time >= ${idx}"
+            args.append(from_dt); idx += 1
+        if to_dt is not None:
+            query += f" AND exit_time < ${idx}"
+            args.append(to_dt); idx += 1
+        query += " ORDER BY exit_time ASC"
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(query, *args)
+
+        ribbon = []
+        longest_win = 0
+        longest_loss = 0
+        run_win = 0
+        run_loss = 0
+        for r in rows:
+            win = float(r["pnl"]) > 0
+            ribbon.append({"timestamp": r["exit_time"], "win": win})
+            if win:
+                run_win += 1; run_loss = 0
+                longest_win = max(longest_win, run_win)
+            else:
+                run_loss += 1; run_win = 0
+                longest_loss = max(longest_loss, run_loss)
+
+        current_kind = "win" if (ribbon and ribbon[-1]["win"]) else "loss"
+        current_length = run_win if current_kind == "win" else run_loss
+        if not ribbon:
+            current_kind = "none"; current_length = 0
+        return {
+            "current_streak_kind": current_kind,
+            "current_streak_length": current_length,
+            "longest_win_streak": longest_win,
+            "longest_loss_streak": longest_loss,
+            "ribbon": ribbon,
+        }
+
+    async def query_heatmap_time_of_day(
+        self,
+        from_dt: Optional[datetime] = None,
+        to_dt: Optional[datetime] = None,
+    ) -> dict:
+        """Heatmap grid: avg P&L per (weekday, half-hour UTC bucket).
+
+        Returns {x_labels: ['00:00', '00:30', ...], y_labels: ['Mon', ...,
+        'Fri'], cells: [[val|None, ...], ...]}. Half-hour buckets across full
+        UTC day (48 columns). Weekdays Mon-Fri (skip weekends since equities
+        don't trade).
+        """
+        query = (
+            "SELECT EXTRACT(DOW FROM entry_time)::INT AS dow, "
+            "       EXTRACT(HOUR FROM entry_time)::INT AS hh, "
+            "       EXTRACT(MINUTE FROM entry_time)::INT AS mm, "
+            "       pnl "
+            "FROM trades WHERE exit_time IS NOT NULL AND pnl IS NOT NULL"
+        )
+        args: list = []
+        idx = 1
+        if from_dt is not None:
+            query += f" AND entry_time >= ${idx}"
+            args.append(from_dt); idx += 1
+        if to_dt is not None:
+            query += f" AND entry_time < ${idx}"
+            args.append(to_dt); idx += 1
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(query, *args)
+
+        # 5 weekdays × 48 half-hour columns.
+        x_labels = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 30)]
+        y_labels = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+        sums = [[0.0] * 48 for _ in range(5)]
+        counts = [[0] * 48 for _ in range(5)]
+        for r in rows:
+            # Postgres DOW: Sun=0, Mon=1, ..., Sat=6. Skip weekends.
+            dow = r["dow"]
+            if dow < 1 or dow > 5:
+                continue
+            y = dow - 1
+            x = r["hh"] * 2 + (1 if r["mm"] >= 30 else 0)
+            sums[y][x] += float(r["pnl"])
+            counts[y][x] += 1
+        cells = [
+            [(sums[y][x] / counts[y][x]) if counts[y][x] > 0 else None
+             for x in range(48)]
+            for y in range(5)
+        ]
+        return {"x_labels": x_labels, "y_labels": y_labels, "cells": cells}
+
+    async def query_exposure_timeline(
+        self,
+        equity: float,
+        from_dt: Optional[datetime] = None,
+        to_dt: Optional[datetime] = None,
+        resolution_minutes: int = 5,
+    ) -> list[dict]:
+        """Time-bucketed exposure stacked by symbol.
+
+        Returns [{timestamp, total_exposure_pct, by_symbol: {SYM: pct, ...}}].
+        For each bucket, sums market value of all positions open at the
+        bucket's start time, divided by equity.
+        """
+        query = (
+            "SELECT symbol, entry_time, exit_time, entry_price, quantity "
+            "FROM trades WHERE exit_time IS NOT NULL"
+        )
+        args: list = []
+        idx = 1
+        if from_dt is not None:
+            query += f" AND entry_time >= ${idx}"
+            args.append(from_dt); idx += 1
+        if to_dt is not None:
+            query += f" AND exit_time < ${idx}"
+            args.append(to_dt); idx += 1
+        async with self.pool.acquire() as conn:
+            trades = await conn.fetch(query, *args)
+
+        if not trades:
+            return []
+        min_t = min(t["entry_time"] for t in trades) if not from_dt else from_dt
+        max_t = max(t["exit_time"] for t in trades) if not to_dt else to_dt
+        if max_t <= min_t:
+            return []
+
+        step = timedelta(minutes=resolution_minutes)
+        timeline: list[dict] = []
+        t = min_t
+        while t <= max_t:
+            by_symbol: dict[str, float] = {}
+            total = 0.0
+            for tr in trades:
+                if tr["entry_time"] <= t < tr["exit_time"]:
+                    mv = float(tr["entry_price"]) * float(tr["quantity"])
+                    by_symbol[tr["symbol"]] = by_symbol.get(tr["symbol"], 0.0) + mv
+                    total += mv
+            pct = total / equity if equity > 0 else 0.0
+            timeline.append({
+                "timestamp": t,
+                "total_exposure_pct": pct,
+                "by_symbol": {k: v / equity for k, v in by_symbol.items()},
+            })
+            t += step
+        return timeline
+
+    async def query_benchmark(
+        self,
+        starting_equity: float,
+        from_dt: Optional[datetime] = None,
+        to_dt: Optional[datetime] = None,
+    ) -> dict:
+        """Strategy equity vs SPY buy-and-hold + stats.
+
+        Returns {strategy_series, spy_series, stats:{annualized_return,
+        annualized_vol, sharpe, max_drawdown, beta, alpha}}.
+        """
+        import math
+        # Strategy equity (daily bucketed for clean alignment with SPY dailies).
+        equity_query = (
+            "SELECT DATE_TRUNC('day', exit_time) AS day, SUM(pnl) AS pnl "
+            "FROM trades WHERE exit_time IS NOT NULL AND pnl IS NOT NULL"
+        )
+        args: list = []
+        idx = 1
+        if from_dt is not None:
+            equity_query += f" AND exit_time >= ${idx}"
+            args.append(from_dt); idx += 1
+        if to_dt is not None:
+            equity_query += f" AND exit_time < ${idx}"
+            args.append(to_dt); idx += 1
+        equity_query += " GROUP BY DATE_TRUNC('day', exit_time) ORDER BY day ASC"
+
+        spy_query = (
+            "SELECT timestamp, close FROM bars_daily "
+            "WHERE symbol = 'SPY'"
+        )
+        spy_args: list = []
+        sidx = 1
+        if from_dt is not None:
+            spy_query += f" AND timestamp >= ${sidx}"
+            spy_args.append(from_dt); sidx += 1
+        if to_dt is not None:
+            spy_query += f" AND timestamp < ${sidx}"
+            spy_args.append(to_dt); sidx += 1
+        spy_query += " ORDER BY timestamp ASC"
+
+        async with self.pool.acquire() as conn:
+            equity_rows = await conn.fetch(equity_query, *args)
+            spy_rows = await conn.fetch(spy_query, *spy_args)
+
+        # Build strategy series: cumulative equity per day.
+        strat = []
+        e = starting_equity
+        for r in equity_rows:
+            e += float(r["pnl"])
+            strat.append({"timestamp": r["day"], "equity": e})
+
+        # Normalize SPY to starting_equity.
+        spy_series = []
+        if spy_rows:
+            start_close = float(spy_rows[0]["close"])
+            for r in spy_rows:
+                spy_series.append({
+                    "timestamp": r["timestamp"],
+                    "equity": starting_equity * float(r["close"]) / start_close,
+                })
+
+        # Compute daily strategy returns + SPY returns.
+        def daily_returns(series):
+            out = []
+            for i in range(1, len(series)):
+                prev = series[i - 1]["equity"]
+                cur = series[i]["equity"]
+                if prev > 0:
+                    out.append((cur / prev) - 1.0)
+            return out
+
+        strat_returns = daily_returns(strat)
+        spy_returns = daily_returns(spy_series)
+
+        def mean(xs): return sum(xs) / len(xs) if xs else 0.0
+        def var(xs):
+            if len(xs) < 2: return 0.0
+            m = mean(xs)
+            return sum((x - m) ** 2 for x in xs) / (len(xs) - 1)
+        def stdev(xs): return math.sqrt(var(xs))
+
+        def annualize_return(xs):
+            if not xs: return 0.0
+            # Compound product: Π(1+r_i) - 1, then annualize by days_per_year ^ (1/len).
+            prod = 1.0
+            for r in xs: prod *= (1.0 + r)
+            if prod <= 0: return -1.0
+            return prod ** (252 / len(xs)) - 1.0 if len(xs) > 0 else 0.0
+
+        ann_return = annualize_return(strat_returns)
+        ann_vol = stdev(strat_returns) * math.sqrt(252)
+        rf = 0.0  # risk-free rate simplification
+        sharpe = (ann_return - rf) / ann_vol if ann_vol > 0 else 0.0
+
+        # Max drawdown from strategy series.
+        max_dd = 0.0
+        peak = starting_equity
+        for p in strat:
+            if p["equity"] > peak: peak = p["equity"]
+            dd = (p["equity"] - peak) / peak if peak > 0 else 0.0
+            if dd < max_dd: max_dd = dd
+
+        # Beta & alpha vs SPY — align return series by length (truncate to min).
+        n = min(len(strat_returns), len(spy_returns))
+        beta = alpha = 0.0
+        if n >= 2:
+            a = strat_returns[-n:]
+            b = spy_returns[-n:]
+            mb = mean(b)
+            vb = var(b)
+            if vb > 0:
+                cov = sum((a[i] - mean(a)) * (b[i] - mb) for i in range(n)) / (n - 1)
+                beta = cov / vb
+                ann_spy = annualize_return(b)
+                alpha = ann_return - (rf + beta * (ann_spy - rf))
+
+        return {
+            "strategy_series": strat,
+            "spy_series": spy_series,
+            "stats": {
+                "annualized_return": ann_return,
+                "annualized_vol": ann_vol,
+                "sharpe": sharpe,
+                "max_drawdown": max_dd,
+                "beta": beta,
+                "alpha": alpha,
+            },
+        }
+
+    async def query_symbol_drilldown(
+        self,
+        symbol: str,
+        from_dt: Optional[datetime] = None,
+        to_dt: Optional[datetime] = None,
+    ) -> dict:
+        """Per-symbol payload: equity series, trades, side breakdown,
+        win rate over time (daily).
+        """
+        base_where = "WHERE symbol = $1 AND exit_time IS NOT NULL AND pnl IS NOT NULL"
+        args: list = [symbol]
+        idx = 2
+        if from_dt is not None:
+            base_where += f" AND exit_time >= ${idx}"
+            args.append(from_dt); idx += 1
+        if to_dt is not None:
+            base_where += f" AND exit_time < ${idx}"
+            args.append(to_dt); idx += 1
+
+        async with self.pool.acquire() as conn:
+            all_trades = await conn.fetch(
+                f"""
+                SELECT id, side, entry_time, exit_time, entry_price,
+                       exit_price, quantity, pnl, hold_duration_seconds
+                FROM trades {base_where}
+                ORDER BY exit_time ASC
+                """,
+                *args,
+            )
+            daily = await conn.fetch(
+                f"""
+                SELECT DATE_TRUNC('day', exit_time) AS date,
+                       COUNT(*) AS total,
+                       SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END)::INT AS wins,
+                       SUM(pnl) AS pnl
+                FROM trades {base_where}
+                GROUP BY DATE_TRUNC('day', exit_time)
+                ORDER BY date ASC
+                """,
+                *args,
+            )
+
+        # Per-symbol equity: start at 0, cumulate P&L.
+        equity = 0.0
+        peak = 0.0
+        equity_series = []
+        for t in all_trades:
+            equity += float(t["pnl"])
+            if equity > peak: peak = equity
+            dd = (equity - peak) / peak if peak > 0 else 0.0
+            equity_series.append({
+                "timestamp": t["exit_time"],
+                "equity": equity, "drawdown": dd,
+            })
+
+        def side_stats(side):
+            rows = [t for t in all_trades if t["side"] == side]
+            n = len(rows)
+            wins = sum(1 for t in rows if float(t["pnl"]) > 0)
+            total_pnl = sum(float(t["pnl"]) for t in rows)
+            return {
+                "side": side, "trades": n, "wins": wins,
+                "win_rate": (wins / n) if n > 0 else 0.0,
+                "total_pnl": total_pnl,
+            }
+
+        return {
+            "symbol": symbol,
+            "trade_count": len(all_trades),
+            "equity_series": equity_series,
+            "trades": [
+                {
+                    "id": t["id"], "side": t["side"],
+                    "entry_time": t["entry_time"], "exit_time": t["exit_time"],
+                    "entry_price": float(t["entry_price"]),
+                    "exit_price": float(t["exit_price"]) if t["exit_price"] else None,
+                    "quantity": float(t["quantity"]),
+                    "pnl": float(t["pnl"]) if t["pnl"] else None,
+                    "hold_duration_seconds": t["hold_duration_seconds"],
+                }
+                for t in all_trades
+            ],
+            "side_breakdown": [side_stats("long"), side_stats("short")],
+            "win_rate_over_time": [
+                {
+                    "date": r["date"],
+                    "total": r["total"],
+                    "wins": r["wins"],
+                    "win_rate": (r["wins"] / r["total"]) if r["total"] > 0 else 0.0,
+                    "pnl": float(r["pnl"] or 0),
+                }
+                for r in daily
+            ],
+        }
+
     async def query_trades_closed_before(
         self, symbol: str, as_of: datetime
     ) -> list[dict]:

@@ -30,13 +30,6 @@ async def test_every_stub_returns_501(aiohttp_client, stub_app):
 @pytest.mark.asyncio
 async def test_stubs_include_every_spec_endpoint():
     expected_prefixes = {
-        "/api/trading/equity",
-        "/api/trading/distributions",
-        "/api/trading/heatmap",
-        "/api/trading/streaks",
-        "/api/trading/exposure",
-        "/api/trading/benchmark",
-        "/api/trading/symbols/{sym}",
         "/api/backtests/{run_id}/equity",
         "/api/backtests/{run_id}/folds",
         "/api/backtests/{run_id}/symbols",

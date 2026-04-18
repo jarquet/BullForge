@@ -7,15 +7,6 @@ from aiohttp import web
 logger = logging.getLogger(__name__)
 
 STUB_ENDPOINTS: dict[str, dict] = {
-    # --- Plan 3: Trading domain --------------------------------------
-    "/api/trading/equity":                  {"enabled_after_plan": "plan_3"},
-    "/api/trading/distributions":           {"enabled_after_plan": "plan_3"},
-    "/api/trading/heatmap":                 {"enabled_after_plan": "plan_3"},
-    "/api/trading/streaks":                 {"enabled_after_plan": "plan_3"},
-    "/api/trading/exposure":                {"enabled_after_plan": "plan_3"},
-    "/api/trading/benchmark":               {"enabled_after_plan": "plan_3"},
-    "/api/trading/symbols/{sym}":           {"enabled_after_plan": "plan_3"},
-
     # --- Plan 4: Backtests domain ------------------------------------
     "/api/backtests/{run_id}/equity":       {"enabled_after_plan": "plan_4"},
     "/api/backtests/{run_id}/folds":        {"enabled_after_plan": "plan_4"},
