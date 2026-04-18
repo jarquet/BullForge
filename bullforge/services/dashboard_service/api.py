@@ -10,6 +10,7 @@ from shared.time_window import parse_time_window
 
 from services.dashboard_service.backtests_api import register_backtests_routes
 from services.dashboard_service.models_api import register_models_routes
+from services.dashboard_service.trading_api import register_trading_routes
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ def create_api_app(db: Database) -> web.Application:
 
     register_backtests_routes(app)
     register_models_routes(app)
+    register_trading_routes(app)
 
     return app
 
