@@ -148,7 +148,44 @@
       await load();
     },
     calibration: async function () {
-      panel().innerHTML = '<p class="empty-state">Calibration sub-tab placeholder (Task 8).</p>';
+      panel().innerHTML =
+        '<div class="calibration-panel">' +
+        '<p class="subtitle">Reliability diagram: predicted confidence vs actual hit rate, binned into 10 ranges. Perfect calibration = diagonal line.</p>' +
+        '<div class="model-selector"><label>Model: </label>' +
+        '<select id="cal-model-select"></select></div>' +
+        '<div class="cal-metrics" id="cal-metrics" style="margin:0.5rem 0;color:var(--text-muted)"></div>' +
+        '<div id="cal-chart-host" class="chart-host" style="width:100%;height:360px;"></div>' +
+        '</div>';
+
+      var models = await fetchJSON('/api/models');
+      var select = $('cal-model-select');
+      select.innerHTML = models.map(function (m) {
+        return '<option value="' + m.model_id + '">' +
+          m.symbol + ' · ' + m.timeframe + ' · ' + m.horizon_minutes + 'm · ' + m.model_type +
+          '</option>';
+      }).join('');
+
+      async function load() {
+        var mid = select.value;
+        var payload = await fetchJSON('/api/models/' + mid + '/calibration');
+        $('cal-metrics').textContent =
+          'Samples: ' + payload.sample_size +
+          ' · Calibration error: ' + (payload.calibration_error * 100).toFixed(2) + '%';
+        var points = payload.bins
+          .filter(function (b) { return b.count > 0; })
+          .map(function (b) {
+            return {x: b.avg_confidence, y: b.hit_rate, r: Math.min(10, 3 + Math.sqrt(b.count))};
+          });
+        window.Charts.scatterChart($('cal-chart-host'), {
+          points: points,
+          referenceDiagonal: true,
+          xLabel: 'Predicted confidence',
+          yLabel: 'Actual hit rate',
+        });
+      }
+
+      select.onchange = load;
+      await load();
     },
     attribution: async function () {
       panel().innerHTML = '<p class="empty-state">Attribution sub-tab placeholder (Task 9).</p>';
