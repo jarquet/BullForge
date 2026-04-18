@@ -312,7 +312,43 @@
       await load();
     },
     featimp: async function () {
-      panel().innerHTML = '<p class="empty-state">Feature Importance sub-tab placeholder (Task 12).</p>';
+      panel().innerHTML =
+        '<div class="featimp-panel">' +
+        '<p class="subtitle">Top 20 features by importance for the selected model. Unavailable for sequence models (LSTM).</p>' +
+        '<div class="model-selector"><label>Model: </label>' +
+        '<select id="fi-model-select"></select></div>' +
+        '<div id="fi-chart-host" class="chart-host" style="width:100%;height:500px;margin-top:1rem;"></div>' +
+        '<div id="fi-note" style="margin-top:0.5rem;color:var(--text-muted);"></div>' +
+        '</div>';
+
+      var models = await fetchJSON('/api/models');
+      var select = $('fi-model-select');
+      select.innerHTML = models.map(function (m) {
+        return '<option value="' + m.model_id + '">' +
+          m.symbol + ' · ' + m.timeframe + ' · ' + m.horizon_minutes + 'm · ' + m.model_type +
+          '</option>';
+      }).join('');
+
+      async function load() {
+        var mid = select.value;
+        var payload = await fetchJSON('/api/models/' + mid + '/feature_importance');
+        if (!payload.available) {
+          $('fi-chart-host').innerHTML = '';
+          $('fi-note').textContent = payload.reason || 'Feature importance not available.';
+          return;
+        }
+        $('fi-note').textContent = '';
+        // Horizontal bar: feature names as labels, importances as values.
+        var names = payload.features.map(function (f) { return f.name; }).reverse();
+        var values = payload.features.map(function (f) { return f.importance; }).reverse();
+        window.Charts.barChart($('fi-chart-host'), {
+          labels: names, values: values,
+          yLabel: 'Importance', colorByValue: false,
+        });
+      }
+
+      select.onchange = load;
+      await load();
     },
   };
 
