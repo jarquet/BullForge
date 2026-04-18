@@ -1354,6 +1354,474 @@ class Database:
             )
         return [dict(r) for r in rows]
 
+    # ── Model performance query methods ───────────────────────────
+
+    async def query_accuracy_history(
+        self,
+        model_id: int,
+        from_dt: Optional[datetime] = None,
+        to_dt: Optional[datetime] = None,
+    ) -> list[dict]:
+        """Daily-bucketed hit rate for a model over [from_dt, to_dt).
+
+        Returns rows: {date, total, correct, accuracy}. Ordered by date asc.
+        A prediction counts as 'correct' by the same rules as
+        query_prediction_outcomes: direction matches price movement, flat is
+        ±0.1% of entry.
+        """
+        query = """
+            SELECT
+                DATE_TRUNC('day', p.timestamp) AS date,
+                COUNT(*) AS total,
+                SUM(CASE
+                    WHEN (p.predicted_direction = 1 AND b_exit.close > b_entry.close) THEN 1
+                    WHEN (p.predicted_direction = -1 AND b_exit.close < b_entry.close) THEN 1
+                    WHEN (p.predicted_direction = 0
+                          AND ABS(b_exit.close - b_entry.close)
+                              / NULLIF(b_entry.close, 0) < 0.001) THEN 1
+                    ELSE 0
+                END)::INT AS correct
+            FROM predictions p
+            JOIN bars_1m b_entry
+                ON b_entry.symbol = p.symbol
+                AND b_entry.timestamp = p.timestamp
+            JOIN bars_1m b_exit
+                ON b_exit.symbol = p.symbol
+                AND b_exit.timestamp = p.timestamp
+                    + (p.horizon_minutes * interval '1 minute')
+            WHERE p.model_id = $1
+        """
+        args: list = [model_id]
+        idx = 2
+        if from_dt is not None:
+            query += f" AND p.timestamp >= ${idx}"
+            args.append(from_dt); idx += 1
+        if to_dt is not None:
+            query += f" AND p.timestamp < ${idx}"
+            args.append(to_dt); idx += 1
+        query += """
+            GROUP BY DATE_TRUNC('day', p.timestamp)
+            ORDER BY date ASC
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(query, *args)
+        return [
+            {
+                "date": r["date"],
+                "total": r["total"],
+                "correct": r["correct"],
+                "accuracy": (r["correct"] / r["total"]) if r["total"] > 0 else 0.0,
+            }
+            for r in rows
+        ]
+
+    async def query_calibration_bins(
+        self,
+        model_id: int,
+        num_bins: int = 10,
+        from_dt: Optional[datetime] = None,
+        to_dt: Optional[datetime] = None,
+    ) -> list[dict]:
+        """Reliability-diagram bins: predicted confidence vs actual hit rate.
+
+        Returns num_bins rows: {bin_low, bin_high, count, correct,
+        avg_confidence, hit_rate}. All bins returned even if empty.
+        """
+        query = """
+            WITH outcomes AS (
+                SELECT
+                    p.confidence,
+                    CASE
+                        WHEN p.predicted_direction = 1 AND b_exit.close > b_entry.close THEN 1
+                        WHEN p.predicted_direction = -1 AND b_exit.close < b_entry.close THEN 1
+                        WHEN p.predicted_direction = 0
+                             AND ABS(b_exit.close - b_entry.close)
+                                 / NULLIF(b_entry.close, 0) < 0.001 THEN 1
+                        ELSE 0
+                    END AS is_correct
+                FROM predictions p
+                JOIN bars_1m b_entry
+                    ON b_entry.symbol = p.symbol
+                    AND b_entry.timestamp = p.timestamp
+                JOIN bars_1m b_exit
+                    ON b_exit.symbol = p.symbol
+                    AND b_exit.timestamp = p.timestamp
+                        + (p.horizon_minutes * interval '1 minute')
+                WHERE p.model_id = $1
+        """
+        args: list = [model_id]
+        idx = 2
+        if from_dt is not None:
+            query += f" AND p.timestamp >= ${idx}"
+            args.append(from_dt); idx += 1
+        if to_dt is not None:
+            query += f" AND p.timestamp < ${idx}"
+            args.append(to_dt); idx += 1
+        query += f"""
+            )
+            SELECT
+                bin_idx,
+                COUNT(*) AS count,
+                SUM(is_correct)::INT AS correct,
+                AVG(confidence) AS avg_confidence,
+                AVG(is_correct::FLOAT) AS hit_rate
+            FROM (
+                SELECT
+                    LEAST(FLOOR(confidence * ${idx})::INT, ${idx} - 1) AS bin_idx,
+                    confidence, is_correct
+                FROM outcomes
+            ) t
+            GROUP BY bin_idx
+            ORDER BY bin_idx ASC
+        """
+        args.append(num_bins)
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(query, *args)
+
+        by_idx = {r["bin_idx"]: r for r in rows}
+        result = []
+        for i in range(num_bins):
+            r = by_idx.get(i)
+            lo = i / num_bins
+            hi = (i + 1) / num_bins
+            if r is None:
+                result.append({
+                    "bin_low": lo, "bin_high": hi,
+                    "count": 0, "correct": 0,
+                    "avg_confidence": 0.0, "hit_rate": 0.0,
+                })
+            else:
+                result.append({
+                    "bin_low": lo, "bin_high": hi,
+                    "count": r["count"], "correct": r["correct"],
+                    "avg_confidence": float(r["avg_confidence"]),
+                    "hit_rate": float(r["hit_rate"]),
+                })
+        return result
+
+    async def query_simulated_pnl(
+        self,
+        model_id: int,
+        from_dt: Optional[datetime] = None,
+        to_dt: Optional[datetime] = None,
+    ) -> dict:
+        """Simulated P&L if every signal had been traded with unit position.
+
+        Returns {signal_count, cumulative_pnl_pct, avg_pnl_pct, win_rate,
+        daily_series: [{date, pnl_pct, count}, ...]}.
+        P&L per signal = predicted_direction * (exit_close - entry_close) / entry_close.
+        """
+        query = """
+            WITH signals AS (
+                SELECT
+                    p.timestamp,
+                    p.predicted_direction::FLOAT *
+                        (b_exit.close - b_entry.close) / NULLIF(b_entry.close, 0)
+                        AS pnl_pct
+                FROM predictions p
+                JOIN bars_1m b_entry
+                    ON b_entry.symbol = p.symbol
+                    AND b_entry.timestamp = p.timestamp
+                JOIN bars_1m b_exit
+                    ON b_exit.symbol = p.symbol
+                    AND b_exit.timestamp = p.timestamp
+                        + (p.horizon_minutes * interval '1 minute')
+                WHERE p.model_id = $1
+        """
+        args: list = [model_id]
+        idx = 2
+        if from_dt is not None:
+            query += f" AND p.timestamp >= ${idx}"
+            args.append(from_dt); idx += 1
+        if to_dt is not None:
+            query += f" AND p.timestamp < ${idx}"
+            args.append(to_dt); idx += 1
+        query += """
+            )
+            SELECT
+                DATE_TRUNC('day', timestamp) AS date,
+                COUNT(*) AS count,
+                SUM(pnl_pct) AS daily_pnl_pct,
+                SUM(CASE WHEN pnl_pct > 0 THEN 1 ELSE 0 END)::INT AS wins
+            FROM signals
+            GROUP BY DATE_TRUNC('day', timestamp)
+            ORDER BY date ASC
+        """
+        async with self.pool.acquire() as conn:
+            daily_rows = await conn.fetch(query, *args)
+
+        total_count = sum(r["count"] for r in daily_rows)
+        total_pnl = sum(r["daily_pnl_pct"] or 0 for r in daily_rows)
+        total_wins = sum(r["wins"] for r in daily_rows)
+
+        return {
+            "signal_count": total_count,
+            "cumulative_pnl_pct": float(total_pnl),
+            "avg_pnl_pct": float(total_pnl / total_count) if total_count > 0 else 0.0,
+            "win_rate": (total_wins / total_count) if total_count > 0 else 0.0,
+            "daily_series": [
+                {
+                    "date": r["date"],
+                    "pnl_pct": float(r["daily_pnl_pct"] or 0),
+                    "count": r["count"],
+                }
+                for r in daily_rows
+            ],
+        }
+
+    async def query_regime_breakdown(
+        self,
+        model_id: int,
+        from_dt: Optional[datetime] = None,
+        to_dt: Optional[datetime] = None,
+        sma_window: int = 50,
+        neutral_band_pct: float = 0.001,
+    ) -> list[dict]:
+        """Per-regime accuracy + P&L for a model.
+
+        Regime classification at each prediction timestamp:
+          - bull: SPY close > SPY 50-bar SMA by >0.1% (configurable)
+          - bear: SPY close < SPY 50-bar SMA by >0.1%
+          - neutral: within ±0.1% of SMA
+        Each prediction is classified independently based on the SPY bar at
+        its timestamp (or the nearest earlier SPY bar, if missing).
+
+        Returns rows: {regime, count, correct, accuracy, cumulative_pnl_pct}.
+        """
+        query = f"""
+            WITH spy_series AS (
+                SELECT
+                    b.timestamp,
+                    b.close AS spy_close,
+                    AVG(b.close) OVER (
+                        ORDER BY b.timestamp
+                        ROWS BETWEEN {sma_window - 1} PRECEDING AND CURRENT ROW
+                    ) AS sma
+                FROM bars_1m b
+                WHERE b.symbol = 'SPY'
+            ),
+            classified AS (
+                SELECT
+                    p.timestamp,
+                    p.predicted_direction,
+                    CASE
+                        WHEN s.sma IS NULL THEN 'unknown'
+                        WHEN (s.spy_close - s.sma) / NULLIF(s.sma, 0) > $2 THEN 'bull'
+                        WHEN (s.spy_close - s.sma) / NULLIF(s.sma, 0) < -$2 THEN 'bear'
+                        ELSE 'neutral'
+                    END AS regime,
+                    CASE
+                        WHEN p.predicted_direction = 1 AND b_exit.close > b_entry.close THEN 1
+                        WHEN p.predicted_direction = -1 AND b_exit.close < b_entry.close THEN 1
+                        WHEN p.predicted_direction = 0
+                             AND ABS(b_exit.close - b_entry.close)
+                                 / NULLIF(b_entry.close, 0) < 0.001 THEN 1
+                        ELSE 0
+                    END AS is_correct,
+                    p.predicted_direction::FLOAT *
+                        (b_exit.close - b_entry.close) / NULLIF(b_entry.close, 0)
+                        AS pnl_pct
+                FROM predictions p
+                LEFT JOIN spy_series s
+                    ON s.timestamp = (
+                        SELECT MAX(s2.timestamp)
+                        FROM spy_series s2
+                        WHERE s2.timestamp <= p.timestamp
+                    )
+                JOIN bars_1m b_entry
+                    ON b_entry.symbol = p.symbol AND b_entry.timestamp = p.timestamp
+                JOIN bars_1m b_exit
+                    ON b_exit.symbol = p.symbol
+                    AND b_exit.timestamp = p.timestamp
+                        + (p.horizon_minutes * interval '1 minute')
+                WHERE p.model_id = $1
+        """
+        args: list = [model_id, neutral_band_pct]
+        idx = 3
+        if from_dt is not None:
+            query += f" AND p.timestamp >= ${idx}"
+            args.append(from_dt); idx += 1
+        if to_dt is not None:
+            query += f" AND p.timestamp < ${idx}"
+            args.append(to_dt); idx += 1
+        query += """
+            )
+            SELECT
+                regime,
+                COUNT(*) AS count,
+                SUM(is_correct)::INT AS correct,
+                AVG(is_correct::FLOAT) AS accuracy,
+                SUM(pnl_pct) AS cumulative_pnl_pct
+            FROM classified
+            GROUP BY regime
+            ORDER BY regime
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(query, *args)
+        return [
+            {
+                "regime": r["regime"],
+                "count": r["count"],
+                "correct": r["correct"],
+                "accuracy": float(r["accuracy"] or 0),
+                "cumulative_pnl_pct": float(r["cumulative_pnl_pct"] or 0),
+            }
+            for r in rows
+        ]
+
+    async def query_signal_history(
+        self,
+        model_id: int,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Recent predictions for a model with outcome info, newest first.
+
+        Returns: {timestamp, symbol, timeframe, horizon_minutes,
+                  predicted_direction, confidence, entry_price, exit_price,
+                  is_correct, pnl_pct}. `is_correct`/`pnl_pct` are NULL when
+                  the exit bar doesn't yet exist.
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    p.timestamp, p.symbol, p.timeframe, p.horizon_minutes,
+                    p.predicted_direction, p.confidence,
+                    b_entry.close AS entry_price,
+                    b_exit.close  AS exit_price,
+                    CASE
+                        WHEN b_exit.close IS NULL THEN NULL
+                        WHEN p.predicted_direction = 1
+                             AND b_exit.close > b_entry.close THEN TRUE
+                        WHEN p.predicted_direction = -1
+                             AND b_exit.close < b_entry.close THEN TRUE
+                        WHEN p.predicted_direction = 0
+                             AND ABS(b_exit.close - b_entry.close)
+                                 / NULLIF(b_entry.close, 0) < 0.001 THEN TRUE
+                        ELSE FALSE
+                    END AS is_correct,
+                    CASE
+                        WHEN b_exit.close IS NULL THEN NULL
+                        ELSE p.predicted_direction::FLOAT
+                             * (b_exit.close - b_entry.close)
+                             / NULLIF(b_entry.close, 0)
+                    END AS pnl_pct
+                FROM predictions p
+                LEFT JOIN bars_1m b_entry
+                    ON b_entry.symbol = p.symbol
+                    AND b_entry.timestamp = p.timestamp
+                LEFT JOIN bars_1m b_exit
+                    ON b_exit.symbol = p.symbol
+                    AND b_exit.timestamp = p.timestamp
+                        + (p.horizon_minutes * interval '1 minute')
+                WHERE p.model_id = $1
+                ORDER BY p.timestamp DESC
+                LIMIT $2
+                """,
+                model_id, limit,
+            )
+        return [dict(r) for r in rows]
+
+    async def query_models_with_leaderboard_stats(
+        self,
+        model_ids: list[int],
+    ) -> dict[int, dict]:
+        """Batch lookup of 7-day live stats + 30-day sparkline per model.
+
+        Returns {model_id: {live_accuracy_7d, signals_7d, simulated_pnl_7d_pct,
+                            accuracy_sparkline_30d}}. Models with no data get
+        zeros/empty sparkline.
+        """
+        if not model_ids:
+            return {}
+
+        # 7-day live stats via one aggregate query.
+        async with self.pool.acquire() as conn:
+            stats_rows = await conn.fetch(
+                """
+                SELECT
+                    p.model_id,
+                    COUNT(*) AS signals,
+                    SUM(CASE
+                        WHEN p.predicted_direction = 1 AND b_exit.close > b_entry.close THEN 1
+                        WHEN p.predicted_direction = -1 AND b_exit.close < b_entry.close THEN 1
+                        WHEN p.predicted_direction = 0
+                             AND ABS(b_exit.close - b_entry.close)
+                                 / NULLIF(b_entry.close, 0) < 0.001 THEN 1
+                        ELSE 0
+                    END)::FLOAT AS correct,
+                    SUM(p.predicted_direction::FLOAT
+                        * (b_exit.close - b_entry.close)
+                        / NULLIF(b_entry.close, 0)) AS pnl_pct
+                FROM predictions p
+                JOIN bars_1m b_entry
+                    ON b_entry.symbol = p.symbol
+                    AND b_entry.timestamp = p.timestamp
+                JOIN bars_1m b_exit
+                    ON b_exit.symbol = p.symbol
+                    AND b_exit.timestamp = p.timestamp
+                        + (p.horizon_minutes * interval '1 minute')
+                WHERE p.model_id = ANY($1)
+                    AND p.timestamp >= NOW() - INTERVAL '7 days'
+                GROUP BY p.model_id
+                """,
+                model_ids,
+            )
+
+            # 30-day daily sparkline via one aggregate query.
+            sparkline_rows = await conn.fetch(
+                """
+                SELECT
+                    p.model_id,
+                    DATE_TRUNC('day', p.timestamp) AS date,
+                    SUM(CASE
+                        WHEN p.predicted_direction = 1 AND b_exit.close > b_entry.close THEN 1
+                        WHEN p.predicted_direction = -1 AND b_exit.close < b_entry.close THEN 1
+                        WHEN p.predicted_direction = 0
+                             AND ABS(b_exit.close - b_entry.close)
+                                 / NULLIF(b_entry.close, 0) < 0.001 THEN 1
+                        ELSE 0
+                    END)::FLOAT / NULLIF(COUNT(*), 0) AS accuracy
+                FROM predictions p
+                JOIN bars_1m b_entry
+                    ON b_entry.symbol = p.symbol
+                    AND b_entry.timestamp = p.timestamp
+                JOIN bars_1m b_exit
+                    ON b_exit.symbol = p.symbol
+                    AND b_exit.timestamp = p.timestamp
+                        + (p.horizon_minutes * interval '1 minute')
+                WHERE p.model_id = ANY($1)
+                    AND p.timestamp >= NOW() - INTERVAL '30 days'
+                GROUP BY p.model_id, DATE_TRUNC('day', p.timestamp)
+                ORDER BY p.model_id, date ASC
+                """,
+                model_ids,
+            )
+
+        result: dict[int, dict] = {}
+        for mid in model_ids:
+            result[mid] = {
+                "live_accuracy_7d": 0.0,
+                "signals_7d": 0,
+                "simulated_pnl_7d_pct": 0.0,
+                "accuracy_sparkline_30d": [],
+            }
+        for r in stats_rows:
+            mid = r["model_id"]
+            signals = r["signals"] or 0
+            result[mid]["signals_7d"] = signals
+            result[mid]["live_accuracy_7d"] = (
+                (r["correct"] / signals) if signals > 0 else 0.0
+            )
+            result[mid]["simulated_pnl_7d_pct"] = float(r["pnl_pct"] or 0.0)
+        for r in sparkline_rows:
+            mid = r["model_id"]
+            result[mid]["accuracy_sparkline_30d"].append(
+                float(r["accuracy"] or 0.0)
+            )
+        return result
+
     # ── Halt event methods ─────────────────────────────────────────
 
     async def insert_halt_event(
