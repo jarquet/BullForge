@@ -62,7 +62,7 @@ async def test_trainer_trains_gradient_boost(mock_db, mock_model_store):
     assert len(meta.feature_columns) == 3
     assert meta.id == 1
 
-    mock_db.deactivate_models.assert_called_once_with("SPY", "1m", 5)
+    mock_db.deactivate_models.assert_called_once_with("SPY", "1m", 5, scope=None)
     mock_db.insert_model_metadata.assert_called_once()
 
 
@@ -94,7 +94,7 @@ async def test_trainer_deactivates_old_model_before_insert(mock_db, mock_model_s
     await trainer.train("SPY", "1m", 5, as_of=datetime(2026, 4, 13, tzinfo=timezone.utc))
 
     # deactivate should be called before insert
-    mock_db.deactivate_models.assert_called_once_with("SPY", "1m", 5)
+    mock_db.deactivate_models.assert_called_once_with("SPY", "1m", 5, scope=None)
     mock_db.insert_model_metadata.assert_called_once()
 
 
@@ -121,3 +121,37 @@ async def test_trainer_artifact_path_exists(mock_db, mock_model_store):
     assert meta is not None
     from pathlib import Path
     assert Path(meta.artifact_path).exists()
+
+
+from unittest.mock import AsyncMock, MagicMock
+
+from shared.models import BacktestScope
+from services.model_service.trainer import Trainer
+
+
+@pytest.mark.asyncio
+async def test_trainer_passes_scope_to_db_and_store():
+    db = MagicMock()
+    db.deactivate_models = AsyncMock()
+    db.insert_model_metadata = AsyncMock(return_value=42)
+    store = MagicMock()
+    store.save = MagicMock(return_value="/tmp/fake.joblib")
+
+    trainer = Trainer(
+        db, store,
+        scope=BacktestScope(backtest_run_id=7, fold_index=2),
+    )
+    trainer._dataset_builder = MagicMock()
+    trainer._dataset_builder.build = AsyncMock(return_value=None)
+
+    await trainer.train("AAPL", "1m", 5, as_of=None)  # type: ignore[arg-type]
+
+    assert trainer._scope == BacktestScope(backtest_run_id=7, fold_index=2)
+
+
+@pytest.mark.asyncio
+async def test_trainer_live_mode_has_no_scope():
+    db = MagicMock()
+    store = MagicMock()
+    trainer = Trainer(db, store)
+    assert trainer._scope is None
