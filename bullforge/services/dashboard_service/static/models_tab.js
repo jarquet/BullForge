@@ -188,7 +188,36 @@
       await load();
     },
     attribution: async function () {
-      panel().innerHTML = '<p class="empty-state">Attribution sub-tab placeholder (Task 9).</p>';
+      panel().innerHTML =
+        '<div class="attribution-panel">' +
+        '<p class="subtitle">Per-model signal count and simulated P&L (if every signal had been traded with unit position). Red/green by P&L sign.</p>' +
+        '<div id="attr-signals-host" class="chart-host" style="width:100%;height:260px;margin-bottom:1rem;"></div>' +
+        '<div id="attr-pnl-host" class="chart-host" style="width:100%;height:260px;"></div>' +
+        '</div>';
+
+      var models = await fetchJSON('/api/models');
+      var labels = [];
+      var signals = [];
+      var pnls = [];
+
+      for (var i = 0; i < models.length; i++) {
+        var m = models[i];
+        labels.push(m.symbol + ' · ' + m.horizon_minutes + 'm');
+        var sim = await fetchJSON('/api/models/' + m.model_id + '/simulated_pnl');
+        signals.push(sim.signal_count);
+        pnls.push(sim.cumulative_pnl_pct * 100);  // as percent
+      }
+
+      window.Charts.barChart($('attr-signals-host'), {
+        labels: labels, values: signals,
+        yLabel: 'Signal count (over selected window)',
+        colorByValue: false,
+      });
+      window.Charts.barChart($('attr-pnl-host'), {
+        labels: labels, values: pnls,
+        yLabel: 'Cumulative simulated P&L (%)',
+        colorByValue: true,
+      });
     },
     timeseries: async function () {
       panel().innerHTML = '<p class="empty-state">Time-series sub-tab placeholder (Task 10).</p>';
