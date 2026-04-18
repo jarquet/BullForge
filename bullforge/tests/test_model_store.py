@@ -68,3 +68,31 @@ def test_load_nonexistent_raises(tmp_path):
     store = ModelStore(str(tmp_path))
     with pytest.raises(FileNotFoundError):
         store.load(str(tmp_path / "nonexistent.joblib"))
+
+
+import tempfile
+
+from shared.models import BacktestScope
+from services.model_service.model_store import ModelStore
+
+
+class _Dummy:
+    def __init__(self): self.x = 1
+
+
+def test_save_live_path_is_flat():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ModelStore(tmp)
+        path = store.save(_Dummy(), "AAPL", "1m", 5, "gradient_boost")
+        assert "/backtest/" not in path.replace("\\", "/")
+
+
+def test_save_scoped_path_nests_by_run_and_fold():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ModelStore(tmp)
+        scope = BacktestScope(backtest_run_id=42, fold_index=3)
+        path = store.save(
+            _Dummy(), "AAPL", "1m", 5, "gradient_boost", scope=scope,
+        )
+        p = path.replace("\\", "/")
+        assert "/backtest/42/fold_3/" in p

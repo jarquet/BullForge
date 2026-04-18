@@ -358,3 +358,15 @@ class ModelStatus:
             raise ValueError(
                 f"status must be one of {VALID_MODEL_STATUSES}, got {self.status!r}"
             )
+
+
+@dataclass(frozen=True)
+class BacktestScope:
+    """Identifies which backtest run + fold a sandbox row belongs to.
+
+    Threaded as an optional `scope` kwarg through the engine, trainer,
+    inference engine, order executor, and Database methods. `None` means
+    the caller is a live code path (rows have NULL scope columns).
+    """
+    backtest_run_id: int
+    fold_index: int

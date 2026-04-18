@@ -1,27 +1,34 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
 from shared.db import Database
-from shared.models import ModelMetadata, Prediction
+from shared.models import BacktestScope, ModelMetadata, Prediction
 from services.model_service.model_store import ModelStore
 
 logger = logging.getLogger(__name__)
 
 
 class InferenceEngine:
-    def __init__(self, db: Database, model_store: ModelStore):
+    def __init__(
+        self,
+        db: Database,
+        model_store: ModelStore,
+        *,
+        scope: Optional[BacktestScope] = None,
+    ):
         self._db = db
         self._model_store = model_store
+        self._scope = scope
         self._models: Dict[
             Tuple[str, str, int], Tuple[object, ModelMetadata]
         ] = {}
 
     async def load_models(self) -> None:
-        active_models = await self._db.query_all_active_models()
+        active_models = await self._db.query_all_active_models(scope=self._scope)
         self._models.clear()
 
         for meta in active_models:

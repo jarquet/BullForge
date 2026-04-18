@@ -14,7 +14,7 @@ from sklearn.metrics import (
 )
 
 from shared.db import Database
-from shared.models import ModelMetadata
+from shared.models import BacktestScope, ModelMetadata
 from services.model_service.dataset import DatasetBuilder, time_based_split
 from services.model_service.model_factory import create_model
 from services.model_service.model_store import ModelStore
@@ -29,9 +29,12 @@ class Trainer:
         model_store: ModelStore,
         min_samples: int = 500,
         min_samples_1d: int = 84,
+        *,
+        scope: Optional[BacktestScope] = None,
     ):
         self._db = db
         self._model_store = model_store
+        self._scope = scope
         self._dataset_builder = DatasetBuilder(
             db, min_samples=min_samples, min_samples_1d=min_samples_1d,
         )
@@ -72,12 +75,15 @@ class Trainer:
 
         artifact_path = self._model_store.save(
             model, symbol, timeframe, horizon_minutes, model_type,
+            scope=self._scope,
         )
 
         trained_at = datetime.now(timezone.utc)
         feature_columns = list(X.columns)
 
-        await self._db.deactivate_models(symbol, timeframe, horizon_minutes)
+        await self._db.deactivate_models(
+            symbol, timeframe, horizon_minutes, scope=self._scope,
+        )
 
         meta = ModelMetadata(
             symbol=symbol,
@@ -93,7 +99,7 @@ class Trainer:
             is_active=True,
         )
 
-        row_id = await self._db.insert_model_metadata(meta)
+        row_id = await self._db.insert_model_metadata(meta, scope=self._scope)
         meta = ModelMetadata(
             id=row_id,
             symbol=meta.symbol,

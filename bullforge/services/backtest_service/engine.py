@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Awaitable, Callable, Optional
 
 from shared.db import Database
+from shared.models import BacktestScope
 from shared.runtime_config import RuntimeConfig
 
 from services.backtest_service.equity_tracker import EquityTracker
@@ -120,9 +121,10 @@ class BacktestEngine:
             train_start=fold.train_start, train_end=fold.train_end,
             test_start=fold.test_start, test_end=fold.test_end,
         )
+        scope = BacktestScope(backtest_run_id=run_id, fold_index=fold.index)
 
         # 1) Train one model per (symbol, horizon) using only train-window data.
-        trainer = Trainer(self._db, self._model_store)
+        trainer = Trainer(self._db, self._model_store, scope=scope)
         for symbol in cfg.symbols:
             for horizon in cfg.horizons:
                 meta = await trainer.train(
@@ -136,7 +138,7 @@ class BacktestEngine:
                     )
 
         # 2) Build inference engine restricted to this fold's models.
-        inference = InferenceEngine(self._db, self._model_store)
+        inference = InferenceEngine(self._db, self._model_store, scope=scope)
         await inference.load_models()  # picks up the just-trained active models
 
         # 3) Build sim broker + execution stack.
@@ -161,6 +163,7 @@ class BacktestEngine:
         executor = OrderExecutor(
             broker=broker, risk_manager=risk, position_tracker=tracker,
             db=self._db, core=_NoopReconciler(),
+            scope=scope,
         )
 
         equity = EquityTracker()

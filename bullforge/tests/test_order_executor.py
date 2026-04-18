@@ -213,4 +213,4 @@ async def test_submit_race_stream_wins_still_calls_apply_once(
     mock_core.apply_alpaca_order.assert_awaited_once()
     _, kwargs = mock_core.apply_alpaca_order.await_args
     assert kwargs.get("source") == "submit"
-    mock_db.get_order_by_alpaca_id.assert_awaited_once_with("alp-order-123")
+    mock_db.get_order_by_alpaca_id.assert_awaited_once_with("alp-order-123", scope=None)

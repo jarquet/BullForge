@@ -13,7 +13,7 @@ import asyncpg
 from shared.config import Settings
 from datetime import datetime, timedelta, timezone
 
-from shared.models import Bar, FeatureRow, Label, ModelMetadata, Prediction, Order, Trade, ModelStatus, MetaFeatureRow, MetaSignalShadow
+from shared.models import Bar, FeatureRow, Label, ModelMetadata, Prediction, Order, Trade, ModelStatus, MetaFeatureRow, MetaSignalShadow, BacktestScope
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,25 @@ def _normalize_alpaca_status(raw: str) -> str:
     if mapped is None:
         raise ValueError(f"unknown Alpaca order status: {raw!r}")
     return mapped
+
+
+def _scope_filter(
+    scope: Optional[BacktestScope], *, next_arg: int,
+) -> tuple[str, tuple]:
+    """Returns a (' AND backtest_run_id ... AND fold_index ...', args) pair to
+    append to an existing parameterized WHERE clause.
+
+    `next_arg` is the 1-based index of the next placeholder. For scope=None,
+    the clause pins both columns to NULL so live reads never leak sandbox
+    rows; for a set scope, the clause equates both columns to the scope's
+    ids via $N and $N+1.
+    """
+    if scope is None:
+        return " AND backtest_run_id IS NULL AND fold_index IS NULL", ()
+    return (
+        f" AND backtest_run_id = ${next_arg} AND fold_index = ${next_arg + 1}",
+        (scope.backtest_run_id, scope.fold_index),
+    )
 
 
 def _quote_ident(name: str) -> str:
@@ -266,6 +285,23 @@ class Database:
 
         for r in public_idx:
             body = _index_body(r["indexdef"])
+
+            # Skip unscoped partial unique indexes on model_registry that would
+            # enforce cross-run uniqueness. These are replaced by scoped versions
+            # in migration 018 that include (backtest_run_id, fold_index).
+            # The unscoped indexes block concurrent backtest runs on overlapping
+            # (symbol, timeframe, horizon_minutes, model_type) combos.
+            if table == "model_registry" and "WHERE" in r["indexdef"] and "is_active" in r["indexdef"]:
+                # Only skip if there's a scoped equivalent in backtest
+                scoped_pattern = f"(backtest_run_id, fold_index"
+                scoped_exists = any(scoped_pattern in _index_body(row["indexdef"])
+                                   for row in rows
+                                   if row["schemaname"] == "backtest" and "WHERE" in row["indexdef"])
+                if scoped_exists:
+                    logger.info("sync_sandbox: skipping unscoped unique index %s on %s; "
+                               "scoped version exists in backtest", r["indexname"], table)
+                    continue
+
             if body in backtest_bodies:
                 continue
             new_ddl = _rewrite_index_for_backtest(r["indexdef"], r["indexname"], table)
@@ -555,15 +591,22 @@ class Database:
             )
         return [dict(r) for r in rows]
 
-    async def insert_model_metadata(self, meta: ModelMetadata) -> int:
+    async def insert_model_metadata(
+        self,
+        meta: ModelMetadata,
+        *,
+        scope: Optional[BacktestScope] = None,
+    ) -> int:
+        run_id = scope.backtest_run_id if scope else None
+        fold = scope.fold_index if scope else None
         async with self.pool.acquire() as conn:
             row_id = await conn.fetchval(
                 """
                 INSERT INTO model_registry
                     (symbol, timeframe, horizon_minutes, model_type, artifact_path,
                      metrics, feature_columns, trained_at, train_samples, test_samples,
-                     is_active, estimator_type)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                     is_active, estimator_type, backtest_run_id, fold_index)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                 RETURNING id
                 """,
                 meta.symbol,
@@ -578,6 +621,8 @@ class Database:
                 meta.test_samples,
                 meta.is_active,
                 meta.estimator_type,
+                run_id,
+                fold,
             )
         return row_id
 
@@ -586,22 +631,25 @@ class Database:
         symbol: str,
         timeframe: str,
         horizon_minutes: int,
+        *,
+        scope: Optional[BacktestScope] = None,
     ) -> Optional[ModelMetadata]:
+        scope_clause, scope_args = _scope_filter(scope, next_arg=4)
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
-                """
+                f"""
                 SELECT id, symbol, timeframe, horizon_minutes, model_type,
                        artifact_path, metrics, feature_columns, trained_at,
-                       train_samples, test_samples, is_active, estimator_type
+                       train_samples, test_samples, is_active, estimator_type,
+                       backtest_run_id, fold_index
                 FROM model_registry
                 WHERE symbol = $1 AND timeframe = $2
                     AND horizon_minutes = $3 AND is_active = TRUE
+                    {scope_clause}
                 ORDER BY trained_at DESC
                 LIMIT 1
                 """,
-                symbol,
-                timeframe,
-                horizon_minutes,
+                symbol, timeframe, horizon_minutes, *scope_args,
             )
         if row is None:
             return None
@@ -621,17 +669,25 @@ class Database:
             estimator_type=row["estimator_type"],
         )
 
-    async def query_all_active_models(self) -> List[ModelMetadata]:
+    async def query_all_active_models(
+        self,
+        *,
+        scope: Optional[BacktestScope] = None,
+    ) -> List[ModelMetadata]:
+        scope_clause, scope_args = _scope_filter(scope, next_arg=1)
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                """
+                f"""
                 SELECT id, symbol, timeframe, horizon_minutes, model_type,
                        artifact_path, metrics, feature_columns, trained_at,
-                       train_samples, test_samples, is_active, estimator_type
+                       train_samples, test_samples, is_active, estimator_type,
+                       backtest_run_id, fold_index
                 FROM model_registry
                 WHERE is_active = TRUE
+                    {scope_clause}
                 ORDER BY symbol, timeframe, horizon_minutes
-                """
+                """,
+                *scope_args,
             )
         return [
             ModelMetadata(
@@ -657,50 +713,65 @@ class Database:
         symbol: str,
         timeframe: str,
         horizon_minutes: int,
+        *,
+        scope: Optional[BacktestScope] = None,
     ) -> None:
+        scope_clause, scope_args = _scope_filter(scope, next_arg=4)
         async with self.pool.acquire() as conn:
             await conn.execute(
-                """
+                f"""
                 UPDATE model_registry
                 SET is_active = FALSE
                 WHERE symbol = $1 AND timeframe = $2
                     AND horizon_minutes = $3 AND is_active = TRUE
+                    {scope_clause}
                 """,
-                symbol,
-                timeframe,
-                horizon_minutes,
+                symbol, timeframe, horizon_minutes, *scope_args,
             )
 
-    async def insert_prediction(self, pred: Prediction) -> None:
+    async def insert_prediction(
+        self,
+        pred: Prediction,
+        *,
+        scope: Optional[BacktestScope] = None,
+    ) -> None:
+        run_id = scope.backtest_run_id if scope else None
+        fold = scope.fold_index if scope else None
         async with self.pool.acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO predictions
                     (symbol, timestamp, timeframe, horizon_minutes,
-                     model_id, predicted_direction, confidence)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                     model_id, predicted_direction, confidence,
+                     backtest_run_id, fold_index)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 ON CONFLICT (symbol, timestamp, timeframe, horizon_minutes)
                 DO UPDATE SET model_id = $5, predicted_direction = $6, confidence = $7
                 """,
-                pred.symbol,
-                pred.timestamp,
-                pred.timeframe,
-                pred.horizon_minutes,
-                pred.model_id,
-                pred.predicted_direction,
-                pred.confidence,
+                pred.symbol, pred.timestamp, pred.timeframe,
+                pred.horizon_minutes, pred.model_id,
+                pred.predicted_direction, pred.confidence,
+                run_id, fold,
             )
 
-    async def insert_predictions(self, preds: List[Prediction]) -> None:
+    async def insert_predictions(
+        self,
+        preds: List[Prediction],
+        *,
+        scope: Optional[BacktestScope] = None,
+    ) -> None:
         if not preds:
             return
+        run_id = scope.backtest_run_id if scope else None
+        fold = scope.fold_index if scope else None
         async with self.pool.acquire() as conn:
             await conn.executemany(
                 """
                 INSERT INTO predictions
                     (symbol, timestamp, timeframe, horizon_minutes,
-                     model_id, predicted_direction, confidence)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                     model_id, predicted_direction, confidence,
+                     backtest_run_id, fold_index)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 ON CONFLICT (symbol, timestamp, timeframe, horizon_minutes)
                 DO UPDATE SET model_id = $5, predicted_direction = $6, confidence = $7
                 """,
@@ -709,6 +780,7 @@ class Database:
                         p.symbol, p.timestamp, p.timeframe,
                         p.horizon_minutes, p.model_id,
                         p.predicted_direction, p.confidence,
+                        run_id, fold,
                     )
                     for p in preds
                 ],
@@ -720,21 +792,22 @@ class Database:
         timeframe: str,
         horizon_minutes: int,
         limit: int = 100,
+        *,
+        scope: Optional[BacktestScope] = None,
     ) -> List[Prediction]:
+        scope_clause, scope_args = _scope_filter(scope, next_arg=4)
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                """
+                f"""
                 SELECT symbol, timestamp, timeframe, horizon_minutes,
                        model_id, predicted_direction, confidence
                 FROM predictions
                 WHERE symbol = $1 AND timeframe = $2 AND horizon_minutes = $3
+                    {scope_clause}
                 ORDER BY timestamp DESC
-                LIMIT $4
+                LIMIT ${4 + len(scope_args)}
                 """,
-                symbol,
-                timeframe,
-                horizon_minutes,
-                limit,
+                symbol, timeframe, horizon_minutes, *scope_args, limit,
             )
         return [
             Prediction(
@@ -749,7 +822,14 @@ class Database:
             for r in rows
         ]
 
-    async def insert_order(self, order: Order) -> int:
+    async def insert_order(
+        self,
+        order: Order,
+        *,
+        scope: Optional[BacktestScope] = None,
+    ) -> int:
+        run_id = scope.backtest_run_id if scope else None
+        fold = scope.fold_index if scope else None
         async with self.pool.acquire() as conn:
             row_id = await conn.fetchval(
                 """
@@ -757,41 +837,42 @@ class Database:
                     (symbol, side, quantity, order_type, submitted_at,
                      signal_strength, alpaca_order_id, status,
                      filled_at, filled_price, filled_quantity, limit_price,
-                     origin, last_reconciled_at, reconcile_source)
+                     origin, last_reconciled_at, reconcile_source,
+                     backtest_run_id, fold_index)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                        $13, $14, $15)
+                        $13, $14, $15, $16, $17)
                 RETURNING id
                 """,
-                order.symbol,
-                order.side,
-                order.quantity,
-                order.order_type,
-                order.submitted_at,
-                order.signal_strength,
-                order.alpaca_order_id,
-                order.status,
-                order.filled_at,
-                order.filled_price,
-                order.filled_quantity,
-                order.limit_price,
-                order.origin,
-                order.last_reconciled_at,
+                order.symbol, order.side, order.quantity, order.order_type,
+                order.submitted_at, order.signal_strength,
+                order.alpaca_order_id, order.status,
+                order.filled_at, order.filled_price, order.filled_quantity,
+                order.limit_price, order.origin, order.last_reconciled_at,
                 order.reconcile_source,
+                run_id, fold,
             )
         return row_id
 
-    async def insert_order_if_new(self, order: Order) -> Optional[int]:
+    async def insert_order_if_new(
+        self,
+        order: Order,
+        *,
+        scope: Optional[BacktestScope] = None,
+    ) -> Optional[int]:
         """INSERT that does nothing on alpaca_order_id conflict.
         Returns the inserted row id, or None if a row already existed."""
+        run_id = scope.backtest_run_id if scope else None
+        fold = scope.fold_index if scope else None
         async with self.pool.acquire() as conn:
             return await conn.fetchval(
                 """
                 INSERT INTO orders
                   (symbol, side, quantity, order_type, submitted_at,
                    signal_strength, alpaca_order_id, status,
-                   origin, last_reconciled_at, reconcile_source)
+                   origin, last_reconciled_at, reconcile_source,
+                   backtest_run_id, fold_index)
                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,
-                        COALESCE($9,'internal'),$10,$11)
+                        COALESCE($9,'internal'),$10,$11,$12,$13)
                 ON CONFLICT (alpaca_order_id) WHERE alpaca_order_id IS NOT NULL DO NOTHING
                 RETURNING id
                 """,
@@ -799,6 +880,7 @@ class Database:
                 order.submitted_at, order.signal_strength,
                 order.alpaca_order_id, order.status,
                 order.origin, order.last_reconciled_at, order.reconcile_source,
+                run_id, fold,
             )
 
     async def update_order_status(
@@ -808,22 +890,23 @@ class Database:
         filled_at: Optional[datetime] = None,
         filled_price: Optional[float] = None,
         filled_quantity: Optional[float] = None,
+        *,
+        scope: Optional[BacktestScope] = None,
     ) -> None:
+        scope_clause, scope_args = _scope_filter(scope, next_arg=6)
         async with self.pool.acquire() as conn:
             await conn.execute(
-                """
+                f"""
                 UPDATE orders
                 SET status = $2,
                     filled_at = COALESCE($3, filled_at),
                     filled_price = COALESCE($4, filled_price),
                     filled_quantity = COALESCE($5, filled_quantity)
                 WHERE id = $1
+                    {scope_clause}
                 """,
-                order_id,
-                status,
-                filled_at,
-                filled_price,
-                filled_quantity,
+                order_id, status, filled_at, filled_price, filled_quantity,
+                *scope_args,
             )
 
     async def query_orders(
@@ -831,6 +914,8 @@ class Database:
         symbol: Optional[str] = None,
         status: Optional[str] = None,
         limit: int = 100,
+        *,
+        scope: Optional[BacktestScope] = None,
     ) -> list[Order]:
         query = """SELECT id, symbol, side, quantity, order_type, submitted_at,
                           signal_strength, alpaca_order_id, status,
@@ -849,6 +934,11 @@ class Database:
             query += f" AND status = ${idx}"
             args.append(status)
             idx += 1
+
+        scope_clause, scope_args = _scope_filter(scope, next_arg=idx)
+        query += scope_clause
+        args.extend(scope_args)
+        idx += len(scope_args)
 
         query += f" ORDER BY submitted_at DESC LIMIT ${idx}"
         args.append(limit)
@@ -877,18 +967,25 @@ class Database:
             for r in rows
         ]
 
-    async def get_order_by_alpaca_id(self, alpaca_order_id: str) -> Optional[Order]:
+    async def get_order_by_alpaca_id(
+        self,
+        alpaca_order_id: str,
+        *,
+        scope: Optional[BacktestScope] = None,
+    ) -> Optional[Order]:
+        scope_clause, scope_args = _scope_filter(scope, next_arg=2)
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
-                """
+                f"""
                 SELECT id, symbol, side, quantity, order_type, submitted_at,
                        signal_strength, alpaca_order_id, status,
                        filled_at, filled_price, filled_quantity, limit_price,
                        origin, last_reconciled_at, reconcile_source
                 FROM orders
                 WHERE alpaca_order_id = $1
+                    {scope_clause}
                 """,
-                alpaca_order_id,
+                alpaca_order_id, *scope_args,
             )
         if row is None:
             return None
