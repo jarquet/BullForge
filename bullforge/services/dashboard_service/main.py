@@ -16,6 +16,7 @@ from services.backtest_service.results_db import BacktestResultsDB
 from services.dashboard_service.api import create_api_app
 from services.dashboard_service.config_api import register_config_routes
 from services.dashboard_service.freshness_api import register_freshness_routes
+from services.dashboard_service.stubs_api import register_stub_routes
 from services.dashboard_service.symbols_api import register_symbol_routes
 
 logging.basicConfig(
@@ -49,6 +50,7 @@ async def main() -> None:
     register_config_routes(app)
     register_freshness_routes(app)
     register_symbol_routes(app)
+    register_stub_routes(app)
 
     # Health check
     async def health_handler(request: web.Request) -> web.Response:
