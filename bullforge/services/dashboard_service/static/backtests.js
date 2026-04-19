@@ -540,8 +540,54 @@
           '<td>$' + s.avg_pnl.toFixed(2) + '</td></tr>';
       }).join('') + '</tbody></table>';
   }
-  async function renderDetailLiveOverlay(id, panel)   { panel.innerHTML = '<p class="empty-state">Live-vs-backtest sub-tab placeholder (Task 11).</p>'; }
-  async function renderDetailFunnel(id, panel)        { panel.innerHTML = '<p class="empty-state">Funnel sub-tab placeholder (Task 11).</p>'; }
+  async function renderDetailLiveOverlay(id, panel) {
+    panel.innerHTML =
+      '<div id="det-live-host" class="chart-host" style="width:100%;height:340px;"></div>' +
+      '<p id="det-live-note" style="color:var(--text-muted);"></p>';
+    var data = await fetchJSON('/api/backtests/' + id + '/live-overlay');
+    if (!data.has_overlap) {
+      document.getElementById('det-live-note').innerHTML =
+        '<strong>No overlap.</strong> No live trades exist for symbols [' +
+        (data.symbols || []).join(', ') + '] within the backtest window (' +
+        (data.range_start || '') + ' \u2192 ' + (data.range_end || '') + ').';
+    }
+    var series = [
+      {label: 'Backtest equity',
+       data: data.backtest_series.map(function (p) {
+         return {x: p.timestamp, y: p.equity};
+       })},
+      {label: 'Live (cumulative P&L from 0)',
+       data: data.live_series.map(function (p) {
+         return {x: p.timestamp, y: p.equity};
+       })},
+    ];
+    window.Charts.lineChart(document.getElementById('det-live-host'), {
+      series: series, xIsTime: true, yLabel: 'Equity / cumulative P&L',
+    });
+  }
+
+  async function renderDetailFunnel(id, panel) {
+    panel.innerHTML =
+      '<div id="det-funnel-host" class="chart-host" style="width:100%;height:260px;"></div>' +
+      '<p id="det-funnel-note" style="color:var(--text-muted);"></p>';
+    var data = await fetchJSON('/api/backtests/' + id + '/funnel');
+    var labels = ['Signals', 'Confident (\u2265' +
+                  (data.min_confidence * 100).toFixed(0) + '%)',
+                  'Orders placed', 'Orders filled', 'Orders closed'];
+    var values = [data.signals, data.confident, data.orders_placed,
+                   data.orders_filled, data.orders_closed];
+    window.Charts.barChart(document.getElementById('det-funnel-host'), {
+      labels: labels, values: values, yLabel: 'Count',
+    });
+    // Drop-off rates between adjacent stages.
+    var dropTexts = [];
+    for (var i = 1; i < values.length; i++) {
+      var prev = values[i - 1], cur = values[i];
+      var dropPct = prev > 0 ? (1 - cur / prev) * 100 : 0;
+      dropTexts.push(labels[i - 1] + ' \u2192 ' + labels[i] + ': ' + dropPct.toFixed(1) + '% drop');
+    }
+    document.getElementById('det-funnel-note').textContent = dropTexts.join(' \u00b7 ');
+  }
 
   async function renderJobDetail(jobId) {
     root().innerHTML = `<div class="bt-detail">
