@@ -16,7 +16,14 @@
     const hash = window.location.hash || '#backtests';
     const parts = hash.replace(/^#/, '').split('/');
     if (parts[0] === 'backtests' && parts[1]) {
-      renderDetail(parts[1]);
+      // Special sub-tabs at the top level.
+      if (parts[1] === 'compare' || parts[1] === 'sensitivity') {
+        // Handled by backtests_tab.js.
+        return;
+      }
+      const id = parts[1];
+      const subtab = parts[2] || 'summary';
+      renderDetail(id, subtab);
     } else {
       renderOverview();
     }
@@ -349,14 +356,53 @@
     }).join('');
   }
 
-  async function renderDetail(id) {
+  async function renderDetail(id, subtab) {
+    subtab = subtab || 'summary';
     clearInterval(pollTimer);
     if (id.startsWith('job-')) {
       return renderJobDetail(id.slice(4));
     }
-    root().innerHTML = `<div class="bt-detail">
-      <a href="#backtests">← Back</a>
-      <div id="bt-header"></div>
+    root().innerHTML =
+      '<div class="bt-detail">' +
+      '<a class="bt-back" href="#backtests">← Back to list</a>' +
+      '<h2 id="bt-detail-title">Run ' + id + '</h2>' +
+      '<div class="subtab-bar" id="bt-detail-subtabs">' +
+        '<button class="subtab" data-subtab="summary">Summary</button>' +
+        '<button class="subtab" data-subtab="equity">Equity</button>' +
+        '<button class="subtab" data-subtab="folds">Folds</button>' +
+        '<button class="subtab" data-subtab="symbols">Per-symbol</button>' +
+        '<button class="subtab" data-subtab="distributions">Distributions</button>' +
+        '<button class="subtab" data-subtab="live">Live-vs-backtest</button>' +
+        '<button class="subtab" data-subtab="funnel">Funnel</button>' +
+      '</div>' +
+      '<div id="bt-detail-panel"></div>' +
+      '</div>';
+
+    document.querySelectorAll('#bt-detail-subtabs .subtab').forEach(function (b) {
+      b.classList.toggle('active', b.dataset.subtab === subtab);
+      b.onclick = function () {
+        window.location.hash = '#backtests/' + id + '/' + b.dataset.subtab;
+      };
+    });
+
+    var panel = document.getElementById('bt-detail-panel');
+
+    try {
+      if (subtab === 'summary')            await renderDetailSummary(id, panel);
+      else if (subtab === 'equity')        await renderDetailEquity(id, panel);
+      else if (subtab === 'folds')         await renderDetailFolds(id, panel);
+      else if (subtab === 'symbols')       await renderDetailSymbols(id, panel);
+      else if (subtab === 'distributions') await renderDetailDistributions(id, panel);
+      else if (subtab === 'live')          await renderDetailLiveOverlay(id, panel);
+      else if (subtab === 'funnel')        await renderDetailFunnel(id, panel);
+      else panel.innerHTML = '<p class="empty-state">Unknown sub-tab: ' + subtab + '</p>';
+    } catch (e) {
+      panel.innerHTML = '<p class="bt-error">Error: ' + (e.message || e) + '</p>';
+    }
+  }
+
+  async function renderDetailSummary(id, panel) {
+    panel.innerHTML = `<div id="bt-header"></div>
       <div class="bt-cards" id="bt-cards"></div>
       <div class="bt-chart"><canvas id="bt-equity"></canvas></div>
       <div class="bt-chart"><canvas id="bt-drawdown"></canvas></div>
@@ -365,26 +411,28 @@
       <div class="bt-chart"><canvas id="bt-histogram"></canvas></div>
       <h3>Trades</h3>
       <div id="bt-trades"></div>
-      <details><summary>Config</summary><pre id="bt-config"></pre></details>
-    </div>`;
-    try {
-      const [detail, folds, equity] = await Promise.all([
-        fetchJSON(`/api/backtests/${id}`),
-        fetchJSON(`/api/backtests/${id}/folds`),
-        fetchJSON(`/api/backtests/${id}/equity`),
-      ]);
-      renderHeader(detail);
-      renderCards(detail.metrics);
-      renderEquityChart(equity.points, folds.folds, id);
-      renderDrawdown(equity.points);
-      renderFolds(folds.folds);
-      renderConfig(detail);
-      await loadTrades(id, 0);
-      await renderHistogram(id);
-    } catch (e) {
-      root().innerHTML += `<p class="bt-error">${e.message}</p>`;
-    }
+      <details><summary>Config</summary><pre id="bt-config"></pre></details>`;
+    const [detail, folds, equity] = await Promise.all([
+      fetchJSON(`/api/backtests/${id}`),
+      fetchJSON(`/api/backtests/${id}/folds`),
+      fetchJSON(`/api/backtests/${id}/equity`),
+    ]);
+    renderHeader(detail);
+    renderCards(detail.metrics);
+    renderEquityChart(equity.points, folds.folds, id);
+    renderDrawdown(equity.points);
+    renderFolds(folds.folds);
+    renderConfig(detail);
+    await loadTrades(id, 0);
+    await renderHistogram(id);
   }
+
+  async function renderDetailEquity(id, panel)        { panel.innerHTML = '<p class="empty-state">Equity sub-tab placeholder (Task 9).</p>'; }
+  async function renderDetailFolds(id, panel)         { panel.innerHTML = '<p class="empty-state">Folds sub-tab placeholder (Task 9).</p>'; }
+  async function renderDetailSymbols(id, panel)       { panel.innerHTML = '<p class="empty-state">Per-symbol sub-tab placeholder (Task 10).</p>'; }
+  async function renderDetailDistributions(id, panel) { panel.innerHTML = '<p class="empty-state">Distributions sub-tab placeholder (Task 10).</p>'; }
+  async function renderDetailLiveOverlay(id, panel)   { panel.innerHTML = '<p class="empty-state">Live-vs-backtest sub-tab placeholder (Task 11).</p>'; }
+  async function renderDetailFunnel(id, panel)        { panel.innerHTML = '<p class="empty-state">Funnel sub-tab placeholder (Task 11).</p>'; }
 
   async function renderJobDetail(jobId) {
     root().innerHTML = `<div class="bt-detail">
