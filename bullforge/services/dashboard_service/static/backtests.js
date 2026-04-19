@@ -427,8 +427,49 @@
     await renderHistogram(id);
   }
 
-  async function renderDetailEquity(id, panel)        { panel.innerHTML = '<p class="empty-state">Equity sub-tab placeholder (Task 9).</p>'; }
-  async function renderDetailFolds(id, panel)         { panel.innerHTML = '<p class="empty-state">Folds sub-tab placeholder (Task 9).</p>'; }
+  async function renderDetailEquity(id, panel) {
+    panel.innerHTML =
+      '<div id="det-eq-host" class="chart-host" style="width:100%;height:360px;"></div>' +
+      '<p id="det-eq-summary" style="color:var(--text-muted);"></p>';
+    var data = await fetchJSON('/api/backtests/' + id + '/equity');
+    var series = (data.series || data || []).map(function (p) {
+      return {x: p.timestamp, y: p.equity};
+    });
+    window.Charts.lineChart(document.getElementById('det-eq-host'), {
+      series: [{label: 'Equity', data: series}],
+      xIsTime: true, yLabel: 'Equity ($)',
+    });
+    var fbs = (data.fold_boundaries || []).length;
+    document.getElementById('det-eq-summary').textContent =
+      (data.series || data).length + ' points · ' + fbs + ' fold boundaries';
+  }
+
+  async function renderDetailFolds(id, panel) {
+    panel.innerHTML = '<div id="det-folds-host"></div>';
+    var folds = await fetchJSON('/api/backtests/' + id + '/folds');
+    window.Leaderboard.create({
+      mountEl: document.getElementById('det-folds-host'),
+      columns: [
+        {key: 'fold_index', label: 'Fold', sortable: true},
+        {key: 'test_start', label: 'Test Start', sortable: true},
+        {key: 'test_end', label: 'Test End', sortable: true},
+        {key: 'pnl', label: 'P&L', sortable: true,
+         render: function (v) {
+           var cls = v >= 0 ? 'positive' : 'negative';
+           return '<span class="' + cls + '">$' + v.toFixed(2) + '</span>';
+         }},
+        {key: 'sharpe', label: 'Sharpe', sortable: true,
+         render: function (v) { return v.toFixed(2); }},
+        {key: 'max_drawdown', label: 'Max DD', sortable: true,
+         render: function (v) { return (v * 100).toFixed(2) + '%'; }},
+        {key: 'trades', label: '#Trades', sortable: true},
+        {key: 'hit_rate', label: 'Hit Rate', sortable: true,
+         render: function (v) { return (v * 100).toFixed(1) + '%'; }},
+      ],
+      rows: folds,
+      initialSort: {key: 'fold_index', order: 'asc'},
+    });
+  }
   async function renderDetailSymbols(id, panel)       { panel.innerHTML = '<p class="empty-state">Per-symbol sub-tab placeholder (Task 10).</p>'; }
   async function renderDetailDistributions(id, panel) { panel.innerHTML = '<p class="empty-state">Distributions sub-tab placeholder (Task 10).</p>'; }
   async function renderDetailLiveOverlay(id, panel)   { panel.innerHTML = '<p class="empty-state">Live-vs-backtest sub-tab placeholder (Task 11).</p>'; }
