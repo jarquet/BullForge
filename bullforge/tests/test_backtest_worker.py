@@ -19,6 +19,8 @@ class FakeJobs:
         self.completed = (job_id, run_id)
     async def mark_failed(self, *, job_id, error):
         self.failed = (job_id, error)
+    async def is_cancelled(self, job_id):
+        return False
 
 
 @pytest.mark.asyncio
@@ -36,7 +38,7 @@ async def test_run_one_success():
     })
     engine = AsyncMock()
 
-    async def fake_run(cfg, *, on_run_created=None):
+    async def fake_run(cfg, *, on_run_created=None, check_cancelled=None):
         if on_run_created is not None:
             await on_run_created(42)
         return 42
@@ -125,3 +127,47 @@ def test_build_config_missing_thresholds_stay_none():
     assert cfg.max_position_pct is None
     assert cfg.max_positions is None
     assert cfg.max_exposure is None
+
+
+from services.backtest_service.exceptions import BacktestCancelled
+
+
+@pytest.mark.asyncio
+async def test_run_one_catches_backtest_cancelled_without_marking_failed():
+    """When the engine raises BacktestCancelled, the worker must log and
+    return without calling mark_failed (the jobs row is already cancelled)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    class _FakeJobs:
+        def __init__(self):
+            self.claim_next = AsyncMock(return_value={
+                "id": 42,
+                "name": "cancelled-job",
+                "custom_name": None,
+                "config": {
+                    "symbols": ["AAA"],
+                    "timeframe": "1m",
+                    "horizons": [5],
+                    "range_start": "2026-01-01T00:00:00+00:00",
+                    "range_end": "2026-01-10T00:00:00+00:00",
+                    "train_days": 3, "test_days": 1, "embargo_min": 0,
+                    "mode": "rolling",
+                },
+            })
+            self.link_run = AsyncMock()
+            self.mark_completed = AsyncMock()
+            self.mark_failed = AsyncMock()
+            self.is_cancelled = AsyncMock(return_value=True)
+
+    jobs = _FakeJobs()
+
+    engine = MagicMock()
+    engine.run = AsyncMock(side_effect=BacktestCancelled())
+
+    from services.backtest_service.worker import run_one
+    did = await run_one(
+        jobs, engine_factory=lambda _cfg: engine, worker_pool="cpu",
+    )
+    assert did is True
+    jobs.mark_failed.assert_not_called()
+    jobs.mark_completed.assert_not_called()

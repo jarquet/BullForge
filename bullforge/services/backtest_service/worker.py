@@ -14,6 +14,7 @@ from shared.redis import RedisClient
 from shared.runtime_config import RuntimeConfig
 
 from services.backtest_service.engine import BacktestConfig, BacktestEngine
+from services.backtest_service.exceptions import BacktestCancelled
 from services.backtest_service.jobs_db import BacktestJobsDB
 from services.backtest_service.results_db import BacktestResultsDB
 from services.model_service.model_store import ModelStore
@@ -58,6 +59,10 @@ async def run_one(
         return False
 
     job_id = job["id"]
+
+    async def _check_cancelled() -> bool:
+        return await jobs.is_cancelled(job_id)
+
     try:
         cfg = _build_config({
             "name": job["name"],
@@ -69,9 +74,17 @@ async def run_one(
         async def _link(run_id: int) -> None:
             await jobs.link_run(job_id=job_id, run_id=run_id)
 
-        run_id = await engine.run(cfg, on_run_created=_link)
+        run_id = await engine.run(
+            cfg,
+            on_run_created=_link,
+            check_cancelled=_check_cancelled,
+        )
         await jobs.mark_completed(job_id=job_id, run_id=int(run_id))
         logger.info("backtest job %s -> run %s completed", job_id, run_id)
+    except BacktestCancelled:
+        # backtest_jobs row was already flipped to 'cancelled' by the API/CLI;
+        # backtest_runs row was marked 'cancelled' by engine.run.
+        logger.info("backtest job %s cancelled during run", job_id)
     except Exception as exc:
         tb = traceback.format_exc()
         logger.exception("backtest job %s failed", job_id)
