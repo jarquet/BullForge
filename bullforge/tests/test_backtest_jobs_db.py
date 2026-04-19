@@ -45,13 +45,13 @@ async def test_insert_and_claim_roundtrip(db):
     job_id = await jobs.insert_job(name="t1", config={"symbols": ["SPY"]})
     assert job_id > 0
 
-    claimed = await jobs.claim_next()
+    claimed = await jobs.claim_next(worker_pool="cpu")
     assert claimed is not None
     assert claimed["id"] == job_id
     assert claimed["status"] == "running"
     assert claimed["started_at"] is not None
 
-    second = await jobs.claim_next()
+    second = await jobs.claim_next(worker_pool="cpu")
     assert second is None
 
 
@@ -59,7 +59,7 @@ async def test_mark_completed(db):
     jobs = BacktestJobsDB(db)
     run_id = await _seed_run(db)
     job_id = await jobs.insert_job(name="t2", config={})
-    await jobs.claim_next()
+    await jobs.claim_next(worker_pool="cpu")
     await jobs.mark_completed(job_id=job_id, run_id=run_id)
     row = await jobs.get(job_id)
     assert row["status"] == "completed"
@@ -70,7 +70,7 @@ async def test_mark_completed(db):
 async def test_mark_failed(db):
     jobs = BacktestJobsDB(db)
     job_id = await jobs.insert_job(name="t3", config={})
-    await jobs.claim_next()
+    await jobs.claim_next(worker_pool="cpu")
     await jobs.mark_failed(job_id=job_id, error="boom")
     row = await jobs.get(job_id)
     assert row["status"] == "failed"
@@ -91,7 +91,7 @@ async def test_link_run_excludes_from_pending(db):
     jobs = BacktestJobsDB(db)
     run_id = await _seed_run(db)
     job_id = await jobs.insert_job(name="mid-flight", config={})
-    await jobs.claim_next()  # status -> running, run_id still NULL
+    await jobs.claim_next(worker_pool="cpu")  # status -> running, run_id still NULL
 
     # Before link: appears in pending.
     assert any(r["id"] == job_id for r in await jobs.list_pending())
@@ -104,3 +104,64 @@ async def test_link_run_excludes_from_pending(db):
     row = await jobs.get(job_id)
     assert row["status"] == "running"
     assert row["run_id"] == run_id
+
+
+async def test_insert_job_defaults_to_cpu(db):
+    jobs = BacktestJobsDB(db)
+    job_id = await jobs.insert_job(name="t", config={})
+    async with db.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT worker_pool FROM backtest_jobs WHERE id = $1", job_id,
+        )
+    assert row["worker_pool"] == "cpu"
+
+
+async def test_insert_job_derives_pool_from_model_type(db):
+    jobs = BacktestJobsDB(db)
+    cpu_id = await jobs.insert_job(
+        name="cpu_job", config={"model_type": "gradient_boost"},
+    )
+    gpu_id = await jobs.insert_job(
+        name="gpu_job", config={"model_type": "lstm"},
+    )
+    async with db.pool.acquire() as conn:
+        cpu_row = await conn.fetchrow(
+            "SELECT worker_pool FROM backtest_jobs WHERE id = $1", cpu_id,
+        )
+        gpu_row = await conn.fetchrow(
+            "SELECT worker_pool FROM backtest_jobs WHERE id = $1", gpu_id,
+        )
+    assert cpu_row["worker_pool"] == "cpu"
+    assert gpu_row["worker_pool"] == "gpu"
+
+
+async def test_insert_job_explicit_worker_pool_overrides_derivation(db):
+    jobs = BacktestJobsDB(db)
+    job_id = await jobs.insert_job(
+        name="override", config={"model_type": "gradient_boost"},
+        worker_pool="gpu",
+    )
+    async with db.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT worker_pool FROM backtest_jobs WHERE id = $1", job_id,
+        )
+    assert row["worker_pool"] == "gpu"
+
+
+async def test_claim_next_filters_by_pool(db):
+    jobs = BacktestJobsDB(db)
+    cpu_id = await jobs.insert_job(
+        name="cpu_j", config={"model_type": "gradient_boost"},
+    )
+    gpu_id = await jobs.insert_job(
+        name="gpu_j", config={"model_type": "lstm"},
+    )
+
+    claimed_cpu = await jobs.claim_next(worker_pool="cpu")
+    assert claimed_cpu is not None and claimed_cpu["id"] == cpu_id
+
+    claimed_gpu = await jobs.claim_next(worker_pool="gpu")
+    assert claimed_gpu is not None and claimed_gpu["id"] == gpu_id
+
+    assert await jobs.claim_next(worker_pool="cpu") is None
+    assert await jobs.claim_next(worker_pool="gpu") is None

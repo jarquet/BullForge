@@ -213,18 +213,45 @@ services:
               count: 1
               capabilities: [gpu]
 
-  backtest-worker:
+  backtest-worker-cpu:
+    image: bullforge-backtest
     build:
       context: .
       dockerfile: services/backtest_service/Dockerfile
-    image: bullforge-backtest
     entrypoint: ["python", "-m", "services.backtest_service.worker"]
-    command: []
     env_file:
       - .env
     environment:
       TIMESCALEDB_HOST: timescaledb
       REDIS_HOST: redis
+      BACKTEST_WORKER_POOL: cpu
+      OMP_NUM_THREADS: "${CPU_THREADS:-10}"
+      OPENBLAS_NUM_THREADS: "${CPU_THREADS:-10}"
+      MKL_NUM_THREADS: "${CPU_THREADS:-10}"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: ${CPU_WORKERS:-2}
+    restart: unless-stopped
+
+  backtest-worker-gpu:
+    image: bullforge-backtest
+    build:
+      context: .
+      dockerfile: services/backtest_service/Dockerfile
+    entrypoint: ["python", "-m", "services.backtest_service.worker"]
+    env_file:
+      - .env
+    environment:
+      TIMESCALEDB_HOST: timescaledb
+      REDIS_HOST: redis
+      BACKTEST_WORKER_POOL: gpu
+      OMP_NUM_THREADS: "${GPU_THREADS:-4}"
+      OPENBLAS_NUM_THREADS: "${GPU_THREADS:-4}"
+      MKL_NUM_THREADS: "${GPU_THREADS:-4}"
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -235,6 +262,7 @@ services:
       memlock: -1
       stack: 67108864
     deploy:
+      replicas: ${GPU_WORKERS:-1}
       resources:
         reservations:
           devices:

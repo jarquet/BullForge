@@ -4,6 +4,7 @@ import json
 from typing import Optional
 
 from shared.db import Database
+from services.backtest_service.worker_pool import cpu_or_gpu
 
 
 class BacktestJobsDB:
@@ -15,30 +16,33 @@ class BacktestJobsDB:
     async def insert_job(
         self, *, name: str, config: dict,
         custom_name: Optional[str] = None,
+        worker_pool: Optional[str] = None,
     ) -> int:
+        pool = worker_pool or cpu_or_gpu(config.get("model_type"))
         async with self._db.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                INSERT INTO backtest_jobs (name, custom_name, config_json)
-                VALUES ($1, $2, $3)
+                INSERT INTO backtest_jobs (name, custom_name, config_json, worker_pool)
+                VALUES ($1, $2, $3, $4)
                 RETURNING id
                 """,
-                name, custom_name, json.dumps(config),
+                name, custom_name, json.dumps(config), pool,
             )
         return row["id"]
 
-    async def claim_next(self) -> Optional[dict]:
+    async def claim_next(self, *, worker_pool: str) -> Optional[dict]:
         async with self._db.pool.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(
                     """
                     SELECT id, name, custom_name, config_json
                     FROM backtest_jobs
-                    WHERE status = 'queued'
+                    WHERE status = 'queued' AND worker_pool = $1
                     ORDER BY created_at
                     LIMIT 1
                     FOR UPDATE SKIP LOCKED
-                    """
+                    """,
+                    worker_pool,
                 )
                 if row is None:
                     return None
