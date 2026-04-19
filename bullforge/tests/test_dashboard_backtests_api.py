@@ -23,12 +23,27 @@ def _make_results_db_mock():
     return results_db, conn_mock
 
 
+def _make_db_mock():
+    """Build a Database mock with pool.acquire() context manager."""
+    conn_mock = AsyncMock()
+    conn_mock.fetchval = AsyncMock(return_value=None)
+    conn_cm = AsyncMock()
+    conn_cm.__aenter__ = AsyncMock(return_value=conn_mock)
+    conn_cm.__aexit__ = AsyncMock(return_value=False)
+    db = MagicMock()
+    db.pool = MagicMock()
+    db.pool.acquire = MagicMock(return_value=conn_cm)
+    return db, conn_mock
+
+
 @pytest.fixture
 def app():
     app = web.Application()
     results_db, _ = _make_results_db_mock()
     app["results_db"] = results_db
     app["jobs_db"] = AsyncMock()
+    db, _ = _make_db_mock()
+    app["db"] = db
     rc = AsyncMock()
     rc.get = AsyncMock(side_effect=lambda key: {
         "label_horizons_1m": [1, 2, 3, 5, 8, 10, 20, 40, 60, 80, 100, 120],
@@ -442,3 +457,61 @@ async def test_list_includes_tags_and_notes(aiohttp_client, backtests_app):
     for row in body["rows"]:
         assert "tags" in row
         assert "notes" in row
+
+
+# --- Cancel endpoint tests ------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_cancel_job_by_job_id_returns_200(aiohttp_client, app):
+    """POST /api/backtest-jobs/{job_id}/cancel on a queued job returns 200."""
+    app["jobs_db"].cancel = AsyncMock(return_value="cancelled")
+    client = await aiohttp_client(app)
+    resp = await client.post("/api/backtest-jobs/42/cancel")
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["job_id"] == 42
+    assert body["status"] == "cancelled"
+    app["jobs_db"].cancel.assert_awaited_once_with(42)
+
+
+@pytest.mark.asyncio
+async def test_cancel_job_already_terminal_returns_409(aiohttp_client, app):
+    app["jobs_db"].cancel = AsyncMock(return_value="already_terminal")
+    client = await aiohttp_client(app)
+    resp = await client.post("/api/backtest-jobs/42/cancel")
+    assert resp.status == 409
+
+
+@pytest.mark.asyncio
+async def test_cancel_job_by_run_id_finds_and_cancels(aiohttp_client, app):
+    """POST /api/backtests/{run_id}/cancel looks up the job and cancels it."""
+    # The handler queries app["db"].pool.acquire() to find the job by run_id.
+    conn_mock = app["db"].pool.acquire.return_value.__aenter__.return_value
+    conn_mock.fetchval = AsyncMock(return_value=77)  # the job_id found
+    app["jobs_db"].cancel = AsyncMock(return_value="cancelled")
+    client = await aiohttp_client(app)
+    resp = await client.post("/api/backtests/5/cancel")
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["run_id"] == 5
+    assert body["job_id"] == 77
+    assert body["status"] == "cancelled"
+    app["jobs_db"].cancel.assert_awaited_once_with(77)
+
+
+@pytest.mark.asyncio
+async def test_cancel_by_run_id_nonexistent_returns_404(aiohttp_client, app):
+    conn_mock = app["db"].pool.acquire.return_value.__aenter__.return_value
+    conn_mock.fetchval = AsyncMock(return_value=None)  # no matching job
+    client = await aiohttp_client(app)
+    resp = await client.post("/api/backtests/999999999/cancel")
+    assert resp.status == 404
+
+
+@pytest.mark.asyncio
+async def test_cancel_job_id_malformed_returns_400(aiohttp_client, app):
+    client = await aiohttp_client(app)
+    resp = await client.post("/api/backtest-jobs/abc/cancel")
+    # aiohttp route expects `{job_id}`; a non-int may 400 via our ValueError
+    # guard, or 404 if route constraint rejects first. Both mean rejection.
+    assert resp.status in (400, 404)

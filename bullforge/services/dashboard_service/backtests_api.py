@@ -56,6 +56,59 @@ def _iso(v):
     return v.isoformat() if isinstance(v, datetime) else v
 
 
+async def _cancel_job(request: web.Request) -> web.Response:
+    """POST /api/backtest-jobs/{job_id}/cancel — cancel by direct job_id."""
+    try:
+        job_id = int(request.match_info["job_id"])
+    except (KeyError, ValueError):
+        return web.json_response(
+            {"error": "job_id must be an integer"}, status=400,
+        )
+    jobs = request.app["jobs_db"]
+    result = await jobs.cancel(job_id)
+    if result == "already_terminal":
+        return web.json_response(
+            {"error": "job is not queued or running", "job_id": job_id},
+            status=409,
+        )
+    return web.json_response({"job_id": job_id, "status": "cancelled"})
+
+
+async def _cancel_run(request: web.Request) -> web.Response:
+    """POST /api/backtests/{run_id}/cancel — find linked job, cancel it."""
+    try:
+        run_id = int(request.match_info["id"])
+    except (KeyError, ValueError):
+        return web.json_response(
+            {"error": "run_id must be an integer"}, status=400,
+        )
+    db = request.app["db"]
+    async with db.pool.acquire() as conn:
+        job_id = await conn.fetchval(
+            """
+            SELECT id FROM backtest_jobs
+            WHERE run_id = $1 AND status IN ('queued', 'running')
+            ORDER BY id DESC LIMIT 1
+            """,
+            run_id,
+        )
+    if job_id is None:
+        return web.json_response(
+            {"error": "no cancellable job for run", "run_id": run_id},
+            status=404,
+        )
+    jobs = request.app["jobs_db"]
+    result = await jobs.cancel(job_id)
+    if result == "already_terminal":
+        return web.json_response(
+            {"error": "job is not queued or running", "run_id": run_id},
+            status=409,
+        )
+    return web.json_response(
+        {"run_id": run_id, "job_id": job_id, "status": "cancelled"},
+    )
+
+
 def register_backtests_routes(app: web.Application) -> None:
     app.router.add_get("/api/backtests", _list)
     app.router.add_post("/api/backtests", _create)
@@ -63,6 +116,8 @@ def register_backtests_routes(app: web.Application) -> None:
     app.router.add_get("/api/backtests/{id}/folds", _folds)
     app.router.add_get("/api/backtests/{id}/equity", _equity)
     app.router.add_get("/api/backtests/{id}/trades", _trades)
+    app.router.add_post("/api/backtests/{id}/cancel", _cancel_run)
+    app.router.add_post("/api/backtest-jobs/{job_id}/cancel", _cancel_job)
 
 
 async def _list(request: web.Request) -> web.Response:
