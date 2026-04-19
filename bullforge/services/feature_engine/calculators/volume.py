@@ -21,9 +21,15 @@ def compute_volume_features(df: pd.DataFrame) -> pd.DataFrame:
     direction.iloc[0] = 0
     obv = (volume * direction).cumsum()
 
-    # Volume ratio (current volume / rolling average)
-    volume_ratio_10 = volume / volume.rolling(window=10).mean()
-    volume_ratio_20 = volume / volume.rolling(window=20).mean()
+    # Volume ratio (current volume / rolling average). Crypto bars can have
+    # long zero-volume stretches; when the rolling mean is exactly 0 the ratio
+    # would be NaN or inf and the whole row gets dropped downstream. Neutralize
+    # those to 1.0 ("average") while still leaving warmup rows (rolling mean
+    # is NaN, not 0) alone so warmup filtering stays correct.
+    mean_10 = volume.rolling(window=10).mean()
+    mean_20 = volume.rolling(window=20).mean()
+    volume_ratio_10 = (volume / mean_10).mask(mean_10 == 0, 1.0)
+    volume_ratio_20 = (volume / mean_20).mask(mean_20 == 0, 1.0)
 
     return pd.DataFrame({
         "vwap": vwap,
