@@ -6,17 +6,7 @@ from aiohttp import web
 
 logger = logging.getLogger(__name__)
 
-STUB_ENDPOINTS: dict[str, dict] = {
-    # --- Plan 4: Backtests domain ------------------------------------
-    "/api/backtests/{run_id}/equity":       {"enabled_after_plan": "plan_4"},
-    "/api/backtests/{run_id}/folds":        {"enabled_after_plan": "plan_4"},
-    "/api/backtests/{run_id}/symbols":      {"enabled_after_plan": "plan_4"},
-    "/api/backtests/{run_id}/distributions":{"enabled_after_plan": "plan_4"},
-    "/api/backtests/{run_id}/live-overlay": {"enabled_after_plan": "plan_4"},
-    "/api/backtests/{run_id}/funnel":       {"enabled_after_plan": "plan_4"},
-    "/api/backtests/compare":               {"enabled_after_plan": "plan_4"},
-    "/api/backtests/sensitivity":           {"enabled_after_plan": "plan_4"},
-}
+STUB_ENDPOINTS: dict[str, dict] = {}
 
 
 def _make_handler(enabled_after_plan: str):

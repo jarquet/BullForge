@@ -35,3 +35,59 @@
   color: #888;
   font-size: 0.9em;
 }
+#compare-input-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+#compare-input-row input,
+#sens-param-input,
+#sens-group-input {
+    background: var(--bg-card);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 0.85rem;
+}
+.tag-chip {
+    display: inline-block;
+    padding: 2px 6px;
+    margin-right: 4px;
+    background: var(--accent);
+    color: #000;
+    font-size: 0.7rem;
+    border-radius: 8px;
+}
+.notes-editor {
+    width: 100%;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 0.5rem;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 0.85rem;
+    min-height: 3rem;
+}
+.tag-editor {
+    width: 300px;
+    padding: 0.25rem;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+}
+#bt-promote-modal .bt-modal {
+    background: var(--bg-card, #1a1a1a);
+    border: 1px solid var(--accent, #4ade80);
+    border-radius: 4px;
+    padding: 1rem;
+    margin-top: 1rem;
+    width: auto;
+    max-width: 100%;
+}
+#bt-promote-modal .bt-modal h3 { margin: 0 0 0.5rem 0; color: var(--accent, #4ade80); }
+#bt-promote-modal .bt-modal .data-table { margin: 0.5rem 0; }

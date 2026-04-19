@@ -146,6 +146,7 @@ class BacktestResultsDB:
         sql = f"""
             SELECT r.id, r.name, r.custom_name, r.symbols, r.range_start, r.range_end,
                    r.status, r.started_at, r.finished_at,
+                   r.tags, r.notes,
                    COALESCE(t.n_trades, 0)                AS n_trades,
                    COALESCE(t.total_pnl, 0)               AS total_pnl,
                    COALESCE(t.hit_rate, 0)                AS hit_rate,
@@ -192,6 +193,8 @@ class BacktestResultsDB:
                 "status": r["status"],
                 "started_at": r["started_at"],
                 "finished_at": r["finished_at"],
+                "tags": list(r["tags"] or []),
+                "notes": r["notes"],
                 "metrics": {
                     "n_trades": r["n_trades"],
                     "total_pnl": float(r["total_pnl"]),
@@ -263,6 +266,8 @@ class BacktestResultsDB:
             "status": header["status"],
             "started_at": header["started_at"],
             "finished_at": header["finished_at"],
+            "tags": list(header["tags"] or []),
+            "notes": header["notes"],
             "config": json.loads(header["config_json"]) if header["config_json"] else {},
             "metrics": {
                 "total_pnl": float(agg["total_pnl"]),

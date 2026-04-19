@@ -1,16 +1,33 @@
 import pytest
 import pytest_asyncio
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from datetime import datetime, timezone
 from aiohttp import web
 
 from services.dashboard_service.backtests_api import register_backtests_routes
 
 
+def _make_results_db_mock():
+    """Build a results_db AsyncMock with a db.pool.acquire() context manager."""
+    results_db = AsyncMock()
+    # Set up the nested db.pool.acquire() context manager used by new equity/folds handlers.
+    # pool.acquire() must be a regular callable (not async) that returns an async context manager.
+    conn_mock = AsyncMock()
+    conn_mock.fetch = AsyncMock(return_value=[])
+    conn_cm = AsyncMock()
+    conn_cm.__aenter__ = AsyncMock(return_value=conn_mock)
+    conn_cm.__aexit__ = AsyncMock(return_value=False)
+    results_db.db = MagicMock()
+    results_db.db.pool = MagicMock()
+    results_db.db.pool.acquire = MagicMock(return_value=conn_cm)
+    return results_db, conn_mock
+
+
 @pytest.fixture
 def app():
     app = web.Application()
-    app["results_db"] = AsyncMock()
+    results_db, _ = _make_results_db_mock()
+    app["results_db"] = results_db
     app["jobs_db"] = AsyncMock()
     rc = AsyncMock()
     rc.get = AsyncMock(side_effect=lambda key: {
@@ -22,6 +39,12 @@ def app():
     return app
 
 
+@pytest.fixture
+def backtests_app(app):
+    """Alias for app fixture used by Task 5/6 tests."""
+    return app
+
+
 @pytest.mark.asyncio
 async def test_list_returns_runs_and_pending_jobs(aiohttp_client, app):
     app["results_db"].list_runs = AsyncMock(return_value=[
@@ -30,7 +53,8 @@ async def test_list_returns_runs_and_pending_jobs(aiohttp_client, app):
          "status": "completed",
          "started_at": None, "finished_at": None,
          "metrics": {"total_pnl": 1.0, "sharpe": 0.5, "max_dd": -0.1,
-                     "n_trades": 2, "hit_rate": 0.5}},
+                     "n_trades": 2, "hit_rate": 0.5},
+         "tags": [], "notes": None},
     ])
     app["jobs_db"].list_pending = AsyncMock(return_value=[
         {"id": 9, "name": "q", "config_json": {"symbols": ["TSLA"]},
@@ -107,32 +131,41 @@ async def test_detail_404(aiohttp_client, app):
 
 @pytest.mark.asyncio
 async def test_folds_route(aiohttp_client, app):
-    app["results_db"].list_folds = AsyncMock(return_value=[
+    # New folds handler queries DB directly via results_db.db.pool.acquire()
+    conn_mock = app["results_db"].db.pool.acquire.return_value.__aenter__.return_value
+    conn_mock.fetch = AsyncMock(return_value=[
         {"id": 1, "fold_index": 0,
          "train_start": None, "train_end": None,
          "test_start": None, "test_end": None,
-         "metrics": {"n_trades": 1, "total_pnl": 1.0,
-                     "max_dd": -0.1, "sharpe": 0.0},
          "metrics_json": None},
     ])
     client = await aiohttp_client(app)
     resp = await client.get("/api/backtests/1/folds")
     assert resp.status == 200
     data = await resp.json()
-    assert len(data["folds"]) == 1
+    assert len(data) == 1
+    # New shape: metrics are embedded directly in each row
+    assert "pnl" in data[0]
+    assert "sharpe" in data[0]
 
 
 @pytest.mark.asyncio
 async def test_equity_route(aiohttp_client, app):
-    app["results_db"].get_equity_curve = AsyncMock(return_value=[
-        {"t": datetime(2025, 1, 1, tzinfo=timezone.utc), "equity": 100.0, "cash": 100.0},
+    # New equity handler queries DB directly via results_db.db.pool.acquire()
+    conn_mock = app["results_db"].db.pool.acquire.return_value.__aenter__.return_value
+    conn_mock.fetch = AsyncMock(return_value=[
+        {"timestamp": datetime(2025, 1, 1, tzinfo=timezone.utc),
+         "equity": 100.0, "fold_id": 7},
     ])
     client = await aiohttp_client(app)
-    resp = await client.get("/api/backtests/1/equity?fold_id=7")
+    resp = await client.get("/api/backtests/1/equity")
     assert resp.status == 200
     data = await resp.json()
-    assert data["points"][0]["equity"] == 100.0
-    app["results_db"].get_equity_curve.assert_awaited_with(1, fold_id=7)
+    # New shape: {series: [...], fold_boundaries: [...]}
+    assert "series" in data
+    assert "fold_boundaries" in data
+    assert data["series"][0]["equity"] == 100.0
+    assert "drawdown" in data["series"][0]
 
 
 @pytest.mark.asyncio
@@ -339,3 +372,73 @@ async def test_create_partial_overrides_fill_rest_from_runtime_config(
     assert config["min_agreement"] == 2            # snapshot
     assert config["direction_band"] == 0.3         # snapshot
     assert config["max_position_pct"] == 0.02      # snapshot
+
+
+@pytest.mark.asyncio
+async def test_equity_endpoint_includes_drawdown_and_fold_boundaries(
+    aiohttp_client, backtests_app,
+):
+    """Existing /api/backtests/{id}/equity returns a shape; Plan 4 adds
+    `drawdown` per point and a top-level `fold_boundaries` array."""
+    conn_mock = backtests_app["results_db"].db.pool.acquire.return_value.__aenter__.return_value
+    conn_mock.fetch = AsyncMock(return_value=[
+        {"timestamp": datetime(2025, 1, 1, tzinfo=timezone.utc),
+         "equity": 100000.0, "fold_id": 1},
+        {"timestamp": datetime(2025, 1, 2, tzinfo=timezone.utc),
+         "equity": 99000.0, "fold_id": 1},
+    ])
+    client = await aiohttp_client(backtests_app)
+    resp = await client.get("/api/backtests/1/equity")
+    assert resp.status == 200
+    body = await resp.json()
+    # Shape can be dict {series, fold_boundaries} OR list for back-compat.
+    if isinstance(body, dict):
+        assert "series" in body
+        assert "fold_boundaries" in body
+        for p in body["series"]:
+            assert "drawdown" in p
+    else:
+        # Legacy shape — at minimum each point has drawdown.
+        for p in body:
+            assert "drawdown" in p
+
+
+@pytest.mark.asyncio
+async def test_folds_endpoint_embeds_metrics(aiohttp_client, backtests_app):
+    conn_mock = backtests_app["results_db"].db.pool.acquire.return_value.__aenter__.return_value
+    conn_mock.fetch = AsyncMock(return_value=[
+        {"id": 1, "fold_index": 0,
+         "train_start": None, "train_end": None,
+         "test_start": None, "test_end": None,
+         "metrics_json": '{"pnl": 500.0, "sharpe": 1.1, "max_drawdown": -0.05, "trades": 10, "hit_rate": 0.6}'},
+    ])
+    client = await aiohttp_client(backtests_app)
+    resp = await client.get("/api/backtests/1/folds")
+    assert resp.status == 200
+    body = await resp.json()
+    # Each fold row has extracted metrics.
+    for row in body:
+        for key in ("pnl", "sharpe", "max_drawdown", "trades", "hit_rate"):
+            assert key in row
+
+
+@pytest.mark.asyncio
+async def test_list_includes_tags_and_notes(aiohttp_client, backtests_app):
+    backtests_app["results_db"].list_runs = AsyncMock(return_value=[
+        {"id": 1, "name": "r", "symbols": ["SPY"],
+         "range_start": None, "range_end": None,
+         "status": "completed",
+         "started_at": None, "finished_at": None,
+         "metrics": {"total_pnl": 1.0, "sharpe": 0.5, "max_dd": -0.1,
+                     "n_trades": 2, "hit_rate": 0.5},
+         "tags": ["baseline"], "notes": "v2 run"},
+    ])
+    backtests_app["jobs_db"].list_pending = AsyncMock(return_value=[])
+    client = await aiohttp_client(backtests_app)
+    resp = await client.get("/api/backtests")
+    assert resp.status == 200
+    body = await resp.json()
+    assert "rows" in body
+    for row in body["rows"]:
+        assert "tags" in row
+        assert "notes" in row

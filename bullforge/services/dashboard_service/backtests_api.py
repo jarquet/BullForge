@@ -104,6 +104,8 @@ async def _list(request: web.Request) -> web.Response:
                 "finished_at": _iso(j["finished_at"]),
                 "metrics": None,
                 "error": j["error"],
+                "tags": [],
+                "notes": None,
             })
 
     if status in ("all", "completed", "failed"):
@@ -125,6 +127,8 @@ async def _list(request: web.Request) -> web.Response:
                 "started_at": _iso(r["started_at"]),
                 "finished_at": _iso(r["finished_at"]),
                 "metrics": r["metrics"],
+                "tags": list(r.get("tags") or []),
+                "notes": r.get("notes"),
             })
 
     return web.json_response({"rows": rows})
@@ -263,21 +267,79 @@ async def _detail(request: web.Request) -> web.Response:
 
 async def _folds(request: web.Request) -> web.Response:
     run_id = int(request.match_info["id"])
-    folds = await request.app["results_db"].list_folds(run_id)
-    for f in folds:
-        for k in ("train_start", "train_end", "test_start", "test_end"):
-            f[k] = _iso(f[k])
-    return web.json_response({"folds": folds})
+    results = request.app["results_db"]
+
+    async with results.db.pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, fold_index, train_start, train_end,
+                   test_start, test_end, metrics_json
+            FROM backtest_folds
+            WHERE run_id = $1
+            ORDER BY fold_index ASC
+            """,
+            run_id,
+        )
+
+    import json as _json
+    payload = []
+    for r in rows:
+        m = r["metrics_json"]
+        if isinstance(m, str):
+            m = _json.loads(m) if m else {}
+        m = m or {}
+        payload.append({
+            "id": r["id"],
+            "fold_index": r["fold_index"],
+            "train_start": _iso(r["train_start"]),
+            "train_end": _iso(r["train_end"]),
+            "test_start": _iso(r["test_start"]),
+            "test_end": _iso(r["test_end"]),
+            "pnl": float(m.get("pnl") or 0),
+            "sharpe": float(m.get("sharpe") or 0),
+            "max_drawdown": float(m.get("max_drawdown") or 0),
+            "trades": int(m.get("trades") or 0),
+            "hit_rate": float(m.get("hit_rate") or 0),
+        })
+    return web.json_response(payload)
 
 
 async def _equity(request: web.Request) -> web.Response:
     run_id = int(request.match_info["id"])
-    fold_id = request.query.get("fold_id")
-    fold_id = int(fold_id) if fold_id else None
-    pts = await request.app["results_db"].get_equity_curve(run_id, fold_id=fold_id)
-    for p in pts:
-        p["t"] = _iso(p["t"])
-    return web.json_response({"points": pts})
+    results = request.app["results_db"]
+
+    async with results.db.pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT timestamp, equity, fold_id
+            FROM backtest_equity
+            WHERE run_id = $1
+            ORDER BY timestamp ASC
+            """,
+            run_id,
+        )
+
+    peak = None
+    series = []
+    fold_boundaries = []
+    prev_fold = None
+    for r in rows:
+        eq = float(r["equity"])
+        if peak is None or eq > peak:
+            peak = eq
+        dd = (eq - peak) / peak if peak else 0.0
+        if prev_fold is not None and r["fold_id"] != prev_fold:
+            fold_boundaries.append(_iso(r["timestamp"]))
+        prev_fold = r["fold_id"]
+        series.append({
+            "timestamp": _iso(r["timestamp"]),
+            "equity": eq, "drawdown": dd,
+            "fold_id": r["fold_id"],
+        })
+    return web.json_response({
+        "series": series,
+        "fold_boundaries": fold_boundaries,
+    })
 
 
 async def _trades(request: web.Request) -> web.Response:

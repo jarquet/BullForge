@@ -16,7 +16,14 @@
     const hash = window.location.hash || '#backtests';
     const parts = hash.replace(/^#/, '').split('/');
     if (parts[0] === 'backtests' && parts[1]) {
-      renderDetail(parts[1]);
+      // Special sub-tabs at the top level.
+      if (parts[1] === 'compare' || parts[1] === 'sensitivity') {
+        // Handled by backtests_tab.js.
+        return;
+      }
+      const id = parts[1];
+      const subtab = parts[2] || 'summary';
+      renderDetail(id, subtab);
     } else {
       renderOverview();
     }
@@ -61,9 +68,10 @@
             <th>#Trades</th>
             <th>Hit %</th>
             <th>Status</th>
+            <th>Tags</th>
             <th data-sort="finished_at">Finished</th>
           </tr></thead>
-          <tbody id="bt-rows"><tr><td colspan="10">Loading…</td></tr></tbody>
+          <tbody id="bt-rows"><tr><td colspan="11">Loading…</td></tr></tbody>
         </table>
       </div>
     `;
@@ -325,7 +333,7 @@
     const tbody = document.getElementById('bt-rows');
     if (!rows.length) {
       tbody.innerHTML =
-        '<tr><td colspan="10">No backtests yet. Click New Backtest to start one.</td></tr>';
+        '<tr><td colspan="11">No backtests yet. Click New Backtest to start one.</td></tr>';
       return;
     }
     tbody.innerHTML = rows.map(r => {
@@ -340,50 +348,248 @@
       const hit = m ? fmtPct(m.hit_rate) : '—';
       const target = r.kind === 'run'
         ? `#backtests/${r.id}` : `#backtests/job-${r.id}`;
+      const tagChips = (r.tags || []).map(function (t) {
+        return '<span class="tag-chip">' + t + '</span>';
+      }).join(' ');
       return `<tr class="clickable" onclick="location.hash='${target}'">
         <td>${r.name}</td><td>${symsDisplay}</td><td>${range}</td>
         <td>${pnl}</td><td>${sharpe}</td><td>${dd}</td>
         <td>${ntr}</td><td>${hit}</td><td>${r.status}</td>
+        <td>${tagChips}</td>
         <td>${fmtTime(r.finished_at)}</td>
       </tr>`;
     }).join('');
   }
 
-  async function renderDetail(id) {
+  async function renderDetail(id, subtab) {
+    subtab = subtab || 'summary';
     clearInterval(pollTimer);
     if (id.startsWith('job-')) {
       return renderJobDetail(id.slice(4));
     }
-    root().innerHTML = `<div class="bt-detail">
-      <a href="#backtests">← Back</a>
-      <div id="bt-header"></div>
-      <div class="bt-cards" id="bt-cards"></div>
-      <div class="bt-chart"><canvas id="bt-equity"></canvas></div>
-      <div class="bt-chart"><canvas id="bt-drawdown"></canvas></div>
-      <h3>Folds</h3>
-      <table class="bt-table" id="bt-folds"></table>
-      <div class="bt-chart"><canvas id="bt-histogram"></canvas></div>
-      <h3>Trades</h3>
-      <div id="bt-trades"></div>
-      <details><summary>Config</summary><pre id="bt-config"></pre></details>
-    </div>`;
+    root().innerHTML =
+      '<div class="bt-detail">' +
+      '<a class="bt-back" href="#backtests">← Back to list</a>' +
+      '<h2 id="bt-detail-title">Run ' + id + '</h2>' +
+      '<div class="subtab-bar" id="bt-detail-subtabs">' +
+        '<button class="subtab" data-subtab="summary">Summary</button>' +
+        '<button class="subtab" data-subtab="equity">Equity</button>' +
+        '<button class="subtab" data-subtab="folds">Folds</button>' +
+        '<button class="subtab" data-subtab="symbols">Per-symbol</button>' +
+        '<button class="subtab" data-subtab="distributions">Distributions</button>' +
+        '<button class="subtab" data-subtab="live">Live-vs-backtest</button>' +
+        '<button class="subtab" data-subtab="funnel">Funnel</button>' +
+      '</div>' +
+      '<div id="bt-detail-panel"></div>' +
+      '</div>';
+
+    document.querySelectorAll('#bt-detail-subtabs .subtab').forEach(function (b) {
+      b.classList.toggle('active', b.dataset.subtab === subtab);
+      b.onclick = function () {
+        window.location.hash = '#backtests/' + id + '/' + b.dataset.subtab;
+      };
+    });
+
+    var panel = document.getElementById('bt-detail-panel');
+
     try {
-      const [detail, folds, equity] = await Promise.all([
-        fetchJSON(`/api/backtests/${id}`),
-        fetchJSON(`/api/backtests/${id}/folds`),
-        fetchJSON(`/api/backtests/${id}/equity`),
-      ]);
-      renderHeader(detail);
-      renderCards(detail.metrics);
-      renderEquityChart(equity.points, folds.folds, id);
-      renderDrawdown(equity.points);
-      renderFolds(folds.folds);
-      renderConfig(detail);
-      await loadTrades(id, 0);
-      await renderHistogram(id);
+      if (subtab === 'summary')            await renderDetailSummary(id, panel);
+      else if (subtab === 'equity')        await renderDetailEquity(id, panel);
+      else if (subtab === 'folds')         await renderDetailFolds(id, panel);
+      else if (subtab === 'symbols')       await renderDetailSymbols(id, panel);
+      else if (subtab === 'distributions') await renderDetailDistributions(id, panel);
+      else if (subtab === 'live')          await renderDetailLiveOverlay(id, panel);
+      else if (subtab === 'funnel')        await renderDetailFunnel(id, panel);
+      else panel.innerHTML = '<p class="empty-state">Unknown sub-tab: ' + subtab + '</p>';
     } catch (e) {
-      root().innerHTML += `<p class="bt-error">${e.message}</p>`;
+      panel.innerHTML = '<p class="bt-error">Error: ' + (e.message || e) + '</p>';
     }
+  }
+
+  async function renderDetailSummary(id, panel) {
+    var run = await fetchJSON('/api/backtests/' + id);
+    panel.innerHTML =
+      '<div class="summary-grid">' +
+      '<div><strong>Name:</strong> ' + (run.name || '') + '</div>' +
+      '<div><strong>Status:</strong> ' + (run.status || '') + '</div>' +
+      '<div><strong>Symbols:</strong> ' + (run.symbols || []).join(', ') + '</div>' +
+      '<div><strong>Range:</strong> ' + (run.range_start || '') + ' \u2192 ' + (run.range_end || '') + '</div>' +
+      '<div><strong>Tags:</strong> <span id="detail-tags"></span></div>' +
+      '<div><strong>Notes:</strong> <span id="detail-notes"></span></div>' +
+      '</div>' +
+      '<h3>Config</h3><pre>' + JSON.stringify(run.config_json || run.config || {}, null, 2) + '</pre>' +
+      '<button id="bt-promote">Promote config to live</button>' +
+      '<div id="bt-promote-modal"></div>';
+    // Tags and notes renderer.
+    if (window.BacktestsTagsNotes) {
+      window.BacktestsTagsNotes.mount(id, run.tags || [], run.notes || '');
+    }
+    // Promote button.
+    document.getElementById('bt-promote').onclick = function () {
+      if (window.BacktestsPromote) window.BacktestsPromote.open(id, run.config_json || run.config || {});
+    };
+  }
+
+  async function renderDetailEquity(id, panel) {
+    panel.innerHTML =
+      '<div id="det-eq-host" class="chart-host" style="width:100%;height:360px;"></div>' +
+      '<p id="det-eq-summary" style="color:var(--text-muted);"></p>';
+    var data = await fetchJSON('/api/backtests/' + id + '/equity');
+    var series = (data.series || data || []).map(function (p) {
+      return {x: p.timestamp, y: p.equity};
+    });
+    window.Charts.lineChart(document.getElementById('det-eq-host'), {
+      series: [{label: 'Equity', data: series}],
+      xIsTime: true, yLabel: 'Equity ($)',
+    });
+    var fbs = (data.fold_boundaries || []).length;
+    document.getElementById('det-eq-summary').textContent =
+      (data.series || data).length + ' points · ' + fbs + ' fold boundaries';
+  }
+
+  async function renderDetailFolds(id, panel) {
+    panel.innerHTML = '<div id="det-folds-host"></div>';
+    var folds = await fetchJSON('/api/backtests/' + id + '/folds');
+    window.Leaderboard.create({
+      mountEl: document.getElementById('det-folds-host'),
+      columns: [
+        {key: 'fold_index', label: 'Fold', sortable: true},
+        {key: 'test_start', label: 'Test Start', sortable: true},
+        {key: 'test_end', label: 'Test End', sortable: true},
+        {key: 'pnl', label: 'P&L', sortable: true,
+         render: function (v) {
+           var cls = v >= 0 ? 'positive' : 'negative';
+           return '<span class="' + cls + '">$' + v.toFixed(2) + '</span>';
+         }},
+        {key: 'sharpe', label: 'Sharpe', sortable: true,
+         render: function (v) { return v.toFixed(2); }},
+        {key: 'max_drawdown', label: 'Max DD', sortable: true,
+         render: function (v) { return (v * 100).toFixed(2) + '%'; }},
+        {key: 'trades', label: '#Trades', sortable: true},
+        {key: 'hit_rate', label: 'Hit Rate', sortable: true,
+         render: function (v) { return (v * 100).toFixed(1) + '%'; }},
+      ],
+      rows: folds,
+      initialSort: {key: 'fold_index', order: 'asc'},
+    });
+  }
+  async function renderDetailSymbols(id, panel) {
+    panel.innerHTML =
+      '<div id="det-sym-chart" class="chart-host" style="width:100%;height:240px;"></div>' +
+      '<div id="det-sym-table"></div>';
+    var rows = await fetchJSON('/api/backtests/' + id + '/symbols');
+    window.Charts.barChart(document.getElementById('det-sym-chart'), {
+      labels: rows.map(function (r) { return r.symbol; }),
+      values: rows.map(function (r) { return r.total_pnl; }),
+      colorByValue: true, yLabel: 'P&L per symbol ($)',
+    });
+    window.Leaderboard.create({
+      mountEl: document.getElementById('det-sym-table'),
+      columns: [
+        {key: 'symbol', label: 'Symbol', sortable: true},
+        {key: 'trades', label: '#Trades', sortable: true},
+        {key: 'wins', label: 'Wins', sortable: true},
+        {key: 'win_rate', label: 'Win %', sortable: true,
+         render: function (v) { return (v * 100).toFixed(1) + '%'; }},
+        {key: 'total_pnl', label: 'Total P&L', sortable: true,
+         render: function (v) {
+           var cls = v >= 0 ? 'positive' : 'negative';
+           return '<span class="' + cls + '">$' + v.toFixed(2) + '</span>';
+         }},
+        {key: 'avg_pnl', label: 'Avg P&L', sortable: true,
+         render: function (v) { return '$' + v.toFixed(2); }},
+      ],
+      rows: rows,
+      initialSort: {key: 'total_pnl', order: 'desc'},
+    });
+  }
+
+  async function renderDetailDistributions(id, panel) {
+    panel.innerHTML =
+      '<h3>Daily P&L</h3><div id="det-dist-daily" class="chart-host" style="width:100%;height:200px;"></div>' +
+      '<h3>Trade P&L histogram</h3><div id="det-dist-hist" class="chart-host" style="width:100%;height:220px;"></div>' +
+      '<h3>Hold-time buckets</h3><div id="det-dist-hold" class="chart-host" style="width:100%;height:220px;"></div>' +
+      '<h3>Side breakdown</h3><div id="det-dist-side"></div>';
+
+    var data = await fetchJSON('/api/backtests/' + id + '/distributions');
+    window.Charts.barChart(document.getElementById('det-dist-daily'), {
+      labels: data.daily_pnl.map(function (d) {
+        return (d.date || '').slice(0, 10);
+      }),
+      values: data.daily_pnl.map(function (d) { return d.pnl; }),
+      colorByValue: true, yLabel: 'P&L ($)',
+    });
+    var hist = data.trade_pnl_histogram;
+    window.Charts.barChart(document.getElementById('det-dist-hist'), {
+      labels: hist.labels.map(function (v) { return String(v); }),
+      values: hist.counts, yLabel: 'Count',
+    });
+    window.Charts.barChart(document.getElementById('det-dist-hold'), {
+      labels: data.hold_time_buckets.map(function (b) {
+        return b.bucket + ' (' + b.trades + ')';
+      }),
+      values: data.hold_time_buckets.map(function (b) { return b.avg_pnl; }),
+      colorByValue: true, yLabel: 'Avg P&L ($)',
+    });
+    document.getElementById('det-dist-side').innerHTML =
+      '<table class="data-table"><thead><tr>' +
+      '<th>Side</th><th>Trades</th><th>Wins</th><th>Win %</th><th>Total P&L</th><th>Avg P&L</th>' +
+      '</tr></thead><tbody>' +
+      data.side_breakdown.map(function (s) {
+        var cls = s.total_pnl >= 0 ? 'positive' : 'negative';
+        return '<tr><td>' + s.side + '</td><td>' + s.trades + '</td><td>' + s.wins + '</td>' +
+          '<td>' + (s.win_rate * 100).toFixed(1) + '%</td>' +
+          '<td class="' + cls + '">$' + s.total_pnl.toFixed(2) + '</td>' +
+          '<td>$' + s.avg_pnl.toFixed(2) + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  }
+  async function renderDetailLiveOverlay(id, panel) {
+    panel.innerHTML =
+      '<div id="det-live-host" class="chart-host" style="width:100%;height:340px;"></div>' +
+      '<p id="det-live-note" style="color:var(--text-muted);"></p>';
+    var data = await fetchJSON('/api/backtests/' + id + '/live-overlay');
+    if (!data.has_overlap) {
+      document.getElementById('det-live-note').innerHTML =
+        '<strong>No overlap.</strong> No live trades exist for symbols [' +
+        (data.symbols || []).join(', ') + '] within the backtest window (' +
+        (data.range_start || '') + ' \u2192 ' + (data.range_end || '') + ').';
+    }
+    var series = [
+      {label: 'Backtest equity',
+       data: data.backtest_series.map(function (p) {
+         return {x: p.timestamp, y: p.equity};
+       })},
+      {label: 'Live (cumulative P&L from 0)',
+       data: data.live_series.map(function (p) {
+         return {x: p.timestamp, y: p.equity};
+       })},
+    ];
+    window.Charts.lineChart(document.getElementById('det-live-host'), {
+      series: series, xIsTime: true, yLabel: 'Equity / cumulative P&L',
+    });
+  }
+
+  async function renderDetailFunnel(id, panel) {
+    panel.innerHTML =
+      '<div id="det-funnel-host" class="chart-host" style="width:100%;height:260px;"></div>' +
+      '<p id="det-funnel-note" style="color:var(--text-muted);"></p>';
+    var data = await fetchJSON('/api/backtests/' + id + '/funnel');
+    var labels = ['Signals', 'Confident (\u2265' +
+                  (data.min_confidence * 100).toFixed(0) + '%)',
+                  'Orders placed', 'Orders filled', 'Orders closed'];
+    var values = [data.signals, data.confident, data.orders_placed,
+                   data.orders_filled, data.orders_closed];
+    window.Charts.barChart(document.getElementById('det-funnel-host'), {
+      labels: labels, values: values, yLabel: 'Count',
+    });
+    // Drop-off rates between adjacent stages.
+    var dropTexts = [];
+    for (var i = 1; i < values.length; i++) {
+      var prev = values[i - 1], cur = values[i];
+      var dropPct = prev > 0 ? (1 - cur / prev) * 100 : 0;
+      dropTexts.push(labels[i - 1] + ' \u2192 ' + labels[i] + ': ' + dropPct.toFixed(1) + '% drop');
+    }
+    document.getElementById('det-funnel-note').textContent = dropTexts.join(' \u00b7 ');
   }
 
   async function renderJobDetail(jobId) {
@@ -537,6 +743,163 @@
         ${data.trades.length === 50 ? `<button onclick="BacktestsTab._trades(${runId},${offset+50})">Next</button>` : ''}
       </div>`;
   }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+    });
+  }
+
+  window.BacktestsTagsNotes = {
+    mount: function (runId, tags, notes) {
+      var tagsEl = document.getElementById('detail-tags');
+      var notesEl = document.getElementById('detail-notes');
+      if (!tagsEl || !notesEl) return;
+
+      function renderTags(current) {
+        tagsEl.innerHTML =
+          current.map(function (t) {
+            return '<span class="tag-chip">' + t + '</span>';
+          }).join(' ') +
+          ' <a href="#" id="tag-edit-link">Edit</a>';
+        document.getElementById('tag-edit-link').onclick = function (e) {
+          e.preventDefault();
+          tagsEl.innerHTML =
+            '<input class="tag-editor" id="tag-edit-input" value="' +
+              current.join(', ') + '" />' +
+            ' <button id="tag-save">Save</button> <button id="tag-cancel">Cancel</button>';
+          document.getElementById('tag-save').onclick = async function () {
+            var list = document.getElementById('tag-edit-input').value
+                         .split(',').map(function (s) { return s.trim(); })
+                         .filter(function (s) { return s.length > 0; });
+            var r = await fetch('/api/backtests/' + runId + '/tags', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({tags: list}),
+            });
+            if (r.ok) {
+              var body = await r.json();
+              renderTags(body.tags || []);
+            } else {
+              alert('Failed to save tags: HTTP ' + r.status);
+            }
+          };
+          document.getElementById('tag-cancel').onclick = function () {
+            renderTags(current);
+          };
+        };
+      }
+      renderTags(tags || []);
+
+      function renderNotes(current) {
+        notesEl.innerHTML =
+          '<span>' + (current ? escapeHtml(current) : '<em>(none)</em>') + '</span>' +
+          ' <a href="#" id="notes-edit-link">Edit</a>';
+        document.getElementById('notes-edit-link').onclick = function (e) {
+          e.preventDefault();
+          notesEl.innerHTML =
+            '<textarea class="notes-editor" id="notes-edit-input">' +
+              escapeHtml(current || '') +
+            '</textarea><br>' +
+            '<button id="notes-save">Save</button> <button id="notes-cancel">Cancel</button>';
+          document.getElementById('notes-save').onclick = async function () {
+            var text = document.getElementById('notes-edit-input').value;
+            var r = await fetch('/api/backtests/' + runId + '/notes', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({notes: text}),
+            });
+            if (r.ok) {
+              var body = await r.json();
+              renderNotes(body.notes || '');
+            } else {
+              alert('Failed to save notes: HTTP ' + r.status);
+            }
+          };
+          document.getElementById('notes-cancel').onclick = function () {
+            renderNotes(current);
+          };
+        };
+      }
+      renderNotes(notes || '');
+    },
+  };
+
+  window.BacktestsPromote = {
+    open: async function (runId, cfg) {
+      var modalHost = document.getElementById('bt-promote-modal');
+      if (!modalHost) return;
+      // Fetch current runtime_config to show diff.
+      var rcResp = await fetch('/api/config');
+      var rc = await rcResp.json();
+      var current = rc.values || {};
+      // Consider only execution_* keys for now.
+      var rows = [];
+      Object.keys(cfg).forEach(function (k) {
+        var rtKey = k.startsWith('execution_') ? k : 'execution_' + k;
+        if (!(rtKey in current)) return;
+        var cur = current[rtKey];
+        var nxt = cfg[k];
+        if (JSON.stringify(cur) === JSON.stringify(nxt)) return;
+        rows.push({key: k, rtKey: rtKey, current: cur, next: nxt});
+      });
+      if (rows.length === 0) {
+        modalHost.innerHTML = '<div class="bt-modal">' +
+          '<p>Backtest config matches current runtime config for all execution_* keys. Nothing to promote.</p>' +
+          '<button id="bt-promote-close">Close</button></div>';
+        document.getElementById('bt-promote-close').onclick = function () {
+          modalHost.innerHTML = '';
+        };
+        return;
+      }
+      modalHost.innerHTML =
+        '<div class="bt-modal">' +
+        '<h3>Promote config to live runtime_config</h3>' +
+        '<table class="data-table"><thead><tr><th></th><th>Key</th><th>Current</th><th>From backtest</th></tr></thead><tbody>' +
+        rows.map(function (r, i) {
+          return '<tr><td><input type="checkbox" checked data-idx="' + i + '"></td>' +
+            '<td>' + r.rtKey + '</td>' +
+            '<td>' + JSON.stringify(r.current) + '</td>' +
+            '<td class="positive">' + JSON.stringify(r.next) + '</td></tr>';
+        }).join('') + '</tbody></table>' +
+        '<p><label>Note: <input id="bt-promote-note" type="text" style="width:300px;"></label></p>' +
+        '<button id="bt-promote-apply">Apply</button> ' +
+        '<button id="bt-promote-cancel">Cancel</button>' +
+        '</div>';
+
+      document.getElementById('bt-promote-cancel').onclick = function () {
+        modalHost.innerHTML = '';
+      };
+      document.getElementById('bt-promote-apply').onclick = async function () {
+        var picked = [];
+        modalHost.querySelectorAll('input[type=checkbox]').forEach(function (cb) {
+          if (cb.checked) picked.push(rows[parseInt(cb.dataset.idx, 10)].key);
+        });
+        var note = document.getElementById('bt-promote-note').value || '';
+        var r = await fetch('/api/backtests/' + runId + '/promote-config', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({keys: picked, note: note}),
+        });
+        if (r.ok) {
+          var body = await r.json();
+          modalHost.innerHTML = '<div class="bt-modal">' +
+            '<p>Applied ' + body.diff.length + ' change(s).</p>' +
+            '<button id="bt-promote-done">Close</button></div>';
+          document.getElementById('bt-promote-done').onclick = function () {
+            modalHost.innerHTML = '';
+          };
+        } else {
+          var err = await r.text();
+          modalHost.innerHTML = '<div class="bt-modal error-state"><p>Error: ' + err + '</p>' +
+            '<button id="bt-promote-err">Close</button></div>';
+          document.getElementById('bt-promote-err').onclick = function () {
+            modalHost.innerHTML = '';
+          };
+        }
+      };
+    },
+  };
 
   window.BacktestsTab = Object.assign(window.BacktestsTab || {}, {
     activate() { route(); },
