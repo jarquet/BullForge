@@ -2680,6 +2680,423 @@ class Database:
                 sig.target_pct, sig.stop_pct, sig.model_id,
             )
 
+    # ------------------------------------------------------------------
+    # Backtest tags / notes / runtime_config_audit
+    # ------------------------------------------------------------------
+
+    async def set_backtest_tags(self, run_id: int, tags: list[str]) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE backtest_runs SET tags = $1 WHERE id = $2",
+                tags, run_id,
+            )
+
+    async def get_backtest_tags(self, run_id: int) -> list[str]:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchval(
+                "SELECT tags FROM backtest_runs WHERE id = $1", run_id,
+            )
+        return list(row) if row else []
+
+    async def set_backtest_notes(self, run_id: int, notes: str) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE backtest_runs SET notes = $1 WHERE id = $2",
+                notes, run_id,
+            )
+
+    async def get_backtest_notes(self, run_id: int) -> Optional[str]:
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(
+                "SELECT notes FROM backtest_runs WHERE id = $1", run_id,
+            )
+
+    async def insert_runtime_config_audit(
+        self, key: str, old_value: Optional[str], new_value: str,
+        source_backtest_run_id: Optional[int] = None,
+        note: Optional[str] = None,
+    ) -> int:
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(
+                """
+                INSERT INTO runtime_config_audit
+                    (key, old_value, new_value, source_backtest_run_id, note)
+                VALUES ($1, $2, $3, $4, $5) RETURNING id
+                """,
+                key, old_value, new_value, source_backtest_run_id, note,
+            )
+
+    # ------------------------------------------------------------------
+    # Backtest extra query methods
+    # ------------------------------------------------------------------
+
+    async def query_backtest_symbols(self, run_id: int) -> list[dict]:
+        """Per-symbol aggregation within a backtest run.
+
+        Returns [{symbol, trades, wins, win_rate, total_pnl, avg_pnl}].
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    symbol,
+                    COUNT(*) AS trades,
+                    SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END)::INT AS wins,
+                    SUM(pnl)::DOUBLE PRECISION AS total_pnl
+                FROM backtest_trades
+                WHERE run_id = $1 AND exit_time IS NOT NULL AND pnl IS NOT NULL
+                GROUP BY symbol
+                ORDER BY total_pnl DESC
+                """,
+                run_id,
+            )
+        return [
+            {
+                "symbol": r["symbol"],
+                "trades": r["trades"],
+                "wins": r["wins"],
+                "win_rate": (r["wins"] / r["trades"]) if r["trades"] > 0 else 0.0,
+                "total_pnl": float(r["total_pnl"] or 0.0),
+                "avg_pnl": (float(r["total_pnl"] or 0.0) / r["trades"])
+                           if r["trades"] > 0 else 0.0,
+            }
+            for r in rows
+        ]
+
+    async def query_backtest_distributions(self, run_id: int) -> dict:
+        """Same shape as Plan 3's query_distributions but scoped to one backtest run."""
+        async with self.pool.acquire() as conn:
+            all_trades = await conn.fetch(
+                """
+                SELECT pnl, side,
+                       EXTRACT(EPOCH FROM (exit_time - entry_time))::INT AS hold_seconds
+                FROM backtest_trades
+                WHERE run_id = $1 AND exit_time IS NOT NULL AND pnl IS NOT NULL
+                """,
+                run_id,
+            )
+            daily = await conn.fetch(
+                """
+                SELECT DATE_TRUNC('day', exit_time) AS date,
+                       SUM(pnl) AS pnl, COUNT(*) AS trades
+                FROM backtest_trades
+                WHERE run_id = $1 AND exit_time IS NOT NULL AND pnl IS NOT NULL
+                GROUP BY DATE_TRUNC('day', exit_time)
+                ORDER BY date ASC
+                """,
+                run_id,
+            )
+
+        pnls = [float(t["pnl"]) for t in all_trades]
+        holds = [int(t["hold_seconds"]) for t in all_trades
+                 if t["hold_seconds"] is not None]
+
+        # 20-bin histogram
+        labels: list = []
+        counts: list = []
+        if pnls:
+            lo, hi = min(pnls), max(pnls)
+            if lo == hi: lo -= 1.0; hi += 1.0
+            bins = 20
+            width = (hi - lo) / bins
+            counts = [0] * bins
+            for v in pnls:
+                i = min(bins - 1, int((v - lo) / width))
+                counts[i] += 1
+            labels = [round(lo + i * width, 2) for i in range(bins)]
+
+        # Hold-time buckets (same 7 as Plan 3)
+        hold_buckets_def = [
+            ("<5m", 0, 300),
+            ("5-30m", 300, 1800),
+            ("30m-2h", 1800, 7200),
+            ("2h-8h", 7200, 28800),
+            ("8h-1d", 28800, 86400),
+            ("overnight", 86400, 172800),
+            ("multi-day", 172800, 10**9),
+        ]
+        hold_table = []
+        for name, lo_s, hi_s in hold_buckets_def:
+            bucket = [t for t in all_trades
+                      if t["hold_seconds"] is not None
+                      and lo_s <= t["hold_seconds"] < hi_s]
+            n = len(bucket)
+            avg = sum(float(t["pnl"]) for t in bucket) / n if n > 0 else 0.0
+            hold_table.append({"bucket": name, "trades": n, "avg_pnl": avg})
+
+        def side_stats(side):
+            rows = [t for t in all_trades if t["side"] == side]
+            n = len(rows)
+            wins = sum(1 for t in rows if float(t["pnl"]) > 0)
+            total = sum(float(t["pnl"]) for t in rows)
+            return {
+                "side": side, "trades": n, "wins": wins,
+                "win_rate": (wins / n) if n > 0 else 0.0,
+                "total_pnl": total,
+                "avg_pnl": (total / n) if n > 0 else 0.0,
+            }
+
+        return {
+            "daily_pnl": [
+                {"date": r["date"], "pnl": float(r["pnl"]), "trades": r["trades"]}
+                for r in daily
+            ],
+            "trade_pnl_histogram": {
+                "labels": labels, "counts": counts,
+                "count": len(pnls),
+                "median": sorted(pnls)[len(pnls) // 2] if pnls else 0.0,
+                "mean": (sum(pnls) / len(pnls)) if pnls else 0.0,
+            },
+            "hold_time_buckets": hold_table,
+            "side_breakdown": [side_stats("long"), side_stats("short")],
+        }
+
+    async def query_backtest_live_overlay(self, run_id: int) -> dict:
+        """Overlay: live vs backtest equity for the run's symbols/window.
+
+        Returns {has_overlap, backtest_series, live_series, symbols,
+                 range_start, range_end}.
+        """
+        async with self.pool.acquire() as conn:
+            run = await conn.fetchrow(
+                """
+                SELECT symbols, range_start, range_end
+                FROM backtest_runs WHERE id = $1
+                """,
+                run_id,
+            )
+            if run is None:
+                return {"has_overlap": False, "backtest_series": [],
+                        "live_series": [], "symbols": [],
+                        "range_start": None, "range_end": None}
+
+            # Backtest series: concatenate equity across folds.
+            bt_rows = await conn.fetch(
+                """
+                SELECT timestamp, equity
+                FROM backtest_equity
+                WHERE run_id = $1
+                ORDER BY timestamp ASC
+                """,
+                run_id,
+            )
+            # Live series: walk closed live trades for the same symbols within
+            # the backtest's time window. scope=None (live-only): public.trades
+            # has no backtest_run_id column, so no filter needed there.
+            live_rows = await conn.fetch(
+                """
+                SELECT exit_time, pnl
+                FROM trades
+                WHERE symbol = ANY($1::TEXT[])
+                    AND exit_time IS NOT NULL
+                    AND pnl IS NOT NULL
+                    AND exit_time >= $2
+                    AND exit_time < $3
+                ORDER BY exit_time ASC
+                """,
+                list(run["symbols"]), run["range_start"], run["range_end"],
+            )
+
+        bt_series = [
+            {"timestamp": r["timestamp"], "equity": float(r["equity"])}
+            for r in bt_rows
+        ]
+        # Live equity walked from 0 (symbol-scoped; compare shape not level).
+        live_series = []
+        cum = 0.0
+        for r in live_rows:
+            cum += float(r["pnl"])
+            live_series.append({
+                "timestamp": r["exit_time"], "equity": cum,
+            })
+        return {
+            "has_overlap": len(live_series) > 0,
+            "backtest_series": bt_series,
+            "live_series": live_series,
+            "symbols": list(run["symbols"]),
+            "range_start": run["range_start"],
+            "range_end": run["range_end"],
+        }
+
+    async def query_backtest_funnel(
+        self, run_id: int, min_confidence: float = 0.6,
+    ) -> dict:
+        """Signal-to-trade funnel for a backtest run.
+
+        Reads predictions + orders scoped to run_id (any fold). Returns
+        {signals, confident, orders_placed, orders_filled, orders_closed}.
+        """
+        async with self.pool.acquire() as conn:
+            signals = await conn.fetchval(
+                """
+                SELECT COUNT(*)::INT FROM predictions
+                WHERE backtest_run_id = $1
+                """,
+                run_id,
+            )
+            confident = await conn.fetchval(
+                """
+                SELECT COUNT(*)::INT FROM predictions
+                WHERE backtest_run_id = $1 AND confidence >= $2
+                """,
+                run_id, min_confidence,
+            )
+            orders_placed = await conn.fetchval(
+                """
+                SELECT COUNT(*)::INT FROM orders WHERE backtest_run_id = $1
+                """,
+                run_id,
+            )
+            orders_filled = await conn.fetchval(
+                """
+                SELECT COUNT(*)::INT FROM orders
+                WHERE backtest_run_id = $1 AND status = 'filled'
+                """,
+                run_id,
+            )
+            orders_closed = await conn.fetchval(
+                """
+                SELECT COUNT(*)::INT FROM backtest_trades
+                WHERE run_id = $1 AND exit_time IS NOT NULL
+                """,
+                run_id,
+            )
+        return {
+            "signals": signals or 0,
+            "confident": confident or 0,
+            "orders_placed": orders_placed or 0,
+            "orders_filled": orders_filled or 0,
+            "orders_closed": orders_closed or 0,
+            "min_confidence": min_confidence,
+        }
+
+    async def query_backtest_compare(
+        self, run_ids: list[int],
+    ) -> dict:
+        """Overlay-ready payload for N runs. Returns aggregate equity series
+        per run + aggregated metrics (sum/mean across folds).
+        """
+        if not run_ids:
+            return {"runs": []}
+
+        async with self.pool.acquire() as conn:
+            runs = await conn.fetch(
+                """
+                SELECT id, name, symbols, tags, notes
+                FROM backtest_runs WHERE id = ANY($1::BIGINT[])
+                ORDER BY id
+                """,
+                run_ids,
+            )
+            equity = await conn.fetch(
+                """
+                SELECT run_id, timestamp, equity
+                FROM backtest_equity
+                WHERE run_id = ANY($1::BIGINT[])
+                ORDER BY run_id, timestamp ASC
+                """,
+                run_ids,
+            )
+            metrics = await conn.fetch(
+                """
+                SELECT run_id, SUM((metrics_json->>'pnl')::DOUBLE PRECISION) AS total_pnl,
+                       AVG((metrics_json->>'sharpe')::DOUBLE PRECISION) AS avg_sharpe,
+                       MIN((metrics_json->>'max_drawdown')::DOUBLE PRECISION) AS min_max_dd,
+                       SUM((metrics_json->>'trades')::INT) AS total_trades,
+                       AVG((metrics_json->>'hit_rate')::DOUBLE PRECISION) AS avg_hit_rate
+                FROM backtest_folds
+                WHERE run_id = ANY($1::BIGINT[])
+                GROUP BY run_id
+                """,
+                run_ids,
+            )
+
+        eq_by_run: dict[int, list[dict]] = {rid: [] for rid in run_ids}
+        for e in equity:
+            eq_by_run[e["run_id"]].append({
+                "timestamp": e["timestamp"], "equity": float(e["equity"]),
+            })
+        mx_by_run = {m["run_id"]: m for m in metrics}
+
+        result = []
+        for r in runs:
+            m = mx_by_run.get(r["id"], {})
+            result.append({
+                "run_id": r["id"], "name": r["name"],
+                "symbols": list(r["symbols"]),
+                "tags": list(r["tags"] or []),
+                "notes": r["notes"],
+                "equity_series": eq_by_run.get(r["id"], []),
+                "metrics": {
+                    "total_pnl": float(m.get("total_pnl") or 0.0),
+                    "avg_sharpe": float(m.get("avg_sharpe") or 0.0),
+                    "min_max_dd": float(m.get("min_max_dd") or 0.0),
+                    "total_trades": int(m.get("total_trades") or 0),
+                    "avg_hit_rate": float(m.get("avg_hit_rate") or 0.0),
+                },
+            })
+        return {"runs": result}
+
+    async def query_backtest_sensitivity(
+        self,
+        group_by: list[str],
+        swept_param: str,
+    ) -> dict:
+        """Runs sharing group_by dims but differing on swept_param.
+
+        For each run, extracts swept_param's value from config_json and
+        aggregates test-fold metrics. Returns {swept_param, group_by,
+        points: [{param_value, metrics}]}.
+        """
+        # Build a canonical group key from (symbols, timeframe, horizons).
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT r.id, r.symbols, r.timeframe, r.horizons, r.config_json,
+                       SUM((f.metrics_json->>'pnl')::DOUBLE PRECISION) AS total_pnl,
+                       AVG((f.metrics_json->>'sharpe')::DOUBLE PRECISION) AS avg_sharpe,
+                       MIN((f.metrics_json->>'max_drawdown')::DOUBLE PRECISION) AS min_max_dd
+                FROM backtest_runs r
+                LEFT JOIN backtest_folds f ON f.run_id = r.id
+                WHERE r.status = 'completed'
+                GROUP BY r.id, r.symbols, r.timeframe, r.horizons, r.config_json
+                """
+            )
+
+        def group_key(r):
+            parts = []
+            if "symbols" in group_by:
+                parts.append(tuple(r["symbols"]))
+            if "timeframe" in group_by:
+                parts.append(r["timeframe"])
+            if "horizons" in group_by:
+                parts.append(tuple(r["horizons"]))
+            return tuple(parts)
+
+        # Keep only runs whose config_json has the swept_param.
+        points = []
+        for r in rows:
+            cfg = r["config_json"] if isinstance(r["config_json"], dict) \
+                else (json.loads(r["config_json"]) if r["config_json"] else {})
+            if swept_param not in cfg:
+                continue
+            points.append({
+                "run_id": r["id"],
+                "group_key": list(group_key(r)),
+                "param_value": cfg[swept_param],
+                "metrics": {
+                    "total_pnl": float(r["total_pnl"] or 0.0),
+                    "avg_sharpe": float(r["avg_sharpe"] or 0.0),
+                    "min_max_dd": float(r["min_max_dd"] or 0.0),
+                },
+            })
+        points.sort(key=lambda p: (str(p["group_key"]), p["param_value"]))
+        return {
+            "swept_param": swept_param,
+            "group_by": group_by,
+            "points": points,
+        }
+
     async def query_meta_signals_shadow(
         self, symbol: str, limit: int = 100, estimator_type: Optional[str] = None,
     ) -> list[MetaSignalShadow]:
