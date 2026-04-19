@@ -35,3 +35,20 @@
   color: #888;
   font-size: 0.9em;
 }
+#compare-input-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+#compare-input-row input,
+#sens-param-input,
+#sens-group-input {
+    background: var(--bg-card);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 0.85rem;
+}

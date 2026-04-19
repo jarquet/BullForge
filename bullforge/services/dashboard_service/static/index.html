@@ -196,6 +196,11 @@
 
     <!-- Backtests Tab -->
     <section id="tab-backtests" class="tab-content">
+        <div class="subtab-bar" id="backtests-subtabs">
+            <button class="subtab active" data-subtab="list">List</button>
+            <button class="subtab" data-subtab="compare">Compare</button>
+            <button class="subtab" data-subtab="sensitivity">Sensitivity</button>
+        </div>
         <div id="backtests-root"></div>
     </section>
 
@@ -212,5 +217,6 @@
     <script src="/static/models_tab.js"></script>
     <script src="/static/trading_tab.js"></script>
     <script src="/static/backtests.js?v=2"></script>
+    <script src="/static/backtests_tab.js"></script>
 </body>
 </html>
