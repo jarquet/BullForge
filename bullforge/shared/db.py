@@ -298,8 +298,8 @@ class Database:
                                    for row in rows
                                    if row["schemaname"] == "backtest" and "WHERE" in row["indexdef"])
                 if scoped_exists:
-                    logger.info("sync_sandbox: skipping unscoped unique index %s on %s; "
-                               "scoped version exists in backtest", r["indexname"], table)
+                    logger.debug("sync_sandbox: skipping unscoped unique index %s on %s; "
+                                "scoped version exists in backtest", r["indexname"], table)
                     continue
 
             if body in backtest_bodies:
