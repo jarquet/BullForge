@@ -20,6 +20,7 @@ from services.backtest_service.metrics import (
 from services.backtest_service.results_db import BacktestResultsDB
 from services.backtest_service.simulated_broker import SimulatedBroker
 from services.backtest_service.splitter import Fold, WalkForwardSplitter
+from services.backtest_service.exceptions import BacktestCancelled
 
 from services.execution_service.order_executor import OrderExecutor
 from services.execution_service.position_tracker import PositionTracker
@@ -77,6 +78,7 @@ class BacktestEngine:
         cfg: BacktestConfig,
         *,
         on_run_created: Optional[Callable[[int], Awaitable[None]]] = None,
+        check_cancelled: Optional[Callable[[], Awaitable[bool]]] = None,
     ) -> int:
         run_id = await self._results.insert_run(
             name=cfg.name,
@@ -106,8 +108,13 @@ class BacktestEngine:
                     fold.index, fold.train_start, fold.train_end,
                     fold.test_start, fold.test_end,
                 )
-                await self._run_fold(run_id, cfg, fold)
+                await self._run_fold(
+                    run_id, cfg, fold, check_cancelled=check_cancelled,
+                )
             await self._results.finish_run(run_id=run_id, status="completed")
+        except BacktestCancelled:
+            await self._results.finish_run(run_id=run_id, status="cancelled")
+            raise
         except Exception:
             await self._results.finish_run(run_id=run_id, status="failed")
             raise
@@ -115,7 +122,12 @@ class BacktestEngine:
 
     async def _run_fold(
         self, run_id: int, cfg: BacktestConfig, fold: Fold,
+        *,
+        check_cancelled: Optional[Callable[[], Awaitable[bool]]] = None,
     ) -> None:
+        if check_cancelled is not None and await check_cancelled():
+            raise BacktestCancelled()
+
         fold_id = await self._results.insert_fold(
             run_id=run_id, fold_index=fold.index,
             train_start=fold.train_start, train_end=fold.train_end,
@@ -192,7 +204,9 @@ class BacktestEngine:
         # ts (PK is (run_id, fold_id, timestamp)).
         last_ts: Optional[datetime] = None
         last_account: Optional[dict] = None
-        for ts, symbol, bar in all_bars:
+        for i, (ts, symbol, bar) in enumerate(all_bars):
+            if check_cancelled is not None and i % 100 == 0 and await check_cancelled():
+                raise BacktestCancelled()
             if last_ts is not None and ts != last_ts and last_account is not None:
                 equity.record(
                     last_ts,
