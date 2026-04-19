@@ -10,6 +10,7 @@ COPY services/dashboard_service/ /app/services/dashboard_service/
 COPY services/backtest_service/__init__.py /app/services/backtest_service/__init__.py
 COPY services/backtest_service/jobs_db.py /app/services/backtest_service/jobs_db.py
 COPY services/backtest_service/results_db.py /app/services/backtest_service/results_db.py
+COPY services/backtest_service/worker_pool.py /app/services/backtest_service/worker_pool.py
 COPY migrations/ /app/migrations/
 
 ENV PYTHONPATH=/app
