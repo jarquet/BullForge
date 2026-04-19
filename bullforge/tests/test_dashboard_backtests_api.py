@@ -53,7 +53,8 @@ async def test_list_returns_runs_and_pending_jobs(aiohttp_client, app):
          "status": "completed",
          "started_at": None, "finished_at": None,
          "metrics": {"total_pnl": 1.0, "sharpe": 0.5, "max_dd": -0.1,
-                     "n_trades": 2, "hit_rate": 0.5}},
+                     "n_trades": 2, "hit_rate": 0.5},
+         "tags": [], "notes": None},
     ])
     app["jobs_db"].list_pending = AsyncMock(return_value=[
         {"id": 9, "name": "q", "config_json": {"symbols": ["TSLA"]},
@@ -419,3 +420,25 @@ async def test_folds_endpoint_embeds_metrics(aiohttp_client, backtests_app):
     for row in body:
         for key in ("pnl", "sharpe", "max_drawdown", "trades", "hit_rate"):
             assert key in row
+
+
+@pytest.mark.asyncio
+async def test_list_includes_tags_and_notes(aiohttp_client, backtests_app):
+    backtests_app["results_db"].list_runs = AsyncMock(return_value=[
+        {"id": 1, "name": "r", "symbols": ["SPY"],
+         "range_start": None, "range_end": None,
+         "status": "completed",
+         "started_at": None, "finished_at": None,
+         "metrics": {"total_pnl": 1.0, "sharpe": 0.5, "max_dd": -0.1,
+                     "n_trades": 2, "hit_rate": 0.5},
+         "tags": ["baseline"], "notes": "v2 run"},
+    ])
+    backtests_app["jobs_db"].list_pending = AsyncMock(return_value=[])
+    client = await aiohttp_client(backtests_app)
+    resp = await client.get("/api/backtests")
+    assert resp.status == 200
+    body = await resp.json()
+    assert "rows" in body
+    for row in body["rows"]:
+        assert "tags" in row
+        assert "notes" in row

@@ -104,6 +104,8 @@ async def _list(request: web.Request) -> web.Response:
                 "finished_at": _iso(j["finished_at"]),
                 "metrics": None,
                 "error": j["error"],
+                "tags": [],
+                "notes": None,
             })
 
     if status in ("all", "completed", "failed"):
@@ -125,6 +127,8 @@ async def _list(request: web.Request) -> web.Response:
                 "started_at": _iso(r["started_at"]),
                 "finished_at": _iso(r["finished_at"]),
                 "metrics": r["metrics"],
+                "tags": list(r.get("tags") or []),
+                "notes": r.get("notes"),
             })
 
     return web.json_response({"rows": rows})
