@@ -54,6 +54,23 @@
     if (v === null || v === undefined) return '—';
     return `${(v * 100).toFixed(1)}%`;
   }
+  function fmtBtRuntime(r) {
+    if (!r.started_at) return '—';
+    const start = new Date(r.started_at).getTime();
+    const end = r.finished_at ? new Date(r.finished_at).getTime() : Date.now();
+    if (!isFinite(start) || !isFinite(end) || end < start) return '—';
+    let seconds = Math.floor((end - start) / 1000);
+    const cls = r.finished_at ? '' : ' class="bt-running-runtime"';
+    let s;
+    if (seconds < 60) s = seconds + 's';
+    else if (seconds < 3600) s = Math.floor(seconds / 60) + 'm ' + (seconds % 60) + 's';
+    else {
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      s = h + 'h ' + m + 'm';
+    }
+    return `<span${cls}>${s}</span>`;
+  }
 
   function renderOverview() {
     root().innerHTML = `
@@ -84,8 +101,9 @@
             <th>Status</th>
             <th>Tags</th>
             <th data-sort="finished_at">Finished</th>
+            <th>Runtime</th>
           </tr></thead>
-          <tbody id="bt-rows"><tr><td colspan="11">Loading…</td></tr></tbody>
+          <tbody id="bt-rows"><tr><td colspan="12">Loading…</td></tr></tbody>
         </table>
       </div>
     `;
@@ -347,7 +365,7 @@
     const tbody = document.getElementById('bt-rows');
     if (!rows.length) {
       tbody.innerHTML =
-        '<tr><td colspan="11">No backtests yet. Click New Backtest to start one.</td></tr>';
+        '<tr><td colspan="12">No backtests yet. Click New Backtest to start one.</td></tr>';
       return;
     }
     tbody.innerHTML = rows.map(r => {
@@ -377,6 +395,7 @@
       const statusCell = r.status === 'cancelled'
         ? `<span class="bt-status-cancelled">${r.status}</span>`
         : r.status;
+      const runtime = fmtBtRuntime(r);
       return `<tr class="clickable" onclick="location.hash='${target}'">
         <td>${r.name}</td><td>${symsDisplay}</td><td>${range}</td>
         <td>${pnl}</td><td>${sharpe}</td><td>${dd}</td>
@@ -384,6 +403,7 @@
         <td>${statusCell} ${cancelBtn}</td>
         <td>${tagChips}</td>
         <td>${fmtTime(r.finished_at)}</td>
+        <td>${runtime}</td>
       </tr>`;
     }).join('');
     if (!tbody.__btCancelDelegated) {
