@@ -5,9 +5,6 @@ Uses a function-scoped `db` fixture (same pattern as
 """
 from __future__ import annotations
 
-import json
-from datetime import datetime, timedelta, timezone
-
 import pytest
 import pytest_asyncio
 
@@ -17,7 +14,6 @@ from shared.db import Database
 from services.dashboard_service.backtests_api import _delete_run_impl
 
 
-UTC = timezone.utc
 pytestmark = pytest.mark.asyncio
 
 
@@ -178,7 +174,6 @@ async def _count_artifacts(db, run_id: int) -> dict:
         }
 
 
-@pytest.mark.asyncio
 async def test_delete_run_impl_deletes_completed_run_and_all_artifacts(db):
     run_id = await _insert_run(db, status="completed")
     await _insert_cascaded_artifacts(db, run_id)
@@ -200,7 +195,6 @@ async def test_delete_run_impl_deletes_completed_run_and_all_artifacts(db):
     }
 
 
-@pytest.mark.asyncio
 async def test_delete_run_impl_refuses_running_run(db):
     run_id = await _insert_run(db, status="running")
     await _insert_cascaded_artifacts(db, run_id)
@@ -221,7 +215,6 @@ async def test_delete_run_impl_refuses_running_run(db):
     }
 
 
-@pytest.mark.asyncio
 async def test_delete_run_impl_returns_not_found_for_missing_id(db):
     # Pick an id that definitely doesn't exist.
     async with db.pool.acquire() as conn:
@@ -232,7 +225,6 @@ async def test_delete_run_impl_returns_not_found_for_missing_id(db):
     assert result == {"status": "not_found", "run_id": missing_id}
 
 
-@pytest.mark.asyncio
 async def test_delete_run_impl_nulls_backtest_jobs_run_id(db):
     run_id = await _insert_run(db, status="completed")
     async with db.pool.acquire() as conn:
@@ -256,7 +248,6 @@ async def test_delete_run_impl_nulls_backtest_jobs_run_id(db):
     assert row["status"] == "completed"  # job row itself survives
 
 
-@pytest.mark.asyncio
 async def test_delete_run_impl_nulls_runtime_config_audit_link(db):
     run_id = await _insert_run(db, status="completed")
     async with db.pool.acquire() as conn:

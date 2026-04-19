@@ -65,52 +65,42 @@ async def _delete_run_impl(db, run_id: int) -> dict:
       {"status": "still_running", "run_id": run_id,
                                   "current_status": <str>}
 
-    One transaction per run. If the status-guarded DELETE hits zero rows
-    (run is running or missing), we raise to roll back the sandbox deletes.
+    One transaction per run. Locks the run row with ``SELECT ... FOR UPDATE``
+    first; if the run is missing or non-terminal, returns without writing.
+    Otherwise deletes sandbox rows (not FK-cascaded) and the run row (which
+    cascades to folds/trades/equity).
     """
-    class _Abort(Exception):
-        pass
+    async with db.pool.acquire() as conn:
+        async with conn.transaction():
+            current_status = await conn.fetchval(
+                "SELECT status FROM backtest_runs WHERE id = $1 FOR UPDATE",
+                run_id,
+            )
+            if current_status is None:
+                return {"status": "not_found", "run_id": run_id}
+            if current_status not in ("completed", "failed", "cancelled"):
+                return {
+                    "status": "still_running",
+                    "run_id": run_id,
+                    "current_status": current_status,
+                }
 
-    row = None
-    current_status = None
-    try:
-        async with db.pool.acquire() as conn:
-            async with conn.transaction():
-                # Check status first so we can gate the whole operation.
-                current_status = await conn.fetchval(
-                    "SELECT status FROM backtest_runs WHERE id = $1 FOR UPDATE",
-                    run_id,
-                )
-                if current_status is None:
-                    raise _Abort("not_found")
-                if current_status not in ("completed", "failed", "cancelled"):
-                    raise _Abort("still_running")
-
-                await conn.execute(
-                    "DELETE FROM backtest.orders WHERE backtest_run_id = $1",
-                    run_id,
-                )
-                await conn.execute(
-                    "DELETE FROM backtest.predictions WHERE backtest_run_id = $1",
-                    run_id,
-                )
-                await conn.execute(
-                    "DELETE FROM backtest.model_registry WHERE backtest_run_id = $1",
-                    run_id,
-                )
-                row = await conn.fetchrow(
-                    "DELETE FROM backtest_runs WHERE id = $1 RETURNING id",
-                    run_id,
-                )
-    except _Abort as exc:
-        reason = exc.args[0]
-        if reason == "not_found":
-            return {"status": "not_found", "run_id": run_id}
-        return {
-            "status": "still_running",
-            "run_id": run_id,
-            "current_status": current_status,
-        }
+            await conn.execute(
+                "DELETE FROM backtest.orders WHERE backtest_run_id = $1",
+                run_id,
+            )
+            await conn.execute(
+                "DELETE FROM backtest.predictions WHERE backtest_run_id = $1",
+                run_id,
+            )
+            await conn.execute(
+                "DELETE FROM backtest.model_registry WHERE backtest_run_id = $1",
+                run_id,
+            )
+            await conn.execute(
+                "DELETE FROM backtest_runs WHERE id = $1",
+                run_id,
+            )
 
     return {"status": "deleted", "run_id": run_id}
 
