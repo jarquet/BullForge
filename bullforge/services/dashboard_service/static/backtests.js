@@ -470,8 +470,76 @@
       initialSort: {key: 'fold_index', order: 'asc'},
     });
   }
-  async function renderDetailSymbols(id, panel)       { panel.innerHTML = '<p class="empty-state">Per-symbol sub-tab placeholder (Task 10).</p>'; }
-  async function renderDetailDistributions(id, panel) { panel.innerHTML = '<p class="empty-state">Distributions sub-tab placeholder (Task 10).</p>'; }
+  async function renderDetailSymbols(id, panel) {
+    panel.innerHTML =
+      '<div id="det-sym-chart" class="chart-host" style="width:100%;height:240px;"></div>' +
+      '<div id="det-sym-table"></div>';
+    var rows = await fetchJSON('/api/backtests/' + id + '/symbols');
+    window.Charts.barChart(document.getElementById('det-sym-chart'), {
+      labels: rows.map(function (r) { return r.symbol; }),
+      values: rows.map(function (r) { return r.total_pnl; }),
+      colorByValue: true, yLabel: 'P&L per symbol ($)',
+    });
+    window.Leaderboard.create({
+      mountEl: document.getElementById('det-sym-table'),
+      columns: [
+        {key: 'symbol', label: 'Symbol', sortable: true},
+        {key: 'trades', label: '#Trades', sortable: true},
+        {key: 'wins', label: 'Wins', sortable: true},
+        {key: 'win_rate', label: 'Win %', sortable: true,
+         render: function (v) { return (v * 100).toFixed(1) + '%'; }},
+        {key: 'total_pnl', label: 'Total P&L', sortable: true,
+         render: function (v) {
+           var cls = v >= 0 ? 'positive' : 'negative';
+           return '<span class="' + cls + '">$' + v.toFixed(2) + '</span>';
+         }},
+        {key: 'avg_pnl', label: 'Avg P&L', sortable: true,
+         render: function (v) { return '$' + v.toFixed(2); }},
+      ],
+      rows: rows,
+      initialSort: {key: 'total_pnl', order: 'desc'},
+    });
+  }
+
+  async function renderDetailDistributions(id, panel) {
+    panel.innerHTML =
+      '<h3>Daily P&L</h3><div id="det-dist-daily" class="chart-host" style="width:100%;height:200px;"></div>' +
+      '<h3>Trade P&L histogram</h3><div id="det-dist-hist" class="chart-host" style="width:100%;height:220px;"></div>' +
+      '<h3>Hold-time buckets</h3><div id="det-dist-hold" class="chart-host" style="width:100%;height:220px;"></div>' +
+      '<h3>Side breakdown</h3><div id="det-dist-side"></div>';
+
+    var data = await fetchJSON('/api/backtests/' + id + '/distributions');
+    window.Charts.barChart(document.getElementById('det-dist-daily'), {
+      labels: data.daily_pnl.map(function (d) {
+        return (d.date || '').slice(0, 10);
+      }),
+      values: data.daily_pnl.map(function (d) { return d.pnl; }),
+      colorByValue: true, yLabel: 'P&L ($)',
+    });
+    var hist = data.trade_pnl_histogram;
+    window.Charts.barChart(document.getElementById('det-dist-hist'), {
+      labels: hist.labels.map(function (v) { return String(v); }),
+      values: hist.counts, yLabel: 'Count',
+    });
+    window.Charts.barChart(document.getElementById('det-dist-hold'), {
+      labels: data.hold_time_buckets.map(function (b) {
+        return b.bucket + ' (' + b.trades + ')';
+      }),
+      values: data.hold_time_buckets.map(function (b) { return b.avg_pnl; }),
+      colorByValue: true, yLabel: 'Avg P&L ($)',
+    });
+    document.getElementById('det-dist-side').innerHTML =
+      '<table class="data-table"><thead><tr>' +
+      '<th>Side</th><th>Trades</th><th>Wins</th><th>Win %</th><th>Total P&L</th><th>Avg P&L</th>' +
+      '</tr></thead><tbody>' +
+      data.side_breakdown.map(function (s) {
+        var cls = s.total_pnl >= 0 ? 'positive' : 'negative';
+        return '<tr><td>' + s.side + '</td><td>' + s.trades + '</td><td>' + s.wins + '</td>' +
+          '<td>' + (s.win_rate * 100).toFixed(1) + '%</td>' +
+          '<td class="' + cls + '">$' + s.total_pnl.toFixed(2) + '</td>' +
+          '<td>$' + s.avg_pnl.toFixed(2) + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  }
   async function renderDetailLiveOverlay(id, panel)   { panel.innerHTML = '<p class="empty-state">Live-vs-backtest sub-tab placeholder (Task 11).</p>'; }
   async function renderDetailFunnel(id, panel)        { panel.innerHTML = '<p class="empty-state">Funnel sub-tab placeholder (Task 11).</p>'; }
 
