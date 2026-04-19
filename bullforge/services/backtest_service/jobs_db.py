@@ -63,6 +63,39 @@ class BacktestJobsDB:
                     "started_at": "set",
                 }
 
+    async def cancel(self, job_id: int) -> str:
+        """Flip a job to 'cancelled' iff currently queued or running.
+
+        CAS semantics: the `WHERE status IN (...)` clause prevents a race
+        with a worker's mark_completed/mark_failed running at the same
+        instant. Whichever UPDATE runs first wins; the other matches zero
+        rows and becomes a no-op.
+
+        Returns:
+            'cancelled'         — the row actually flipped to cancelled
+            'already_terminal'  — row was completed/failed/cancelled, or
+                                  no such job_id exists
+        """
+        async with self._db.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE backtest_jobs
+                SET status = 'cancelled', finished_at = NOW()
+                WHERE id = $1 AND status IN ('queued', 'running')
+                RETURNING id
+                """,
+                job_id,
+            )
+        return "cancelled" if row else "already_terminal"
+
+    async def is_cancelled(self, job_id: int) -> bool:
+        """Fast PK lookup used by the engine's in-run cancellation poll."""
+        async with self._db.pool.acquire() as conn:
+            status = await conn.fetchval(
+                "SELECT status FROM backtest_jobs WHERE id = $1", job_id,
+            )
+        return status == "cancelled"
+
     async def link_run(self, *, job_id: int, run_id: int) -> None:
         """Attach a run_id to a job as soon as the run row exists.
 
@@ -76,23 +109,25 @@ class BacktestJobsDB:
             )
 
     async def mark_completed(self, *, job_id: int, run_id: int) -> None:
+        """No-op if the row is already terminal (e.g., cancelled mid-run)."""
         async with self._db.pool.acquire() as conn:
             await conn.execute(
                 """
                 UPDATE backtest_jobs
                 SET status = 'completed', run_id = $2, finished_at = NOW()
-                WHERE id = $1
+                WHERE id = $1 AND status IN ('queued', 'running')
                 """,
                 job_id, run_id,
             )
 
     async def mark_failed(self, *, job_id: int, error: str) -> None:
+        """No-op if the row is already terminal (e.g., cancelled mid-run)."""
         async with self._db.pool.acquire() as conn:
             await conn.execute(
                 """
                 UPDATE backtest_jobs
                 SET status = 'failed', error = $2, finished_at = NOW()
-                WHERE id = $1
+                WHERE id = $1 AND status IN ('queued', 'running')
                 """,
                 job_id, error,
             )

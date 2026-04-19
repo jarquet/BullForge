@@ -165,3 +165,72 @@ async def test_claim_next_filters_by_pool(db):
 
     assert await jobs.claim_next(worker_pool="cpu") is None
     assert await jobs.claim_next(worker_pool="gpu") is None
+
+
+async def test_cancel_queued_job_returns_cancelled(db):
+    jobs = BacktestJobsDB(db)
+    job_id = await jobs.insert_job(name="qcancel", config={})
+    result = await jobs.cancel(job_id)
+    assert result == "cancelled"
+    row = await jobs.get(job_id)
+    assert row["status"] == "cancelled"
+    assert row["finished_at"] is not None
+
+
+async def test_cancel_running_job_returns_cancelled(db):
+    jobs = BacktestJobsDB(db)
+    job_id = await jobs.insert_job(name="rcancel", config={})
+    await jobs.claim_next(worker_pool="cpu")
+    result = await jobs.cancel(job_id)
+    assert result == "cancelled"
+    row = await jobs.get(job_id)
+    assert row["status"] == "cancelled"
+
+
+async def test_cancel_completed_job_returns_already_terminal(db):
+    jobs = BacktestJobsDB(db)
+    run_id = await _seed_run(db)
+    job_id = await jobs.insert_job(name="ccompl", config={})
+    await jobs.claim_next(worker_pool="cpu")
+    await jobs.mark_completed(job_id=job_id, run_id=run_id)
+    result = await jobs.cancel(job_id)
+    assert result == "already_terminal"
+    row = await jobs.get(job_id)
+    assert row["status"] == "completed"
+
+
+async def test_cancel_nonexistent_job_returns_already_terminal(db):
+    jobs = BacktestJobsDB(db)
+    result = await jobs.cancel(999_999_999)
+    assert result == "already_terminal"
+
+
+async def test_is_cancelled_flag(db):
+    jobs = BacktestJobsDB(db)
+    job_id = await jobs.insert_job(name="flag", config={})
+    assert await jobs.is_cancelled(job_id) is False
+    await jobs.cancel(job_id)
+    assert await jobs.is_cancelled(job_id) is True
+
+
+async def test_mark_completed_is_noop_when_already_cancelled(db):
+    """Race guard: if user cancelled just before worker finished,
+    mark_completed must not flip the status back to 'completed'."""
+    jobs = BacktestJobsDB(db)
+    run_id = await _seed_run(db)
+    job_id = await jobs.insert_job(name="race1", config={})
+    await jobs.claim_next(worker_pool="cpu")
+    await jobs.cancel(job_id)
+    await jobs.mark_completed(job_id=job_id, run_id=run_id)
+    row = await jobs.get(job_id)
+    assert row["status"] == "cancelled"
+
+
+async def test_mark_failed_is_noop_when_already_cancelled(db):
+    jobs = BacktestJobsDB(db)
+    job_id = await jobs.insert_job(name="race2", config={})
+    await jobs.claim_next(worker_pool="cpu")
+    await jobs.cancel(job_id)
+    await jobs.mark_failed(job_id=job_id, error="boom")
+    row = await jobs.get(job_id)
+    assert row["status"] == "cancelled"
