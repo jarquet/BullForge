@@ -109,3 +109,4 @@
   color: #b58900;
   font-weight: 600;
 }
+.bt-running-runtime { color: var(--text-muted); font-style: italic; }
