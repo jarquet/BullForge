@@ -56,6 +56,65 @@ def _iso(v):
     return v.isoformat() if isinstance(v, datetime) else v
 
 
+async def _delete_run_impl(db, run_id: int) -> dict:
+    """Delete a terminal backtest run and its non-cascaded sandbox artifacts.
+
+    Returns one of:
+      {"status": "deleted",       "run_id": run_id}
+      {"status": "not_found",     "run_id": run_id}
+      {"status": "still_running", "run_id": run_id,
+                                  "current_status": <str>}
+
+    One transaction per run. If the status-guarded DELETE hits zero rows
+    (run is running or missing), we raise to roll back the sandbox deletes.
+    """
+    class _Abort(Exception):
+        pass
+
+    row = None
+    current_status = None
+    try:
+        async with db.pool.acquire() as conn:
+            async with conn.transaction():
+                # Check status first so we can gate the whole operation.
+                current_status = await conn.fetchval(
+                    "SELECT status FROM backtest_runs WHERE id = $1 FOR UPDATE",
+                    run_id,
+                )
+                if current_status is None:
+                    raise _Abort("not_found")
+                if current_status not in ("completed", "failed", "cancelled"):
+                    raise _Abort("still_running")
+
+                await conn.execute(
+                    "DELETE FROM backtest.orders WHERE backtest_run_id = $1",
+                    run_id,
+                )
+                await conn.execute(
+                    "DELETE FROM backtest.predictions WHERE backtest_run_id = $1",
+                    run_id,
+                )
+                await conn.execute(
+                    "DELETE FROM backtest.model_registry WHERE backtest_run_id = $1",
+                    run_id,
+                )
+                row = await conn.fetchrow(
+                    "DELETE FROM backtest_runs WHERE id = $1 RETURNING id",
+                    run_id,
+                )
+    except _Abort as exc:
+        reason = exc.args[0]
+        if reason == "not_found":
+            return {"status": "not_found", "run_id": run_id}
+        return {
+            "status": "still_running",
+            "run_id": run_id,
+            "current_status": current_status,
+        }
+
+    return {"status": "deleted", "run_id": run_id}
+
+
 async def _cancel_job(request: web.Request) -> web.Response:
     """POST /api/backtest-jobs/{job_id}/cancel — cancel by direct job_id."""
     try:
