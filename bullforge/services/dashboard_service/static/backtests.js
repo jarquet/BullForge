@@ -12,6 +12,21 @@
     return res.json();
   }
 
+  async function cancelBacktest(row) {
+    if (!confirm('Cancel backtest "' + (row.name || row.id) + '"?')) return;
+    const url = row.kind === 'run'
+      ? '/api/backtests/' + row.id + '/cancel'
+      : '/api/backtest-jobs/' + row.id + '/cancel';
+    try {
+      await fetchJSON(url, { method: 'POST' });
+      reload();
+    } catch (e) {
+      alert('Cancel failed: ' + ((e.body && e.body.error) || e.message || 'unknown'));
+    }
+  }
+
+  window.__btCancel = cancelBacktest;
+
   function route() {
     const hash = window.location.hash || '#backtests';
     const parts = hash.replace(/^#/, '').split('/');
@@ -351,10 +366,21 @@
       const tagChips = (r.tags || []).map(function (t) {
         return '<span class="tag-chip">' + t + '</span>';
       }).join(' ');
+      const canCancel = (r.kind === 'job')
+        || (r.kind === 'run' && r.status === 'running');
+      const rowPayload = JSON.stringify({kind: r.kind, id: r.id, name: r.name})
+        .replace(/"/g, '&quot;');
+      const cancelBtn = canCancel
+        ? `<button class="bt-cancel-btn" onclick="event.stopPropagation();window.__btCancel(${rowPayload})">Cancel</button>`
+        : '';
+      const statusCell = r.status === 'cancelled'
+        ? `<span class="bt-status-cancelled">${r.status}</span>`
+        : r.status;
       return `<tr class="clickable" onclick="location.hash='${target}'">
         <td>${r.name}</td><td>${symsDisplay}</td><td>${range}</td>
         <td>${pnl}</td><td>${sharpe}</td><td>${dd}</td>
-        <td>${ntr}</td><td>${hit}</td><td>${r.status}</td>
+        <td>${ntr}</td><td>${hit}</td>
+        <td>${statusCell} ${cancelBtn}</td>
         <td>${tagChips}</td>
         <td>${fmtTime(r.finished_at)}</td>
       </tr>`;
@@ -370,7 +396,8 @@
     root().innerHTML =
       '<div class="bt-detail">' +
       '<a class="bt-back" href="#backtests">← Back to list</a>' +
-      '<h2 id="bt-detail-title">Run ' + id + '</h2>' +
+      '<h2 id="bt-detail-title">Run ' + id +
+      ' <span id="bt-detail-cancel"></span></h2>' +
       '<div class="subtab-bar" id="bt-detail-subtabs">' +
         '<button class="subtab" data-subtab="summary">Summary</button>' +
         '<button class="subtab" data-subtab="equity">Equity</button>' +
@@ -428,6 +455,18 @@
     document.getElementById('bt-promote').onclick = function () {
       if (window.BacktestsPromote) window.BacktestsPromote.open(id, run.config_json || run.config || {});
     };
+    // Cancel button in header (only while running).
+    var cancelSlot = document.getElementById('bt-detail-cancel');
+    if (cancelSlot) {
+      if (run && run.status === 'running') {
+        var nameEsc = String(run.name || id).replace(/'/g, "\\'");
+        cancelSlot.innerHTML =
+          '<button class="bt-cancel-btn" onclick="window.__btCancel({kind:\'run\',id:' +
+          id + ',name:\'' + nameEsc + '\'})">Cancel</button>';
+      } else {
+        cancelSlot.innerHTML = '';
+      }
+    }
   }
 
   async function renderDetailEquity(id, panel) {
