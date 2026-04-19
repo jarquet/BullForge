@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 VALID_MODES = {"rolling", "anchored"}
 VALID_TIMEFRAMES = {"1m", "1d"}
 TIMEFRAME_MINUTES = {"1m": 1, "1d": 1440}
-JOB_STATUS_FILTERS = {"all", "queued", "running", "completed", "failed"}
+JOB_STATUS_FILTERS = {"all", "queued", "running", "completed", "failed", "cancelled"}
 
 THRESHOLD_KEYS = (
     "min_confidence",
@@ -75,7 +75,13 @@ async def _cancel_job(request: web.Request) -> web.Response:
 
 
 async def _cancel_run(request: web.Request) -> web.Response:
-    """POST /api/backtests/{run_id}/cancel — find linked job, cancel it."""
+    """POST /api/backtests/{run_id}/cancel — find linked job, cancel it.
+
+    Distinguishes:
+      - 404: no backtest_jobs row at all for this run_id (run may not even exist)
+      - 409: a job exists but it's already terminal (completed / failed / cancelled)
+      - 200: job was queued or running; now flipped to cancelled
+    """
     try:
         run_id = int(request.match_info["id"])
     except (KeyError, ValueError):
@@ -84,28 +90,39 @@ async def _cancel_run(request: web.Request) -> web.Response:
         )
     db = request.app["db"]
     async with db.pool.acquire() as conn:
-        job_id = await conn.fetchval(
+        row = await conn.fetchrow(
             """
-            SELECT id FROM backtest_jobs
-            WHERE run_id = $1 AND status IN ('queued', 'running')
+            SELECT id, status FROM backtest_jobs
+            WHERE run_id = $1
             ORDER BY id DESC LIMIT 1
             """,
             run_id,
         )
-    if job_id is None:
+    if row is None:
         return web.json_response(
-            {"error": "no cancellable job for run", "run_id": run_id},
+            {"error": "no job for run_id", "run_id": run_id},
             status=404,
         )
+    if row["status"] not in ("queued", "running"):
+        return web.json_response(
+            {
+                "error": "job is not queued or running",
+                "run_id": run_id,
+                "job_id": row["id"],
+                "status": row["status"],
+            },
+            status=409,
+        )
     jobs = request.app["jobs_db"]
-    result = await jobs.cancel(job_id)
+    result = await jobs.cancel(row["id"])
     if result == "already_terminal":
+        # Raced with a worker call that just finished the job; treat as 409.
         return web.json_response(
             {"error": "job is not queued or running", "run_id": run_id},
             status=409,
         )
     return web.json_response(
-        {"run_id": run_id, "job_id": job_id, "status": "cancelled"},
+        {"run_id": run_id, "job_id": row["id"], "status": "cancelled"},
     )
 
 
@@ -163,8 +180,8 @@ async def _list(request: web.Request) -> web.Response:
                 "notes": None,
             })
 
-    if status in ("all", "completed", "failed"):
-        run_status = status if status in ("completed", "failed") else "all"
+    if status in ("all", "completed", "failed", "cancelled"):
+        run_status = status if status in ("completed", "failed", "cancelled") else "all"
         runs = await results.list_runs(
             status=run_status, q=q, sort=sort, order=order,
             limit=limit, offset=offset,

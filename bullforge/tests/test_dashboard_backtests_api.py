@@ -27,6 +27,7 @@ def _make_db_mock():
     """Build a Database mock with pool.acquire() context manager."""
     conn_mock = AsyncMock()
     conn_mock.fetchval = AsyncMock(return_value=None)
+    conn_mock.fetchrow = AsyncMock(return_value=None)
     conn_cm = AsyncMock()
     conn_cm.__aenter__ = AsyncMock(return_value=conn_mock)
     conn_cm.__aexit__ = AsyncMock(return_value=False)
@@ -487,7 +488,7 @@ async def test_cancel_job_by_run_id_finds_and_cancels(aiohttp_client, app):
     """POST /api/backtests/{run_id}/cancel looks up the job and cancels it."""
     # The handler queries app["db"].pool.acquire() to find the job by run_id.
     conn_mock = app["db"].pool.acquire.return_value.__aenter__.return_value
-    conn_mock.fetchval = AsyncMock(return_value=77)  # the job_id found
+    conn_mock.fetchrow = AsyncMock(return_value={"id": 77, "status": "running"})
     app["jobs_db"].cancel = AsyncMock(return_value="cancelled")
     client = await aiohttp_client(app)
     resp = await client.post("/api/backtests/5/cancel")
@@ -502,10 +503,25 @@ async def test_cancel_job_by_run_id_finds_and_cancels(aiohttp_client, app):
 @pytest.mark.asyncio
 async def test_cancel_by_run_id_nonexistent_returns_404(aiohttp_client, app):
     conn_mock = app["db"].pool.acquire.return_value.__aenter__.return_value
-    conn_mock.fetchval = AsyncMock(return_value=None)  # no matching job
+    conn_mock.fetchrow = AsyncMock(return_value=None)  # no matching job
     client = await aiohttp_client(app)
     resp = await client.post("/api/backtests/999999999/cancel")
     assert resp.status == 404
+
+
+@pytest.mark.asyncio
+async def test_cancel_by_run_id_terminal_job_returns_409(aiohttp_client, app):
+    """Run exists with a completed/failed/cancelled job -> 409, not 404."""
+    conn_mock = app["db"].pool.acquire.return_value.__aenter__.return_value
+    conn_mock.fetchrow = AsyncMock(
+        return_value={"id": 123, "status": "completed"},
+    )
+    client = await aiohttp_client(app)
+    resp = await client.post("/api/backtests/456/cancel")
+    assert resp.status == 409
+    body = await resp.json()
+    assert body["status"] == "completed"
+    assert body["job_id"] == 123
 
 
 @pytest.mark.asyncio

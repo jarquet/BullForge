@@ -25,8 +25,6 @@
     }
   }
 
-  window.__btCancel = cancelBacktest;
-
   function route() {
     const hash = window.location.hash || '#backtests';
     const parts = hash.replace(/^#/, '').split('/');
@@ -67,6 +65,7 @@
             <option value="running">running</option>
             <option value="completed">completed</option>
             <option value="failed">failed</option>
+            <option value="cancelled">Cancelled</option>
           </select>
           <input id="bt-search" placeholder="search name…" />
           <button id="bt-new">New Backtest</button>
@@ -368,10 +367,12 @@
       }).join(' ');
       const canCancel = (r.kind === 'job')
         || (r.kind === 'run' && r.status === 'running');
-      const rowPayload = JSON.stringify({kind: r.kind, id: r.id, name: r.name})
-        .replace(/"/g, '&quot;');
       const cancelBtn = canCancel
-        ? `<button class="bt-cancel-btn" onclick="event.stopPropagation();window.__btCancel(${rowPayload})">Cancel</button>`
+        ? `<button class="bt-cancel-btn"
+              data-cancel-kind="${r.kind}"
+              data-cancel-id="${r.id}"
+              data-cancel-name="${escapeHtml(r.name || '')}"
+            >Cancel</button>`
         : '';
       const statusCell = r.status === 'cancelled'
         ? `<span class="bt-status-cancelled">${r.status}</span>`
@@ -385,6 +386,19 @@
         <td>${fmtTime(r.finished_at)}</td>
       </tr>`;
     }).join('');
+    if (!tbody.__btCancelDelegated) {
+      tbody.addEventListener('click', function (ev) {
+        const btn = ev.target && ev.target.closest('.bt-cancel-btn');
+        if (!btn) return;
+        ev.stopPropagation();
+        cancelBacktest({
+          kind: btn.dataset.cancelKind,
+          id: parseInt(btn.dataset.cancelId, 10),
+          name: btn.dataset.cancelName || '',
+        });
+      });
+      tbody.__btCancelDelegated = true;
+    }
   }
 
   async function renderDetail(id, subtab) {
@@ -459,10 +473,20 @@
     var cancelSlot = document.getElementById('bt-detail-cancel');
     if (cancelSlot) {
       if (run && run.status === 'running') {
-        var nameEsc = String(run.name || id).replace(/'/g, "\\'");
         cancelSlot.innerHTML =
-          '<button class="bt-cancel-btn" onclick="window.__btCancel({kind:\'run\',id:' +
-          id + ',name:\'' + nameEsc + '\'})">Cancel</button>';
+          '<button class="bt-cancel-btn" id="bt-detail-cancel-btn"' +
+          ' data-cancel-kind="run"' +
+          ' data-cancel-id="' + id + '"' +
+          ' data-cancel-name="' + escapeHtml(run.name || String(id)) + '"' +
+          '>Cancel</button>';
+        var btn = document.getElementById('bt-detail-cancel-btn');
+        btn.addEventListener('click', function () {
+          cancelBacktest({
+            kind: btn.dataset.cancelKind,
+            id: parseInt(btn.dataset.cancelId, 10),
+            name: btn.dataset.cancelName || '',
+          });
+        });
       } else {
         cancelSlot.innerHTML = '';
       }
