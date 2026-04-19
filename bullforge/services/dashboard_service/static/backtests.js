@@ -68,9 +68,10 @@
             <th>#Trades</th>
             <th>Hit %</th>
             <th>Status</th>
+            <th>Tags</th>
             <th data-sort="finished_at">Finished</th>
           </tr></thead>
-          <tbody id="bt-rows"><tr><td colspan="10">Loading…</td></tr></tbody>
+          <tbody id="bt-rows"><tr><td colspan="11">Loading…</td></tr></tbody>
         </table>
       </div>
     `;
@@ -332,7 +333,7 @@
     const tbody = document.getElementById('bt-rows');
     if (!rows.length) {
       tbody.innerHTML =
-        '<tr><td colspan="10">No backtests yet. Click New Backtest to start one.</td></tr>';
+        '<tr><td colspan="11">No backtests yet. Click New Backtest to start one.</td></tr>';
       return;
     }
     tbody.innerHTML = rows.map(r => {
@@ -347,10 +348,14 @@
       const hit = m ? fmtPct(m.hit_rate) : '—';
       const target = r.kind === 'run'
         ? `#backtests/${r.id}` : `#backtests/job-${r.id}`;
+      const tagChips = (r.tags || []).map(function (t) {
+        return '<span class="tag-chip">' + t + '</span>';
+      }).join(' ');
       return `<tr class="clickable" onclick="location.hash='${target}'">
         <td>${r.name}</td><td>${symsDisplay}</td><td>${range}</td>
         <td>${pnl}</td><td>${sharpe}</td><td>${dd}</td>
         <td>${ntr}</td><td>${hit}</td><td>${r.status}</td>
+        <td>${tagChips}</td>
         <td>${fmtTime(r.finished_at)}</td>
       </tr>`;
     }).join('');
@@ -402,29 +407,27 @@
   }
 
   async function renderDetailSummary(id, panel) {
-    panel.innerHTML = `<div id="bt-header"></div>
-      <div class="bt-cards" id="bt-cards"></div>
-      <div class="bt-chart"><canvas id="bt-equity"></canvas></div>
-      <div class="bt-chart"><canvas id="bt-drawdown"></canvas></div>
-      <h3>Folds</h3>
-      <table class="bt-table" id="bt-folds"></table>
-      <div class="bt-chart"><canvas id="bt-histogram"></canvas></div>
-      <h3>Trades</h3>
-      <div id="bt-trades"></div>
-      <details><summary>Config</summary><pre id="bt-config"></pre></details>`;
-    const [detail, folds, equity] = await Promise.all([
-      fetchJSON(`/api/backtests/${id}`),
-      fetchJSON(`/api/backtests/${id}/folds`),
-      fetchJSON(`/api/backtests/${id}/equity`),
-    ]);
-    renderHeader(detail);
-    renderCards(detail.metrics);
-    renderEquityChart(equity.points, folds.folds, id);
-    renderDrawdown(equity.points);
-    renderFolds(folds.folds);
-    renderConfig(detail);
-    await loadTrades(id, 0);
-    await renderHistogram(id);
+    var run = await fetchJSON('/api/backtests/' + id);
+    panel.innerHTML =
+      '<div class="summary-grid">' +
+      '<div><strong>Name:</strong> ' + (run.name || '') + '</div>' +
+      '<div><strong>Status:</strong> ' + (run.status || '') + '</div>' +
+      '<div><strong>Symbols:</strong> ' + (run.symbols || []).join(', ') + '</div>' +
+      '<div><strong>Range:</strong> ' + (run.range_start || '') + ' \u2192 ' + (run.range_end || '') + '</div>' +
+      '<div><strong>Tags:</strong> <span id="detail-tags"></span></div>' +
+      '<div><strong>Notes:</strong> <span id="detail-notes"></span></div>' +
+      '</div>' +
+      '<h3>Config</h3><pre>' + JSON.stringify(run.config_json || run.config || {}, null, 2) + '</pre>' +
+      '<button id="bt-promote">Promote config to live</button>' +
+      '<div id="bt-promote-modal"></div>';
+    // Tags and notes renderer.
+    if (window.BacktestsTagsNotes) {
+      window.BacktestsTagsNotes.mount(id, run.tags || [], run.notes || '');
+    }
+    // Promote button.
+    document.getElementById('bt-promote').onclick = function () {
+      if (window.BacktestsPromote) window.BacktestsPromote.open(id, run.config_json || run.config || {});
+    };
   }
 
   async function renderDetailEquity(id, panel) {
@@ -740,6 +743,87 @@
         ${data.trades.length === 50 ? `<button onclick="BacktestsTab._trades(${runId},${offset+50})">Next</button>` : ''}
       </div>`;
   }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+    });
+  }
+
+  window.BacktestsTagsNotes = {
+    mount: function (runId, tags, notes) {
+      var tagsEl = document.getElementById('detail-tags');
+      var notesEl = document.getElementById('detail-notes');
+      if (!tagsEl || !notesEl) return;
+
+      function renderTags(current) {
+        tagsEl.innerHTML =
+          current.map(function (t) {
+            return '<span class="tag-chip">' + t + '</span>';
+          }).join(' ') +
+          ' <a href="#" id="tag-edit-link">Edit</a>';
+        document.getElementById('tag-edit-link').onclick = function (e) {
+          e.preventDefault();
+          tagsEl.innerHTML =
+            '<input class="tag-editor" id="tag-edit-input" value="' +
+              current.join(', ') + '" />' +
+            ' <button id="tag-save">Save</button> <button id="tag-cancel">Cancel</button>';
+          document.getElementById('tag-save').onclick = async function () {
+            var list = document.getElementById('tag-edit-input').value
+                         .split(',').map(function (s) { return s.trim(); })
+                         .filter(function (s) { return s.length > 0; });
+            var r = await fetch('/api/backtests/' + runId + '/tags', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({tags: list}),
+            });
+            if (r.ok) {
+              var body = await r.json();
+              renderTags(body.tags || []);
+            } else {
+              alert('Failed to save tags: HTTP ' + r.status);
+            }
+          };
+          document.getElementById('tag-cancel').onclick = function () {
+            renderTags(current);
+          };
+        };
+      }
+      renderTags(tags || []);
+
+      function renderNotes(current) {
+        notesEl.innerHTML =
+          '<span>' + (current ? escapeHtml(current) : '<em>(none)</em>') + '</span>' +
+          ' <a href="#" id="notes-edit-link">Edit</a>';
+        document.getElementById('notes-edit-link').onclick = function (e) {
+          e.preventDefault();
+          notesEl.innerHTML =
+            '<textarea class="notes-editor" id="notes-edit-input">' +
+              escapeHtml(current || '') +
+            '</textarea><br>' +
+            '<button id="notes-save">Save</button> <button id="notes-cancel">Cancel</button>';
+          document.getElementById('notes-save').onclick = async function () {
+            var text = document.getElementById('notes-edit-input').value;
+            var r = await fetch('/api/backtests/' + runId + '/notes', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({notes: text}),
+            });
+            if (r.ok) {
+              var body = await r.json();
+              renderNotes(body.notes || '');
+            } else {
+              alert('Failed to save notes: HTTP ' + r.status);
+            }
+          };
+          document.getElementById('notes-cancel').onclick = function () {
+            renderNotes(current);
+          };
+        };
+      }
+      renderNotes(notes || '');
+    },
+  };
 
   window.BacktestsTab = Object.assign(window.BacktestsTab || {}, {
     activate() { route(); },

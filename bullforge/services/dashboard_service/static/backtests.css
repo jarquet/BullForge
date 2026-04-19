@@ -52,3 +52,31 @@
     font-family: inherit;
     font-size: 0.85rem;
 }
+.tag-chip {
+    display: inline-block;
+    padding: 2px 6px;
+    margin-right: 4px;
+    background: var(--accent);
+    color: #000;
+    font-size: 0.7rem;
+    border-radius: 8px;
+}
+.notes-editor {
+    width: 100%;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 0.5rem;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 0.85rem;
+    min-height: 3rem;
+}
+.tag-editor {
+    width: 300px;
+    padding: 0.25rem;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+}
