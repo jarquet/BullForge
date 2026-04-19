@@ -825,6 +825,82 @@
     },
   };
 
+  window.BacktestsPromote = {
+    open: async function (runId, cfg) {
+      var modalHost = document.getElementById('bt-promote-modal');
+      if (!modalHost) return;
+      // Fetch current runtime_config to show diff.
+      var rcResp = await fetch('/api/config');
+      var rc = await rcResp.json();
+      var current = rc.values || {};
+      // Consider only execution_* keys for now.
+      var rows = [];
+      Object.keys(cfg).forEach(function (k) {
+        var rtKey = k.startsWith('execution_') ? k : 'execution_' + k;
+        if (!(rtKey in current)) return;
+        var cur = current[rtKey];
+        var nxt = cfg[k];
+        if (JSON.stringify(cur) === JSON.stringify(nxt)) return;
+        rows.push({key: k, rtKey: rtKey, current: cur, next: nxt});
+      });
+      if (rows.length === 0) {
+        modalHost.innerHTML = '<div class="bt-modal">' +
+          '<p>Backtest config matches current runtime config for all execution_* keys. Nothing to promote.</p>' +
+          '<button id="bt-promote-close">Close</button></div>';
+        document.getElementById('bt-promote-close').onclick = function () {
+          modalHost.innerHTML = '';
+        };
+        return;
+      }
+      modalHost.innerHTML =
+        '<div class="bt-modal">' +
+        '<h3>Promote config to live runtime_config</h3>' +
+        '<table class="data-table"><thead><tr><th></th><th>Key</th><th>Current</th><th>From backtest</th></tr></thead><tbody>' +
+        rows.map(function (r, i) {
+          return '<tr><td><input type="checkbox" checked data-idx="' + i + '"></td>' +
+            '<td>' + r.rtKey + '</td>' +
+            '<td>' + JSON.stringify(r.current) + '</td>' +
+            '<td class="positive">' + JSON.stringify(r.next) + '</td></tr>';
+        }).join('') + '</tbody></table>' +
+        '<p><label>Note: <input id="bt-promote-note" type="text" style="width:300px;"></label></p>' +
+        '<button id="bt-promote-apply">Apply</button> ' +
+        '<button id="bt-promote-cancel">Cancel</button>' +
+        '</div>';
+
+      document.getElementById('bt-promote-cancel').onclick = function () {
+        modalHost.innerHTML = '';
+      };
+      document.getElementById('bt-promote-apply').onclick = async function () {
+        var picked = [];
+        modalHost.querySelectorAll('input[type=checkbox]').forEach(function (cb) {
+          if (cb.checked) picked.push(rows[parseInt(cb.dataset.idx, 10)].key);
+        });
+        var note = document.getElementById('bt-promote-note').value || '';
+        var r = await fetch('/api/backtests/' + runId + '/promote-config', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({keys: picked, note: note}),
+        });
+        if (r.ok) {
+          var body = await r.json();
+          modalHost.innerHTML = '<div class="bt-modal">' +
+            '<p>Applied ' + body.diff.length + ' change(s).</p>' +
+            '<button id="bt-promote-done">Close</button></div>';
+          document.getElementById('bt-promote-done').onclick = function () {
+            modalHost.innerHTML = '';
+          };
+        } else {
+          var err = await r.text();
+          modalHost.innerHTML = '<div class="bt-modal error-state"><p>Error: ' + err + '</p>' +
+            '<button id="bt-promote-err">Close</button></div>';
+          document.getElementById('bt-promote-err').onclick = function () {
+            modalHost.innerHTML = '';
+          };
+        }
+      };
+    },
+  };
+
   window.BacktestsTab = Object.assign(window.BacktestsTab || {}, {
     activate() { route(); },
     onHashChange() { route(); },

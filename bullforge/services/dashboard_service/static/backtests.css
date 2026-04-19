@@ -80,3 +80,14 @@
     border: 1px solid var(--border);
     border-radius: 4px;
 }
+#bt-promote-modal .bt-modal {
+    background: var(--bg-card, #1a1a1a);
+    border: 1px solid var(--accent, #4ade80);
+    border-radius: 4px;
+    padding: 1rem;
+    margin-top: 1rem;
+    width: auto;
+    max-width: 100%;
+}
+#bt-promote-modal .bt-modal h3 { margin: 0 0 0.5rem 0; color: var(--accent, #4ade80); }
+#bt-promote-modal .bt-modal .data-table { margin: 0.5rem 0; }
