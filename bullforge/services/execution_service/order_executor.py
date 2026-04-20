@@ -35,6 +35,7 @@ class OrderExecutor:
 
     async def process_signal(
         self, signal: TradingSignal, current_price: float,
+        *, max_qty_cap: Optional[float] = None,
     ) -> Optional[Order]:
         await self._tracker.refresh()
         existing = self._tracker.get_position(signal.symbol)
@@ -56,6 +57,15 @@ class OrderExecutor:
         if not approved:
             logger.info("Entry rejected for %s: %s", signal.symbol, reason)
             return None
+
+        if max_qty_cap is not None and qty > max_qty_cap:
+            qty = max_qty_cap
+            if qty * current_price < 1.0:
+                logger.info(
+                    "Entry capped below $1 notional for %s; skipping submit",
+                    signal.symbol,
+                )
+                return None
 
         return await self._execute_open(signal, qty)
 
