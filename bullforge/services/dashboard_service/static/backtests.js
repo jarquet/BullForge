@@ -60,8 +60,15 @@
     const count = document.getElementById('bt-sel-count');
     if (!bar || !count) return;  // list view not mounted
     const n = selection.size;
+    const wasHidden = bar.hidden;
     count.textContent = n;
     bar.hidden = n === 0;
+    // If the bar was hidden and is now re-showing (fresh selection after a
+    // previous delete), clear any stale summary text from the last dispatch.
+    if (wasHidden && !bar.hidden) {
+      const summary = document.getElementById('bt-action-summary');
+      if (summary) summary.textContent = '';
+    }
   }
 
   function fmtPnL(v) {
@@ -225,17 +232,19 @@
     let deleted = 0;
     let notFound = 0;
     let stillRunning = 0;
+    let errors = 0;
 
     if (ids.length <= BULK_DELETE_THRESHOLD) {
       const results = await Promise.allSettled(
         ids.map(id => fetch('/api/backtests/' + id, {method: 'DELETE'}))
       );
       for (const r of results) {
-        if (r.status !== 'fulfilled') continue;
+        if (r.status !== 'fulfilled') { errors++; continue; }
         const res = r.value;
         if (res.status === 200) deleted++;
         else if (res.status === 404) notFound++;
         else if (res.status === 409) stillRunning++;
+        else errors++;
       }
     } else {
       try {
@@ -264,6 +273,7 @@
       const parts = ['Deleted ' + deleted];
       if (stillRunning) parts.push(stillRunning + ' still running');
       if (notFound)     parts.push(notFound + ' not found');
+      if (errors)       parts.push(errors + ' failed');
       summary.textContent = parts.join(' · ');
     }
     clearSelection();
