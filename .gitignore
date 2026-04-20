@@ -3,3 +3,4 @@
 .claude/worktrees/
 .env
 .claude/settings.local.json
+.vscode/
