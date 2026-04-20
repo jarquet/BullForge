@@ -409,3 +409,13 @@ async def test_bulk_delete_bad_json_rejected(delete_client):
 async def test_bulk_delete_missing_ids_key_rejected(delete_client):
     resp = await delete_client.post("/api/backtests/delete", json={"wrong": [1]})
     assert resp.status == 400
+
+
+async def test_bulk_delete_exactly_500_accepted(delete_client, db):
+    async with db.pool.acquire() as conn:
+        max_id = await conn.fetchval("SELECT COALESCE(MAX(id), 0) FROM backtest_runs")
+    ids = [max_id + 100_000 + i for i in range(500)]
+    resp = await delete_client.post("/api/backtests/delete", json={"ids": ids})
+    assert resp.status == 200
+    body = await resp.json()
+    assert len(body["not_found"]) == 500

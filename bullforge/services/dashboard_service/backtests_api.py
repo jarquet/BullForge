@@ -28,6 +28,8 @@ THRESHOLD_KEYS = (
     "max_exposure",
 )
 
+_BULK_DELETE_MAX = 500
+
 
 def _validate_threshold_overrides(body: dict) -> dict:
     errors: dict[str, str] = {}
@@ -133,9 +135,6 @@ async def _delete_run(request: web.Request) -> web.Response:
     )
 
 
-_BULK_DELETE_MAX = 500
-
-
 async def _bulk_delete_runs(request: web.Request) -> web.Response:
     """POST /api/backtests/delete  — body: {"ids": [int, ...]}.
 
@@ -176,6 +175,9 @@ async def _bulk_delete_runs(request: web.Request) -> web.Response:
     deleted: list[int] = []
     not_found: list[int] = []
     still_running: list[dict] = []
+    # Sequential on purpose: pool max_size is 10 and each id takes its own
+    # transaction with FOR UPDATE. Parallelizing would starve other handlers
+    # and risk lock contention with no user-visible win (UI batches >10 are rare).
     for run_id in unique_ids:
         res = await _delete_run_impl(db, run_id)
         if res["status"] == "deleted":
