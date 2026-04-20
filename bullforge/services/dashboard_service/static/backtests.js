@@ -44,16 +44,20 @@
 
   const state = { status: 'all', q: '', sort: 'finished_at', order: 'desc' };
 
+  // Column count for the Backtests list table. Keep in sync with the
+  // <thead> in renderOverview. Used for loading/empty/error placeholder rows.
+  const BT_TABLE_COLSPAN = 13;
+
   // Multi-select state for the delete feature.
   // Keys are of the form "run:{id}". Jobs are never added (disabled).
   const selection = new Set();
-  let lastCheckedBox = null;  // most recently clicked checkbox (for Shift-range, Task 5)
+  let lastCheckedKey = null;  // most recently clicked selKey (for Shift-range, Task 5). String survives re-renders where DOM nodes do not.
 
   function selectionKey(kind, id) { return kind + ':' + id; }
 
-  // Stub until Task 6 wires the action bar. Real implementation updates
-  // the 'Delete selected (N)' button visibility and count.
-  function updateActionBar() { /* populated in Task 6 */ }
+  // No-op placeholder; replaced by the real updater when the action bar
+  // is added. See the delete-selected dispatch logic below once it lands.
+  function updateActionBar() { /* intentionally empty */ }
 
   function fmtPnL(v) {
     if (v === null || v === undefined) return '—';
@@ -115,7 +119,7 @@
             <th data-sort="finished_at">Finished</th>
             <th>Runtime</th>
           </tr></thead>
-          <tbody id="bt-rows"><tr><td colspan="13">Loading…</td></tr></tbody>
+          <tbody id="bt-rows"><tr><td colspan="${BT_TABLE_COLSPAN}">Loading…</td></tr></tbody>
         </table>
       </div>
     `;
@@ -161,7 +165,7 @@
       renderRows(data.rows);
     } catch (e) {
       document.getElementById('bt-rows').innerHTML =
-        `<tr><td colspan="13" class="bt-error">Failed to load: ${e.message}</td></tr>`;
+        `<tr><td colspan="${BT_TABLE_COLSPAN}" class="bt-error">Failed to load: ${e.message}</td></tr>`;
     }
   }
 
@@ -377,7 +381,7 @@
     const tbody = document.getElementById('bt-rows');
     if (!rows.length) {
       tbody.innerHTML =
-        '<tr><td colspan="13">No backtests yet. Click New Backtest to start one.</td></tr>';
+        '<tr><td colspan="' + BT_TABLE_COLSPAN + '">No backtests yet. Click New Backtest to start one.</td></tr>';
       return;
     }
     tbody.innerHTML = rows.map(r => {
@@ -412,9 +416,9 @@
       const isDisabled = r.kind === 'job'
         || (r.kind === 'run' && r.status === 'running');
       const isChecked = !isDisabled && selection.has(selKey);
-      const boxTitle = isDisabled
-        ? 'Cancel this backtest first'
-        : 'Select for delete';
+      const boxTitle = r.kind === 'job'
+        ? 'Cannot delete a queued or running job'
+        : (isDisabled ? 'Cancel this backtest first' : 'Select for delete');
       const checkboxHtml =
         '<input type="checkbox" class="bt-row-select"' +
         ' data-sel-key="' + selKey + '"' +
@@ -454,10 +458,10 @@
           const key = box.dataset.selKey;
           if (box.checked) selection.add(key);
           else selection.delete(key);
-          lastCheckedBox = box;
-          updateActionBar();  // stub now; replaced in Task 6
+          lastCheckedKey = box.dataset.selKey;
+          updateActionBar();
         }
-      });
+      }, true);  // capture phase: runs BEFORE target's inline stopPropagation()
       tbody.__btCancelDelegated = true;
     }
 

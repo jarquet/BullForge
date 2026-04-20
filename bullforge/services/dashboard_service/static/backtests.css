@@ -116,7 +116,6 @@
   text-align: center;
   cursor: default;
 }
-.bt-table th.bt-sel-col { cursor: default; }
 .bt-table .bt-row-select:disabled {
   cursor: not-allowed;
   opacity: 0.4;
