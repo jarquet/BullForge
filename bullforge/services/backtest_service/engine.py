@@ -285,6 +285,13 @@ class BacktestEngine:
         # (status='submitted', filled_price=NULL) because the backtest uses a
         # no-op reconciler. Pull the actual fill from the simulated broker.
         fill_snap = await broker.get_order(order.alpaca_order_id)
+        if fill_snap["status"] != "filled":
+            # Broker may reject (volume cap, no next-bar); skip recording.
+            logger.info(
+                "skipping trade record for %s order %s: status=%s",
+                symbol, order.alpaca_order_id, fill_snap["status"],
+            )
+            return
         existing = open_trade.get(symbol)
         if existing is None:
             open_trade[symbol] = {
