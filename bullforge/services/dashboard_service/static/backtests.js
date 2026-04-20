@@ -400,6 +400,11 @@
     if (!rows.length) {
       tbody.innerHTML =
         '<tr><td colspan="' + BT_TABLE_COLSPAN + '">No backtests yet. Click New Backtest to start one.</td></tr>';
+      const headerBox = document.getElementById('bt-select-all');
+      if (headerBox) {
+        headerBox.checked = false;
+        headerBox.indeterminate = false;
+      }
       return;
     }
     tbody.innerHTML = rows.map(r => {
