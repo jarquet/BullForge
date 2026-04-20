@@ -288,7 +288,10 @@ class BacktestEngine:
         fill_snap = await broker.get_order(order.alpaca_order_id)
         if fill_snap["status"] != "filled":
             # Broker may reject (volume cap, no next-bar); skip recording.
-            logger.info(
+            # In normal backtest flow this branch is unreachable because
+            # `_execute_open` returns None for non-fills before we get here;
+            # kept defensive for non-scope direct callers (unit tests).
+            logger.debug(
                 "skipping trade record for %s order %s: status=%s",
                 symbol, order.alpaca_order_id, fill_snap["status"],
             )

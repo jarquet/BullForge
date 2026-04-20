@@ -74,6 +74,19 @@ class OrderExecutor:
             signal_strength=signal.strength,
             alpaca_order_id=alpaca_id, status="submitted",
         )
+
+        if self._scope is not None:
+            # Backtest: SimulatedBroker is synchronous and the reconciler is a
+            # no-op, so the terminal status is already known. Skip the orders
+            # INSERT entirely for non-fills to avoid wasted DB round-trips.
+            snap = await self._broker.get_order(alpaca_id)
+            if snap.get("status") != "filled":
+                logger.info(
+                    "skipping order insert for %s %s: broker status=%s",
+                    signal.symbol, alpaca_id, snap.get("status"),
+                )
+                return None
+
         order_id = await self._db.insert_order_if_new(order, scope=self._scope)
 
         try:
@@ -111,6 +124,16 @@ class OrderExecutor:
             signal_strength=signal.strength,
             alpaca_order_id=alpaca_id, status="submitted",
         )
+
+        if self._scope is not None:
+            snap = await self._broker.get_order(alpaca_id)
+            if snap.get("status") != "filled":
+                logger.info(
+                    "skipping order insert for %s %s: broker status=%s",
+                    signal.symbol, alpaca_id, snap.get("status"),
+                )
+                return None
+
         order_id = await self._db.insert_order_if_new(order, scope=self._scope)
 
         try:

@@ -1,7 +1,7 @@
 import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
-from shared.models import TradingSignal, Order
+from shared.models import BacktestScope, TradingSignal, Order
 from services.execution_service.order_executor import OrderExecutor
 
 
@@ -214,3 +214,84 @@ async def test_submit_race_stream_wins_still_calls_apply_once(
     _, kwargs = mock_core.apply_alpaca_order.await_args
     assert kwargs.get("source") == "submit"
     mock_db.get_order_by_alpaca_id.assert_awaited_once_with("alp-order-123", scope=None)
+
+
+@pytest.mark.asyncio
+async def test_backtest_mode_skips_db_insert_when_broker_rejects(
+    mock_broker, mock_risk, mock_tracker, mock_db, mock_core,
+):
+    mock_broker.get_order = AsyncMock(return_value={
+        "id": "alp-order-123", "symbol": "BTC/USD", "side": "buy",
+        "qty": 0.5, "order_type": "market",
+        "submitted_at": datetime(2026, 4, 20, 14, 0, 0, tzinfo=timezone.utc),
+        "status": "rejected",
+        "filled_qty": None, "filled_avg_price": None, "filled_at": None,
+    })
+    executor = OrderExecutor(
+        broker=mock_broker, risk_manager=mock_risk,
+        position_tracker=mock_tracker, db=mock_db, core=mock_core,
+        scope=BacktestScope(backtest_run_id=1, fold_index=0),
+    )
+
+    order = await executor.process_signal(
+        _signal(symbol="BTC/USD"), current_price=60_000.0,
+    )
+
+    assert order is None
+    mock_broker.submit_market_order.assert_awaited_once()
+    mock_db.insert_order_if_new.assert_not_called()
+    mock_core.apply_alpaca_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_backtest_mode_inserts_when_broker_fills(
+    mock_broker, mock_risk, mock_tracker, mock_db, mock_core,
+):
+    mock_broker.get_order = AsyncMock(return_value={
+        "id": "alp-order-123", "symbol": "SPY", "side": "buy",
+        "qty": 10.0, "order_type": "market",
+        "submitted_at": datetime(2026, 4, 12, 14, 0, 0, tzinfo=timezone.utc),
+        "status": "filled",
+        "filled_qty": 10.0, "filled_avg_price": 420.05,
+        "filled_at": datetime(2026, 4, 12, 14, 0, 0, tzinfo=timezone.utc),
+    })
+    executor = OrderExecutor(
+        broker=mock_broker, risk_manager=mock_risk,
+        position_tracker=mock_tracker, db=mock_db, core=mock_core,
+        scope=BacktestScope(backtest_run_id=1, fold_index=0),
+    )
+
+    order = await executor.process_signal(_signal(), current_price=420.0)
+
+    assert order is not None
+    mock_db.insert_order_if_new.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_backtest_close_skips_db_insert_when_broker_rejects(
+    mock_broker, mock_risk, mock_tracker, mock_db, mock_core,
+):
+    mock_tracker.get_position = MagicMock(
+        return_value={"symbol": "SPY", "qty": 10.0, "market_value": 4200.0},
+    )
+    mock_risk.check_exit = MagicMock(return_value=(True, "Opposing signal"))
+    mock_broker.get_order = AsyncMock(return_value={
+        "id": "alp-close-456", "symbol": "SPY", "side": "sell",
+        "qty": 10.0, "order_type": "market",
+        "submitted_at": datetime(2026, 4, 12, 14, 0, 0, tzinfo=timezone.utc),
+        "status": "rejected",
+        "filled_qty": None, "filled_avg_price": None, "filled_at": None,
+    })
+    executor = OrderExecutor(
+        broker=mock_broker, risk_manager=mock_risk,
+        position_tracker=mock_tracker, db=mock_db, core=mock_core,
+        scope=BacktestScope(backtest_run_id=1, fold_index=0),
+    )
+
+    order = await executor.process_signal(
+        _signal(direction=-1), current_price=420.0,
+    )
+
+    assert order is None
+    mock_broker.close_position.assert_awaited_once()
+    mock_db.insert_order_if_new.assert_not_called()
