@@ -59,13 +59,14 @@
     const bar = document.getElementById('bt-action-bar');
     const count = document.getElementById('bt-sel-count');
     if (!bar || !count) return;  // list view not mounted
+    const prev = parseInt(count.textContent, 10) || 0;
     const n = selection.size;
-    const wasHidden = bar.hidden;
     count.textContent = n;
     bar.hidden = n === 0;
-    // If the bar was hidden and is now re-showing (fresh selection after a
-    // previous delete), clear any stale summary text from the last dispatch.
-    if (wasHidden && !bar.hidden) {
+    // When selection goes from 0 to >0, clear any stale post-delete summary.
+    // Using a count transition (prev===0 → n>0) rather than bar.hidden means
+    // this fires even when the bar was left visible to display the delete summary.
+    if (prev === 0 && n > 0) {
       const summary = document.getElementById('bt-action-summary');
       if (summary) summary.textContent = '';
     }
@@ -268,16 +269,21 @@
       }
     }
 
+    clearSelection();
+    reload();
     const summary = document.getElementById('bt-action-summary');
-    if (summary) {
+    const bar = document.getElementById('bt-action-bar');
+    if (summary && bar) {
       const parts = ['Deleted ' + deleted];
       if (stillRunning) parts.push(stillRunning + ' still running');
       if (notFound)     parts.push(notFound + ' not found');
       if (errors)       parts.push(errors + ' failed');
       summary.textContent = parts.join(' · ');
+      // Force-show the bar so the user sees the summary. clearSelection() hid
+      // it (selection is now empty). updateActionBar will re-hide it and clear
+      // the stale summary on the user's next 0→N selection transition.
+      bar.hidden = false;
     }
-    clearSelection();
-    reload();
   }
 
   async function reload() {
