@@ -11,6 +11,12 @@ services:
       - checkpoint_timeout=15min
       - -c
       - checkpoint_completion_target=0.9
+      - -c
+      - max_worker_processes=16
+      - -c
+      - max_parallel_workers=8
+      - -c
+      - max_parallel_workers_per_gather=4
     environment:
       POSTGRES_USER: bullforge
       POSTGRES_PASSWORD: bullforge_dev
