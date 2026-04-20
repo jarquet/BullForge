@@ -133,6 +133,66 @@ async def _delete_run(request: web.Request) -> web.Response:
     )
 
 
+_BULK_DELETE_MAX = 500
+
+
+async def _bulk_delete_runs(request: web.Request) -> web.Response:
+    """POST /api/backtests/delete  — body: {"ids": [int, ...]}.
+
+    Iterates _delete_run_impl per id, grouping results into buckets. Each
+    id's deletion is independent; one still-running or missing id does not
+    block the others.
+    """
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "bad json"}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "body must be an object"}, status=400)
+
+    ids = body.get("ids")
+    if not isinstance(ids, list) or not ids:
+        return web.json_response(
+            {"error": "ids must be a non-empty list"}, status=400,
+        )
+    if not all(isinstance(i, int) and not isinstance(i, bool) for i in ids):
+        return web.json_response(
+            {"error": "every id must be an integer"}, status=400,
+        )
+    if len(ids) > _BULK_DELETE_MAX:
+        return web.json_response(
+            {"error": f"too many ids (max {_BULK_DELETE_MAX})"}, status=400,
+        )
+
+    # Dedupe while preserving first-occurrence order.
+    seen = set()
+    unique_ids: list[int] = []
+    for i in ids:
+        if i not in seen:
+            seen.add(i)
+            unique_ids.append(i)
+
+    db = request.app["db"]
+    deleted: list[int] = []
+    not_found: list[int] = []
+    still_running: list[dict] = []
+    for run_id in unique_ids:
+        res = await _delete_run_impl(db, run_id)
+        if res["status"] == "deleted":
+            deleted.append(run_id)
+        elif res["status"] == "not_found":
+            not_found.append(run_id)
+        else:  # still_running
+            still_running.append(
+                {"run_id": run_id, "current_status": res["current_status"]},
+            )
+    return web.json_response({
+        "deleted": deleted,
+        "not_found": not_found,
+        "still_running": still_running,
+    })
+
+
 async def _cancel_job(request: web.Request) -> web.Response:
     """POST /api/backtest-jobs/{job_id}/cancel — cancel by direct job_id."""
     try:
@@ -206,6 +266,8 @@ async def _cancel_run(request: web.Request) -> web.Response:
 def register_backtests_routes(app: web.Application) -> None:
     app.router.add_get("/api/backtests", _list)
     app.router.add_post("/api/backtests", _create)
+    # Literal-path routes BEFORE parameterized /{id} routes.
+    app.router.add_post("/api/backtests/delete", _bulk_delete_runs)
     app.router.add_get("/api/backtests/{id}", _detail)
     app.router.add_delete("/api/backtests/{id}", _delete_run)
     app.router.add_get("/api/backtests/{id}/folds", _folds)

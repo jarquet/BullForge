@@ -335,3 +335,77 @@ async def test_delete_route_404_on_missing_id(delete_client, db):
 async def test_delete_route_400_on_non_integer_id(delete_client):
     resp = await delete_client.delete("/api/backtests/not-an-int")
     assert resp.status == 400
+
+
+# ---------------------------------------------------------------------------
+# POST /api/backtests/delete (bulk) route tests.
+# ---------------------------------------------------------------------------
+
+
+async def test_bulk_delete_mixed_outcomes(delete_client, db):
+    done_id = await _insert_run(db, status="completed")
+    failed_id = await _insert_run(db, status="failed")
+    running_id = await _insert_run(db, status="running")
+    async with db.pool.acquire() as conn:
+        max_id = await conn.fetchval("SELECT COALESCE(MAX(id), 0) FROM backtest_runs")
+    missing_id = max_id + 100_000
+
+    resp = await delete_client.post(
+        "/api/backtests/delete",
+        json={"ids": [done_id, failed_id, running_id, missing_id]},
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    assert set(body["deleted"]) == {done_id, failed_id}
+    assert body["not_found"] == [missing_id]
+    assert body["still_running"] == [
+        {"run_id": running_id, "current_status": "running"}
+    ]
+
+
+async def test_bulk_delete_dedupes_ids(delete_client, db):
+    run_id = await _insert_run(db, status="completed")
+
+    resp = await delete_client.post(
+        "/api/backtests/delete",
+        json={"ids": [run_id, run_id, run_id]},
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    # Deduped: appears exactly once in deleted, nowhere else.
+    assert body["deleted"] == [run_id]
+    assert body["not_found"] == []
+    assert body["still_running"] == []
+
+
+async def test_bulk_delete_empty_ids_rejected(delete_client):
+    resp = await delete_client.post("/api/backtests/delete", json={"ids": []})
+    assert resp.status == 400
+
+
+async def test_bulk_delete_too_many_ids_rejected(delete_client):
+    resp = await delete_client.post(
+        "/api/backtests/delete", json={"ids": list(range(1, 502))},
+    )
+    assert resp.status == 400
+
+
+async def test_bulk_delete_non_integer_ids_rejected(delete_client):
+    resp = await delete_client.post(
+        "/api/backtests/delete", json={"ids": [1, "two", 3]},
+    )
+    assert resp.status == 400
+
+
+async def test_bulk_delete_bad_json_rejected(delete_client):
+    resp = await delete_client.post(
+        "/api/backtests/delete",
+        data="not json at all",
+        headers={"content-type": "application/json"},
+    )
+    assert resp.status == 400
+
+
+async def test_bulk_delete_missing_ids_key_rejected(delete_client):
+    resp = await delete_client.post("/api/backtests/delete", json={"wrong": [1]})
+    assert resp.status == 400
