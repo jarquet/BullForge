@@ -252,15 +252,16 @@ class BacktestEngine:
             )
 
         # 5) Persist equity + trades + metrics for the fold.
-        for pt in equity.points():
-            await self._results.insert_equity_point(
-                run_id=run_id, fold_id=fold_id,
-                timestamp=pt.timestamp, equity=pt.equity, cash=pt.cash,
-            )
-        for t in completed_trades:
-            await self._results.insert_trade(
-                run_id=run_id, fold_id=fold_id, **t,
-            )
+        await self._results.insert_equity_points_many(
+            run_id=run_id, fold_id=fold_id,
+            points=[
+                {"timestamp": pt.timestamp, "equity": pt.equity, "cash": pt.cash}
+                for pt in equity.points()
+            ],
+        )
+        await self._results.insert_trades_many(
+            run_id=run_id, fold_id=fold_id, trades=completed_trades,
+        )
 
         rets = equity.returns()
         equity_curve = [pt.equity for pt in equity.points()]
