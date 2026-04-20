@@ -7,11 +7,15 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
+from aiohttp import web
 
 from shared.config import Settings
 from shared.db import Database
 
+from services.backtest_service.jobs_db import BacktestJobsDB
+from services.backtest_service.results_db import BacktestResultsDB
 from services.dashboard_service.backtests_api import _delete_run_impl
+from services.dashboard_service.backtests_api import register_backtests_routes
 
 
 pytestmark = pytest.mark.asyncio
@@ -277,12 +281,6 @@ async def test_delete_run_impl_nulls_runtime_config_audit_link(db):
 # ---------------------------------------------------------------------------
 # DELETE /api/backtests/{id} route tests (real-DB via aiohttp client).
 # ---------------------------------------------------------------------------
-
-from aiohttp import web
-
-from services.dashboard_service.backtests_api import register_backtests_routes
-from services.backtest_service.jobs_db import BacktestJobsDB
-from services.backtest_service.results_db import BacktestResultsDB
 
 
 @pytest_asyncio.fixture
