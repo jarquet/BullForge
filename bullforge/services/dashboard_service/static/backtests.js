@@ -153,6 +153,24 @@
         reload();
       };
     });
+    const selectAll = document.getElementById('bt-select-all');
+    if (selectAll) {
+      selectAll.onclick = function (ev) {
+        ev.stopPropagation();
+        const checked = selectAll.checked;
+        const boxes = document.querySelectorAll(
+          '#bt-rows .bt-row-select:not(:disabled)'
+        );
+        boxes.forEach(b => {
+          b.checked = checked;
+          const key = b.dataset.selKey;
+          if (checked) selection.add(key);
+          else selection.delete(key);
+        });
+        lastCheckedKey = null;
+        updateActionBar();
+      };
+    }
   }
 
   async function reload() {
@@ -455,9 +473,41 @@
         }
         const box = ev.target && ev.target.matches('.bt-row-select') ? ev.target : null;
         if (box && !box.disabled) {
-          const key = box.dataset.selKey;
-          if (box.checked) selection.add(key);
-          else selection.delete(key);
+          // Capture-phase: box.checked still reflects the PRE-toggle state
+          // because the browser hasn't yet flipped it (that happens at target).
+          // Compute the target state ourselves: invert the pre-click state.
+          const targetChecked = !box.checked;
+          let handledAsRange = false;
+          if (ev.shiftKey && lastCheckedKey && lastCheckedKey !== box.dataset.selKey) {
+            const lastBox = tbody.querySelector(
+              '.bt-row-select[data-sel-key="' + lastCheckedKey + '"]'
+            );
+            if (lastBox) {
+              // Range select between lastBox and box (inclusive),
+              // skipping disabled boxes.
+              const all = Array.from(tbody.querySelectorAll('.bt-row-select'))
+                .filter(b => !b.disabled);
+              const a = all.indexOf(lastBox);
+              const b = all.indexOf(box);
+              if (a !== -1 && b !== -1) {
+                const [lo, hi] = a < b ? [a, b] : [b, a];
+                for (let i = lo; i <= hi; i++) {
+                  const bx = all[i];
+                  bx.checked = targetChecked;
+                  const k = bx.dataset.selKey;
+                  if (targetChecked) selection.add(k);
+                  else selection.delete(k);
+                }
+                handledAsRange = true;
+              }
+            }
+            // If lastBox was stale (key not in current DOM), fall through.
+          }
+          if (!handledAsRange) {
+            const key = box.dataset.selKey;
+            if (targetChecked) selection.add(key);
+            else selection.delete(key);
+          }
           lastCheckedKey = box.dataset.selKey;
           updateActionBar();
         }
@@ -471,6 +521,16 @@
     const visibleKeys = new Set(rows.map(r => selectionKey(r.kind, r.id)));
     for (const key of Array.from(selection)) {
       if (!visibleKeys.has(key)) selection.delete(key);
+    }
+
+    // Keep header select-all in sync: checked iff every selectable row is selected.
+    const headerBox = document.getElementById('bt-select-all');
+    if (headerBox) {
+      const selectableBoxes = tbody.querySelectorAll('.bt-row-select:not(:disabled)');
+      const total = selectableBoxes.length;
+      const selected = Array.from(selectableBoxes).filter(b => b.checked).length;
+      headerBox.checked = total > 0 && selected === total;
+      headerBox.indeterminate = selected > 0 && selected < total;
     }
   }
 
