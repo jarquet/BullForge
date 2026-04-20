@@ -11,7 +11,9 @@ import pytest
 from shared.models import Bar, Prediction
 
 
-@pytest.mark.asyncio
+pytestmark = pytest.mark.asyncio(loop_scope="session")
+
+
 async def test_query_accuracy_history_buckets_by_day(real_db):
     """query_accuracy_history returns one row per day in window with hit rate."""
     # Need: a prediction + matching entry and exit bar per day for 3 days.
@@ -45,7 +47,6 @@ async def test_query_accuracy_history_buckets_by_day(real_db):
         assert r["accuracy"] == 1.0
 
 
-@pytest.mark.asyncio
 async def test_query_calibration_bins_buckets_by_confidence(real_db):
     """query_calibration_bins groups predictions into 10 confidence bins."""
     base = datetime(2026, 4, 10, 14, 0, 0, tzinfo=timezone.utc)
@@ -85,7 +86,6 @@ async def test_query_calibration_bins_buckets_by_confidence(real_db):
             assert lo <= b["avg_confidence"] <= hi
 
 
-@pytest.mark.asyncio
 async def test_query_simulated_pnl_sums_directional_returns(real_db):
     """query_simulated_pnl returns per-prediction P&L assuming unit position."""
     base = datetime(2026, 4, 10, 14, 0, 0, tzinfo=timezone.utc)
@@ -115,7 +115,6 @@ async def test_query_simulated_pnl_sums_directional_returns(real_db):
     assert summary["avg_pnl_pct"] == pytest.approx(0.02, abs=1e-6)
 
 
-@pytest.mark.asyncio
 async def test_query_regime_breakdown_groups_by_spy_trend(real_db):
     """query_regime_breakdown classifies each prediction's timestamp by SPY trend.
 
@@ -161,7 +160,6 @@ async def test_query_regime_breakdown_groups_by_spy_trend(real_db):
     assert bull_row["correct"] == 1  # direction=1, close rose
 
 
-@pytest.mark.asyncio
 async def test_query_signal_history_returns_recent_predictions(real_db):
     """query_signal_history returns last N predictions for a model with outcome info."""
     base = datetime(2026, 4, 10, 14, 0, 0, tzinfo=timezone.utc)

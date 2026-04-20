@@ -9,7 +9,9 @@ import pytest
 from shared.models import BacktestScope
 
 
-@pytest.mark.asyncio
+pytestmark = pytest.mark.asyncio(loop_scope="session")
+
+
 async def test_set_backtest_tags(real_db):
     # Insert a minimal run.
     async with real_db.pool.acquire() as conn:
@@ -29,7 +31,6 @@ async def test_set_backtest_tags(real_db):
     assert set(tags) == {"tagA", "tagB"}
 
 
-@pytest.mark.asyncio
 async def test_set_backtest_notes(real_db):
     async with real_db.pool.acquire() as conn:
         run_id = await conn.fetchval(
@@ -48,7 +49,6 @@ async def test_set_backtest_notes(real_db):
     assert notes == "this run is the v2 baseline"
 
 
-@pytest.mark.asyncio
 async def test_query_backtest_symbols_aggregates_by_symbol(real_db):
     async with real_db.pool.acquire() as conn:
         run_id = await conn.fetchval(
@@ -88,7 +88,6 @@ async def test_query_backtest_symbols_aggregates_by_symbol(real_db):
     assert by_sym["MSFT"]["trades"] == 1
 
 
-@pytest.mark.asyncio
 async def test_query_backtest_distributions_scoped_to_run(real_db):
     async with real_db.pool.acquire() as conn:
         run_id = await conn.fetchval(
@@ -124,7 +123,6 @@ async def test_query_backtest_distributions_scoped_to_run(real_db):
         sum(dist["trade_pnl_histogram"]["counts"]) == 5
 
 
-@pytest.mark.asyncio
 async def test_query_backtest_live_overlay_returns_both_paths(real_db):
     # Seed one backtest run and a public trade inside its window.
     async with real_db.pool.acquire() as conn:
@@ -135,7 +133,7 @@ async def test_query_backtest_live_overlay_returns_both_paths(real_db):
                 range_start, range_end, train_days, test_days, embargo_min,
                 mode, config_json, status)
             VALUES ('lv', ARRAY['OVL'], '1m', ARRAY[5],
-                $1, $1 + INTERVAL '5 days', 30, 5, 30,
+                $1::TIMESTAMPTZ, $1::TIMESTAMPTZ + INTERVAL '5 days', 30, 5, 30,
                 'rolling', '{}'::jsonb, 'completed')
             RETURNING id
             """, base,
@@ -144,7 +142,8 @@ async def test_query_backtest_live_overlay_returns_both_paths(real_db):
             """
             INSERT INTO backtest_folds (run_id, fold_index,
                 train_start, train_end, test_start, test_end)
-            VALUES ($1, 0, $2, $2, $2, $2 + INTERVAL '1 day') RETURNING id
+            VALUES ($1, 0, $2::TIMESTAMPTZ, $2::TIMESTAMPTZ, $2::TIMESTAMPTZ,
+                $2::TIMESTAMPTZ + INTERVAL '1 day') RETURNING id
             """, run_id, base,
         )
         # Backtest trade for symbol OVL
@@ -183,10 +182,13 @@ async def test_query_backtest_live_overlay_returns_both_paths(real_db):
     assert overlay["has_overlap"] is True
 
 
-@pytest.mark.asyncio
 async def test_query_backtest_funnel_counts_attrition_per_stage(real_db):
     # Seed a run with predictions at varying confidence and a few orders.
     async with real_db.pool.acquire() as conn:
+        # Docker test volume persists predictions across runs; insert_prediction
+        # ON CONFLICT DO UPDATE doesn't overwrite backtest_run_id, so stale rows
+        # with the old run_id would mask this run's scoped query.
+        await conn.execute("DELETE FROM predictions WHERE symbol = 'F'")
         run_id = await conn.fetchval(
             """
             INSERT INTO backtest_runs (name, symbols, timeframe, horizons,
@@ -222,7 +224,6 @@ async def test_query_backtest_funnel_counts_attrition_per_stage(real_db):
     assert funnel["orders_filled"] == 0
 
 
-@pytest.mark.asyncio
 async def test_query_backtest_compare_returns_metrics_for_each_run(real_db):
     async with real_db.pool.acquire() as conn:
         ids = []
@@ -262,7 +263,6 @@ async def test_query_backtest_compare_returns_metrics_for_each_run(real_db):
         assert "metrics" in r
 
 
-@pytest.mark.asyncio
 async def test_query_backtest_sensitivity_groups_by_swept_param(real_db):
     async with real_db.pool.acquire() as conn:
         # Three runs with same grouping key (symbols + timeframe + horizons)
@@ -273,11 +273,11 @@ async def test_query_backtest_sensitivity_groups_by_swept_param(real_db):
                 INSERT INTO backtest_runs (name, symbols, timeframe, horizons,
                     range_start, range_end, train_days, test_days, embargo_min,
                     mode, config_json, status)
-                VALUES ('sens-' || $1::TEXT, ARRAY['S'], '1m', ARRAY[5],
+                VALUES ('sens-' || $1, ARRAY['S'], '1m', ARRAY[5],
                     NOW(), NOW() + INTERVAL '1 day', 30, 5, 30, 'rolling',
-                    jsonb_build_object('min_confidence', $1::DOUBLE PRECISION),
+                    jsonb_build_object('min_confidence', $2::DOUBLE PRECISION),
                     'completed')
-                """, conf,
+                """, f"{conf}", conf,
             )
     sens = await real_db.query_backtest_sensitivity(
         group_by=["symbols", "timeframe"],

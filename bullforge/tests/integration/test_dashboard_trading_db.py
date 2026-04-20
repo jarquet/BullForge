@@ -10,7 +10,9 @@ import pytest
 from shared.models import Bar, Order, Trade
 
 
-@pytest.mark.asyncio
+pytestmark = pytest.mark.asyncio(loop_scope="session")
+
+
 async def test_query_equity_curve_walks_closed_trades(real_db):
     base = datetime(2026, 4, 1, 14, 0, 0, tzinfo=timezone.utc)
     # Two trades: +$100, -$30. Expect equity series = [start, start+100, start+70].
@@ -69,7 +71,6 @@ async def test_query_equity_curve_walks_closed_trades(real_db):
     assert series[-1]["drawdown"] <= 0.0
 
 
-@pytest.mark.asyncio
 async def test_query_distributions_returns_daily_histogram_holdtime_side(real_db):
     base = datetime(2026, 4, 5, 14, 0, 0, tzinfo=timezone.utc)
     # 4 trades: 2 long wins, 1 long loss, 1 short win.
@@ -114,7 +115,6 @@ async def test_query_distributions_returns_daily_histogram_holdtime_side(real_db
     assert sides["short"]["wins"] == 1
 
 
-@pytest.mark.asyncio
 async def test_query_streaks_returns_current_and_longest(real_db):
     base = datetime(2026, 4, 5, 14, 0, 0, tzinfo=timezone.utc)
     # 3 wins, 2 losses, 1 win (current) — longest win streak = 3, longest loss streak = 2.
@@ -147,7 +147,6 @@ async def test_query_streaks_returns_current_and_longest(real_db):
     assert len(result["ribbon"]) == 6
 
 
-@pytest.mark.asyncio
 async def test_query_heatmap_time_of_day_buckets_by_weekday_halfhour(real_db):
     base = datetime(2026, 4, 6, 14, 0, 0, tzinfo=timezone.utc)  # Mon 14:00 UTC = 10:00 ET
     oid = await real_db.insert_order(Order(
@@ -174,7 +173,6 @@ async def test_query_heatmap_time_of_day_buckets_by_weekday_halfhour(real_db):
     assert total >= 1
 
 
-@pytest.mark.asyncio
 async def test_query_exposure_timeline_sums_concurrent_positions(real_db):
     base = datetime(2026, 4, 6, 14, 0, 0, tzinfo=timezone.utc)
     # Two overlapping trades on different symbols.
@@ -207,7 +205,6 @@ async def test_query_exposure_timeline_sums_concurrent_positions(real_db):
     assert max(exposure_values) > 0
 
 
-@pytest.mark.asyncio
 async def test_query_benchmark_computes_stats_vs_spy(real_db):
     base = datetime(2026, 4, 1, tzinfo=timezone.utc)
     # Seed SPY daily bars rising from 400 to 410 over 10 days.
@@ -250,7 +247,6 @@ async def test_query_benchmark_computes_stats_vs_spy(real_db):
     assert "alpha" in bench["stats"]
 
 
-@pytest.mark.asyncio
 async def test_query_symbol_drilldown_payload_scoped_to_one_symbol(real_db):
     base = datetime(2026, 4, 10, 14, 0, 0, tzinfo=timezone.utc)
     oid = await real_db.insert_order(Order(
