@@ -44,6 +44,34 @@
 
   const state = { status: 'all', q: '', sort: 'finished_at', order: 'desc' };
 
+  // Column count for the Backtests list table. Keep in sync with the
+  // <thead> in renderOverview. Used for loading/empty/error placeholder rows.
+  const BT_TABLE_COLSPAN = 13;
+
+  // Multi-select state for the delete feature.
+  // Keys are of the form "run:{id}". Jobs are never added (disabled).
+  const selection = new Set();
+  let lastCheckedKey = null;  // most recently clicked selKey (for Shift-range, Task 5). String survives re-renders where DOM nodes do not.
+
+  function selectionKey(kind, id) { return kind + ':' + id; }
+
+  function updateActionBar() {
+    const bar = document.getElementById('bt-action-bar');
+    const count = document.getElementById('bt-sel-count');
+    if (!bar || !count) return;  // list view not mounted
+    const prev = parseInt(count.textContent, 10) || 0;
+    const n = selection.size;
+    count.textContent = n;
+    bar.hidden = n === 0;
+    // When selection goes from 0 to >0, clear any stale post-delete summary.
+    // Using a count transition (prev===0 → n>0) rather than bar.hidden means
+    // this fires even when the bar was left visible to display the delete summary.
+    if (prev === 0 && n > 0) {
+      const summary = document.getElementById('bt-action-summary');
+      if (summary) summary.textContent = '';
+    }
+  }
+
   function fmtPnL(v) {
     if (v === null || v === undefined) return '—';
     const cls = v >= 0 ? 'bt-pos' : 'bt-neg';
@@ -88,8 +116,14 @@
           <button id="bt-new">New Backtest</button>
           <button id="bt-refresh">Refresh</button>
         </div>
+        <div id="bt-action-bar" class="bt-action-bar" hidden>
+          <button id="bt-delete-selected" class="bt-delete-btn" type="button">Delete selected (<span id="bt-sel-count">0</span>)</button>
+          <a id="bt-clear-selection" class="bt-clear-link" href="#">Clear</a>
+          <span id="bt-action-summary" class="bt-action-summary"></span>
+        </div>
         <table class="bt-table">
           <thead><tr>
+            <th class="bt-sel-col"><input type="checkbox" id="bt-select-all" title="Select all on this page"></th>
             <th data-sort="name">Name</th>
             <th>Symbols</th>
             <th>Range</th>
@@ -103,7 +137,7 @@
             <th data-sort="finished_at">Finished</th>
             <th>Runtime</th>
           </tr></thead>
-          <tbody id="bt-rows"><tr><td colspan="12">Loading…</td></tr></tbody>
+          <tbody id="bt-rows"><tr><td colspan="${BT_TABLE_COLSPAN}">Loading…</td></tr></tbody>
         </table>
       </div>
     `;
@@ -137,6 +171,119 @@
         reload();
       };
     });
+    const selectAll = document.getElementById('bt-select-all');
+    if (selectAll) {
+      selectAll.onclick = function (ev) {
+        ev.stopPropagation();
+        const checked = selectAll.checked;
+        const boxes = document.querySelectorAll(
+          '#bt-rows .bt-row-select:not(:disabled)'
+        );
+        boxes.forEach(b => {
+          b.checked = checked;
+          const key = b.dataset.selKey;
+          if (checked) selection.add(key);
+          else selection.delete(key);
+        });
+        lastCheckedKey = null;
+        updateActionBar();
+      };
+    }
+    const clearLink = document.getElementById('bt-clear-selection');
+    if (clearLink) {
+      clearLink.onclick = function (ev) {
+        ev.preventDefault();
+        clearSelection();
+      };
+    }
+    const deleteBtn = document.getElementById('bt-delete-selected');
+    if (deleteBtn) {
+      deleteBtn.onclick = function () { deleteSelected(); };
+    }
+  }
+
+  function clearSelection() {
+    selection.clear();
+    lastCheckedKey = null;
+    document.querySelectorAll('#bt-rows .bt-row-select').forEach(b => {
+      b.checked = false;
+    });
+    const header = document.getElementById('bt-select-all');
+    if (header) { header.checked = false; header.indeterminate = false; }
+    const summary = document.getElementById('bt-action-summary');
+    if (summary) summary.textContent = '';
+    updateActionBar();
+  }
+
+  function selectedRunIds() {
+    // selection keys are "run:{id}"; jobs never enter the set.
+    return Array.from(selection)
+      .filter(k => k.startsWith('run:'))
+      .map(k => parseInt(k.slice(4), 10))
+      .filter(Number.isFinite);
+  }
+
+  const BULK_DELETE_THRESHOLD = 10;
+
+  async function deleteSelected() {
+    const ids = selectedRunIds();
+    if (ids.length === 0) return;
+    if (!confirm('Delete ' + ids.length + ' backtest(s)? This cannot be undone.')) return;
+
+    let deleted = 0;
+    let notFound = 0;
+    let stillRunning = 0;
+    let errors = 0;
+
+    if (ids.length <= BULK_DELETE_THRESHOLD) {
+      const results = await Promise.allSettled(
+        ids.map(id => fetch('/api/backtests/' + id, {method: 'DELETE'}))
+      );
+      for (const r of results) {
+        if (r.status !== 'fulfilled') { errors++; continue; }
+        const res = r.value;
+        if (res.status === 200) deleted++;
+        else if (res.status === 404) notFound++;
+        else if (res.status === 409) stillRunning++;
+        else errors++;
+      }
+    } else {
+      try {
+        const res = await fetch('/api/backtests/delete', {
+          method: 'POST',
+          headers: {'content-type': 'application/json'},
+          body: JSON.stringify({ids: ids}),
+        });
+        if (res.ok) {
+          const body = await res.json();
+          deleted = (body.deleted || []).length;
+          notFound = (body.not_found || []).length;
+          stillRunning = (body.still_running || []).length;
+        } else {
+          alert('Bulk delete failed: HTTP ' + res.status);
+          return;
+        }
+      } catch (e) {
+        alert('Bulk delete failed: ' + (e.message || 'network error'));
+        return;
+      }
+    }
+
+    clearSelection();
+    reload();
+    const summary = document.getElementById('bt-action-summary');
+    const bar = document.getElementById('bt-action-bar');
+    if (summary && bar) {
+      const parts = ['Deleted ' + deleted];
+      if (stillRunning) parts.push(stillRunning + ' still running');
+      if (notFound)     parts.push(notFound + ' not found');
+      if (errors)       parts.push(errors + ' failed');
+      summary.textContent = parts.join(' · ');
+      // Force-show the bar so the user sees the summary. clearSelection() hid
+      // it (selection is now empty). updateActionBar will re-hide it and clear
+      // the stale summary on the user's next 0→N selection transition.
+      bar.hidden = false;
+    }
   }
 
   async function reload() {
@@ -149,7 +296,7 @@
       renderRows(data.rows);
     } catch (e) {
       document.getElementById('bt-rows').innerHTML =
-        `<tr><td colspan="10" class="bt-error">Failed to load: ${e.message}</td></tr>`;
+        `<tr><td colspan="${BT_TABLE_COLSPAN}" class="bt-error">Failed to load: ${e.message}</td></tr>`;
     }
   }
 
@@ -365,7 +512,12 @@
     const tbody = document.getElementById('bt-rows');
     if (!rows.length) {
       tbody.innerHTML =
-        '<tr><td colspan="12">No backtests yet. Click New Backtest to start one.</td></tr>';
+        '<tr><td colspan="' + BT_TABLE_COLSPAN + '">No backtests yet. Click New Backtest to start one.</td></tr>';
+      const headerBox = document.getElementById('bt-select-all');
+      if (headerBox) {
+        headerBox.checked = false;
+        headerBox.indeterminate = false;
+      }
       return;
     }
     tbody.innerHTML = rows.map(r => {
@@ -396,7 +548,26 @@
         ? `<span class="bt-status-cancelled">${r.status}</span>`
         : r.status;
       const runtime = fmtBtRuntime(r);
+      const selKey = selectionKey(r.kind, r.id);
+      const isDisabled = r.kind === 'job'
+        || (r.kind === 'run' && r.status === 'running');
+      const isChecked = !isDisabled && selection.has(selKey);
+      const boxTitle = r.kind === 'job'
+        ? 'Cannot delete a queued or running job'
+        : (isDisabled ? 'Cancel this backtest first' : 'Select for delete');
+      const checkboxHtml =
+        '<input type="checkbox" class="bt-row-select"' +
+        ' data-sel-key="' + selKey + '"' +
+        ' data-kind="' + r.kind + '"' +
+        ' data-id="' + r.id + '"' +
+        ' data-status="' + (r.status || '') + '"' +
+        (isDisabled ? ' disabled' : '') +
+        (isChecked ? ' checked' : '') +
+        ' title="' + boxTitle + '"' +
+        ' onclick="event.stopPropagation()"' +
+        '>';
       return `<tr class="clickable" onclick="location.hash='${target}'">
+        <td class="bt-sel-col" onclick="event.stopPropagation()">${checkboxHtml}</td>
         <td>${r.name}</td><td>${symsDisplay}</td><td>${range}</td>
         <td>${pnl}</td><td>${sharpe}</td><td>${dd}</td>
         <td>${ntr}</td><td>${hit}</td>
@@ -409,15 +580,75 @@
     if (!tbody.__btCancelDelegated) {
       tbody.addEventListener('click', function (ev) {
         const btn = ev.target && ev.target.closest('.bt-cancel-btn');
-        if (!btn) return;
-        ev.stopPropagation();
-        cancelBacktest({
-          kind: btn.dataset.cancelKind,
-          id: parseInt(btn.dataset.cancelId, 10),
-          name: btn.dataset.cancelName || '',
-        });
-      });
+        if (btn) {
+          ev.stopPropagation();
+          cancelBacktest({
+            kind: btn.dataset.cancelKind,
+            id: parseInt(btn.dataset.cancelId, 10),
+            name: btn.dataset.cancelName || '',
+          });
+          return;
+        }
+        const box = ev.target && ev.target.matches('.bt-row-select') ? ev.target : null;
+        if (box && !box.disabled) {
+          // Capture-phase: box.checked still reflects the PRE-toggle state
+          // because the browser hasn't yet flipped it (that happens at target).
+          // Compute the target state ourselves: invert the pre-click state.
+          const targetChecked = !box.checked;
+          let handledAsRange = false;
+          if (ev.shiftKey && lastCheckedKey && lastCheckedKey !== box.dataset.selKey) {
+            const lastBox = tbody.querySelector(
+              '.bt-row-select[data-sel-key="' + lastCheckedKey + '"]'
+            );
+            if (lastBox) {
+              // Range select between lastBox and box (inclusive),
+              // skipping disabled boxes.
+              const all = Array.from(tbody.querySelectorAll('.bt-row-select'))
+                .filter(b => !b.disabled);
+              const a = all.indexOf(lastBox);
+              const b = all.indexOf(box);
+              if (a !== -1 && b !== -1) {
+                const [lo, hi] = a < b ? [a, b] : [b, a];
+                for (let i = lo; i <= hi; i++) {
+                  const bx = all[i];
+                  bx.checked = targetChecked;
+                  const k = bx.dataset.selKey;
+                  if (targetChecked) selection.add(k);
+                  else selection.delete(k);
+                }
+                handledAsRange = true;
+              }
+            }
+            // If lastBox was stale (key not in current DOM), fall through.
+          }
+          if (!handledAsRange) {
+            const key = box.dataset.selKey;
+            if (targetChecked) selection.add(key);
+            else selection.delete(key);
+          }
+          lastCheckedKey = box.dataset.selKey;
+          updateActionBar();
+        }
+      }, true);  // capture phase: runs BEFORE target's inline stopPropagation()
       tbody.__btCancelDelegated = true;
+    }
+
+    // Prune selection keys whose rows are no longer rendered. This keeps
+    // the selection set bounded and handles rows that vanish between polls
+    // (e.g., deleted by another tab).
+    const visibleKeys = new Set(rows.map(r => selectionKey(r.kind, r.id)));
+    for (const key of Array.from(selection)) {
+      if (!visibleKeys.has(key)) selection.delete(key);
+    }
+
+    // Keep header select-all in sync: checked iff every selectable row is selected.
+    const headerBox = document.getElementById('bt-select-all');
+    if (headerBox) {
+      const selectableBoxes = tbody.querySelectorAll('.bt-row-select:not(:disabled)');
+      const total = selectableBoxes.length;
+      const selected = Array.from(selectableBoxes).filter(b => b.checked).length;
+      headerBox.checked = total > 0 && selected === total;
+      headerBox.indeterminate = selected > 0 && selected < total;
     }
   }
 

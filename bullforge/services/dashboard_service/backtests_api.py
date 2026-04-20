@@ -28,6 +28,8 @@ THRESHOLD_KEYS = (
     "max_exposure",
 )
 
+_BULK_DELETE_MAX = 500
+
 
 def _validate_threshold_overrides(body: dict) -> dict:
     errors: dict[str, str] = {}
@@ -54,6 +56,143 @@ def _validate_threshold_overrides(body: dict) -> dict:
 
 def _iso(v):
     return v.isoformat() if isinstance(v, datetime) else v
+
+
+async def _delete_run_impl(db, run_id: int) -> dict:
+    """Delete a terminal backtest run and its non-cascaded sandbox artifacts.
+
+    Returns one of:
+      {"status": "deleted",       "run_id": run_id}
+      {"status": "not_found",     "run_id": run_id}
+      {"status": "still_running", "run_id": run_id,
+                                  "current_status": <str>}
+
+    One transaction per run. Locks the run row with ``SELECT ... FOR UPDATE``
+    first; if the run is missing or non-terminal, returns without writing.
+    Otherwise deletes sandbox rows (not FK-cascaded) and the run row (which
+    cascades to folds/trades/equity).
+    """
+    async with db.pool.acquire() as conn:
+        async with conn.transaction():
+            current_status = await conn.fetchval(
+                "SELECT status FROM backtest_runs WHERE id = $1 FOR UPDATE",
+                run_id,
+            )
+            if current_status is None:
+                return {"status": "not_found", "run_id": run_id}
+            if current_status not in ("completed", "failed", "cancelled"):
+                return {
+                    "status": "still_running",
+                    "run_id": run_id,
+                    "current_status": current_status,
+                }
+
+            await conn.execute(
+                "DELETE FROM backtest.orders WHERE backtest_run_id = $1",
+                run_id,
+            )
+            await conn.execute(
+                "DELETE FROM backtest.predictions WHERE backtest_run_id = $1",
+                run_id,
+            )
+            await conn.execute(
+                "DELETE FROM backtest.model_registry WHERE backtest_run_id = $1",
+                run_id,
+            )
+            await conn.execute(
+                "DELETE FROM backtest_runs WHERE id = $1",
+                run_id,
+            )
+
+    return {"status": "deleted", "run_id": run_id}
+
+
+async def _delete_run(request: web.Request) -> web.Response:
+    """DELETE /api/backtests/{id}."""
+    try:
+        run_id = int(request.match_info["id"])
+    except (KeyError, ValueError):
+        return web.json_response(
+            {"error": "run_id must be an integer"}, status=400,
+        )
+    db = request.app["db"]
+    result = await _delete_run_impl(db, run_id)
+    status = result["status"]
+    if status == "deleted":
+        return web.json_response(result, status=200)
+    if status == "not_found":
+        return web.json_response(
+            {"error": "not found", "run_id": run_id}, status=404,
+        )
+    # still_running
+    return web.json_response(
+        {
+            "error": "run is still running",
+            "run_id": run_id,
+            "current_status": result["current_status"],
+        },
+        status=409,
+    )
+
+
+async def _bulk_delete_runs(request: web.Request) -> web.Response:
+    """POST /api/backtests/delete  — body: {"ids": [int, ...]}.
+
+    Iterates _delete_run_impl per id, grouping results into buckets. Each
+    id's deletion is independent; one still-running or missing id does not
+    block the others.
+    """
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "bad json"}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "body must be an object"}, status=400)
+
+    ids = body.get("ids")
+    if not isinstance(ids, list) or not ids:
+        return web.json_response(
+            {"error": "ids must be a non-empty list"}, status=400,
+        )
+    if not all(isinstance(i, int) and not isinstance(i, bool) for i in ids):
+        return web.json_response(
+            {"error": "every id must be an integer"}, status=400,
+        )
+    if len(ids) > _BULK_DELETE_MAX:
+        return web.json_response(
+            {"error": f"too many ids (max {_BULK_DELETE_MAX})"}, status=400,
+        )
+
+    # Dedupe while preserving first-occurrence order.
+    seen = set()
+    unique_ids: list[int] = []
+    for i in ids:
+        if i not in seen:
+            seen.add(i)
+            unique_ids.append(i)
+
+    db = request.app["db"]
+    deleted: list[int] = []
+    not_found: list[int] = []
+    still_running: list[dict] = []
+    # Sequential on purpose: pool max_size is 10 and each id takes its own
+    # transaction with FOR UPDATE. Parallelizing would starve other handlers
+    # and risk lock contention with no user-visible win (UI batches >10 are rare).
+    for run_id in unique_ids:
+        res = await _delete_run_impl(db, run_id)
+        if res["status"] == "deleted":
+            deleted.append(run_id)
+        elif res["status"] == "not_found":
+            not_found.append(run_id)
+        else:  # still_running
+            still_running.append(
+                {"run_id": run_id, "current_status": res["current_status"]},
+            )
+    return web.json_response({
+        "deleted": deleted,
+        "not_found": not_found,
+        "still_running": still_running,
+    })
 
 
 async def _cancel_job(request: web.Request) -> web.Response:
@@ -129,7 +268,10 @@ async def _cancel_run(request: web.Request) -> web.Response:
 def register_backtests_routes(app: web.Application) -> None:
     app.router.add_get("/api/backtests", _list)
     app.router.add_post("/api/backtests", _create)
+    # Literal-path routes BEFORE parameterized /{id} routes.
+    app.router.add_post("/api/backtests/delete", _bulk_delete_runs)
     app.router.add_get("/api/backtests/{id}", _detail)
+    app.router.add_delete("/api/backtests/{id}", _delete_run)
     app.router.add_get("/api/backtests/{id}/folds", _folds)
     app.router.add_get("/api/backtests/{id}/equity", _equity)
     app.router.add_get("/api/backtests/{id}/trades", _trades)
