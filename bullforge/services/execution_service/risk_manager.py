@@ -37,7 +37,7 @@ class RiskManager:
         account: dict,
         positions: list[dict],
         current_price: float,
-    ) -> Tuple[bool, str, int]:
+    ) -> Tuple[bool, str, float]:
         """
         Check whether a new position entry is allowed.
         Returns (approved, reason, quantity).
@@ -73,9 +73,11 @@ class RiskManager:
             return False, "Max portfolio exposure reached", 0
 
         max_position_pct = await self._param("max_position_pct")
-        qty = int((equity * max_position_pct) / current_price)
-        if qty <= 0:
-            return False, "Position value too small for one share", 0
+        qty = (equity * max_position_pct) / current_price
+        if qty * current_price < 1.0:
+            # Alpaca rejects orders below $1 notional on both crypto and
+            # fractional-equity paths. Guarding here avoids a wasted submit.
+            return False, "Position value too small (below $1 notional)", 0
 
         return True, "Approved", qty
 

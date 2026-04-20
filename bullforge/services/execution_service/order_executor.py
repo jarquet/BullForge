@@ -59,7 +59,7 @@ class OrderExecutor:
 
         return await self._execute_open(signal, qty)
 
-    async def _execute_open(self, signal: TradingSignal, qty: int) -> Optional[Order]:
+    async def _execute_open(self, signal: TradingSignal, qty: float) -> Optional[Order]:
         side = "buy" if signal.direction == 1 else "sell"
         try:
             alpaca_id = await self._broker.submit_market_order(signal.symbol, qty, side)
@@ -69,7 +69,7 @@ class OrderExecutor:
 
         now = datetime.now(timezone.utc)
         order = Order(
-            symbol=signal.symbol, side=side, quantity=float(qty),
+            symbol=signal.symbol, side=side, quantity=qty,
             order_type="market", submitted_at=now,
             signal_strength=signal.strength,
             alpaca_order_id=alpaca_id, status="submitted",
@@ -80,7 +80,7 @@ class OrderExecutor:
             snap = await self._broker.get_order(alpaca_id)
             snap.setdefault("symbol", signal.symbol)
             snap.setdefault("side", side)
-            snap.setdefault("qty", float(qty))
+            snap.setdefault("qty", qty)
             snap.setdefault("order_type", "market")
             snap.setdefault("submitted_at", now)
             await self._core.apply_alpaca_order(snap, source="submit")

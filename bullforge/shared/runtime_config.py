@@ -130,9 +130,10 @@ CONFIG_SCHEMA: dict[str, dict[str, Any]] = {
         "label": "Max Position Size (fraction of equity)",
         "description": (
             "Fraction of account equity allocated to a single new position. "
-            "0.02 = 2% of equity per entry. Share quantity is "
-            "floor(equity * pct / current_price); entries that would size "
-            "to zero shares are rejected."
+            "0.02 = 2% of equity per entry. Quantity is "
+            "(equity * pct / current_price) as a fractional share (crypto "
+            "and fractional-equity orders); entries sized below Alpaca's "
+            "$1 minimum notional are rejected."
         ),
         "reference": "https://en.wikipedia.org/wiki/Position_sizing",
     },
