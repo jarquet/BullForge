@@ -55,9 +55,14 @@
 
   function selectionKey(kind, id) { return kind + ':' + id; }
 
-  // No-op placeholder; replaced by the real updater when the action bar
-  // is added. See the delete-selected dispatch logic below once it lands.
-  function updateActionBar() { /* intentionally empty */ }
+  function updateActionBar() {
+    const bar = document.getElementById('bt-action-bar');
+    const count = document.getElementById('bt-sel-count');
+    if (!bar || !count) return;  // list view not mounted
+    const n = selection.size;
+    count.textContent = n;
+    bar.hidden = n === 0;
+  }
 
   function fmtPnL(v) {
     if (v === null || v === undefined) return '—';
@@ -102,6 +107,11 @@
           <input id="bt-search" placeholder="search name…" />
           <button id="bt-new">New Backtest</button>
           <button id="bt-refresh">Refresh</button>
+        </div>
+        <div id="bt-action-bar" class="bt-action-bar" hidden>
+          <button id="bt-delete-selected" class="bt-delete-btn" type="button">Delete selected (<span id="bt-sel-count">0</span>)</button>
+          <a id="bt-clear-selection" class="bt-clear-link" href="#">Clear</a>
+          <span id="bt-action-summary" class="bt-action-summary"></span>
         </div>
         <table class="bt-table">
           <thead><tr>
@@ -171,6 +181,93 @@
         updateActionBar();
       };
     }
+    const clearLink = document.getElementById('bt-clear-selection');
+    if (clearLink) {
+      clearLink.onclick = function (ev) {
+        ev.preventDefault();
+        clearSelection();
+      };
+    }
+    const deleteBtn = document.getElementById('bt-delete-selected');
+    if (deleteBtn) {
+      deleteBtn.onclick = function () { deleteSelected(); };
+    }
+  }
+
+  function clearSelection() {
+    selection.clear();
+    lastCheckedKey = null;
+    document.querySelectorAll('#bt-rows .bt-row-select').forEach(b => {
+      b.checked = false;
+    });
+    const header = document.getElementById('bt-select-all');
+    if (header) { header.checked = false; header.indeterminate = false; }
+    const summary = document.getElementById('bt-action-summary');
+    if (summary) summary.textContent = '';
+    updateActionBar();
+  }
+
+  function selectedRunIds() {
+    // selection keys are "run:{id}"; jobs never enter the set.
+    return Array.from(selection)
+      .filter(k => k.startsWith('run:'))
+      .map(k => parseInt(k.slice(4), 10))
+      .filter(Number.isFinite);
+  }
+
+  const BULK_DELETE_THRESHOLD = 10;
+
+  async function deleteSelected() {
+    const ids = selectedRunIds();
+    if (ids.length === 0) return;
+    if (!confirm('Delete ' + ids.length + ' backtest(s)? This cannot be undone.')) return;
+
+    let deleted = 0;
+    let notFound = 0;
+    let stillRunning = 0;
+
+    if (ids.length <= BULK_DELETE_THRESHOLD) {
+      const results = await Promise.allSettled(
+        ids.map(id => fetch('/api/backtests/' + id, {method: 'DELETE'}))
+      );
+      for (const r of results) {
+        if (r.status !== 'fulfilled') continue;
+        const res = r.value;
+        if (res.status === 200) deleted++;
+        else if (res.status === 404) notFound++;
+        else if (res.status === 409) stillRunning++;
+      }
+    } else {
+      try {
+        const res = await fetch('/api/backtests/delete', {
+          method: 'POST',
+          headers: {'content-type': 'application/json'},
+          body: JSON.stringify({ids: ids}),
+        });
+        if (res.ok) {
+          const body = await res.json();
+          deleted = (body.deleted || []).length;
+          notFound = (body.not_found || []).length;
+          stillRunning = (body.still_running || []).length;
+        } else {
+          alert('Bulk delete failed: HTTP ' + res.status);
+          return;
+        }
+      } catch (e) {
+        alert('Bulk delete failed: ' + (e.message || 'network error'));
+        return;
+      }
+    }
+
+    const summary = document.getElementById('bt-action-summary');
+    if (summary) {
+      const parts = ['Deleted ' + deleted];
+      if (stillRunning) parts.push(stillRunning + ' still running');
+      if (notFound)     parts.push(notFound + ' not found');
+      summary.textContent = parts.join(' · ');
+    }
+    clearSelection();
+    reload();
   }
 
   async function reload() {
