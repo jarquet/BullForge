@@ -378,7 +378,7 @@
         <div class="bt-form-row">
           <label>Train days<input id="f-train" type="number" value="60" min="1"></label>
           <label>Test days<input id="f-test" type="number" value="5" min="1"></label>
-          <label>Embargo (min)<input id="f-embargo" type="number" value="30" min="1"></label>
+          <label>Embargo (min)<input id="f-embargo" type="number" value="120" min="1"></label>
         </div>
         <details class="bt-advanced">
           <summary>Advanced — Entry thresholds (optional overrides)</summary>
