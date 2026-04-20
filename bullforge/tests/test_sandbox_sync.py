@@ -151,7 +151,8 @@ async def test_sync_adds_missing_column_to_sandbox():
         # Re-run sync (already ran once during connect(), but run again
         # explicitly to verify idempotence and that the drift we just
         # introduced gets repaired).
-        await live._sync_sandbox_schema()
+        async with live.pool.acquire() as conn:
+            await live._sync_sandbox_schema(conn)
 
         async with live.pool.acquire() as conn:
             present = await conn.fetchval(
@@ -198,7 +199,8 @@ async def test_sync_adds_missing_index_to_sandbox():
                 "ON public.model_registry (model_type)"
             )
 
-        await live._sync_sandbox_schema()
+        async with live.pool.acquire() as conn:
+            await live._sync_sandbox_schema(conn)
 
         async with live.pool.acquire() as conn:
             present = await conn.fetchval(
@@ -233,8 +235,10 @@ async def test_sync_is_idempotent():
     live = Database(settings)
     await live.connect()
     try:
-        await live._sync_sandbox_schema()
-        await live._sync_sandbox_schema()
+        async with live.pool.acquire() as conn:
+            await live._sync_sandbox_schema(conn)
+        async with live.pool.acquire() as conn:
+            await live._sync_sandbox_schema(conn)
     finally:
         await live.disconnect()
 

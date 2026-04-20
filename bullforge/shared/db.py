@@ -151,6 +151,13 @@ def _rewrite_index_for_backtest(
 
 
 class Database:
+    # Session-level advisory lock key used to serialize startup DDL
+    # (migrations + sandbox sync) across processes connecting to the same
+    # database. Without this, ~8 services calling connect() concurrently
+    # race through CREATE/DROP INDEX in the migrations, and pg_get_indexdef
+    # can transiently return NULL during the window — crashing _index_body.
+    _MIGRATION_LOCK_KEY = 0x42554C4C  # 'BULL'
+
     def __init__(self, settings: Settings, *, sandbox: bool = False):
         self._settings = settings
         self._sandbox = sandbox
@@ -173,23 +180,32 @@ class Database:
         # Sandbox pools rely on the live pool having already applied
         # migrations (incl. 013 which creates the `backtest` schema).
         if not self._sandbox:
-            await self._run_migrations()
-            await self._sync_sandbox_schema()
+            async with self.pool.acquire() as conn:
+                await conn.execute(
+                    "SELECT pg_advisory_lock($1)", self._MIGRATION_LOCK_KEY,
+                )
+                try:
+                    await self._run_migrations(conn)
+                    await self._sync_sandbox_schema(conn)
+                finally:
+                    await conn.execute(
+                        "SELECT pg_advisory_unlock($1)",
+                        self._MIGRATION_LOCK_KEY,
+                    )
 
     async def disconnect(self) -> None:
         if self.pool:
             await self.pool.close()
             self.pool = None
 
-    async def _run_migrations(self) -> None:
+    async def _run_migrations(self, conn: asyncpg.Connection) -> None:
         migrations_dir = Path(__file__).parent.parent / "migrations"
         sql_files = sorted(migrations_dir.glob("*.sql"))
-        async with self.pool.acquire() as conn:
-            for sql_file in sql_files:
-                sql = sql_file.read_text()
-                await conn.execute(sql)
+        for sql_file in sql_files:
+            sql = sql_file.read_text()
+            await conn.execute(sql)
 
-    async def _sync_sandbox_schema(self) -> None:
+    async def _sync_sandbox_schema(self, conn: asyncpg.Connection) -> None:
         """
         Ensures every table in the `backtest` schema structurally matches its
         `public` namesake: any column present in public but missing in backtest
@@ -210,13 +226,12 @@ class Database:
         are logged as warnings for human attention — those are rare and
         have too many safe-rollout variants to auto-apply.
         """
-        async with self.pool.acquire() as conn:
-            tables = await conn.fetch(
-                "SELECT table_name FROM information_schema.tables "
-                "WHERE table_schema = 'backtest' AND table_type = 'BASE TABLE'"
-            )
-            for row in tables:
-                await self._sync_sandbox_table(conn, row["table_name"])
+        tables = await conn.fetch(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'backtest' AND table_type = 'BASE TABLE'"
+        )
+        for row in tables:
+            await self._sync_sandbox_table(conn, row["table_name"])
 
     async def _sync_sandbox_table(self, conn: asyncpg.Connection, table: str) -> None:
         public_exists = await conn.fetchval(
@@ -280,6 +295,22 @@ class Database:
             """,
             table,
         )
+        # pg_get_indexdef() (which backs pg_indexes.indexdef) returns NULL for
+        # indexes it can't render — invalid indexes from a failed CREATE INDEX
+        # CONCURRENTLY, indexes mid-drop, or indexes with un-renderable
+        # opclasses. Skip these with a warning rather than crashing the live
+        # pool's connect(); operator can investigate via pg_index/pg_class.
+        usable_rows = []
+        for r in rows:
+            if r["indexdef"] is None:
+                logger.warning(
+                    "sync_sandbox: %s.%s has NULL indexdef; skipping "
+                    "(check pg_index for invalid/dropping state)",
+                    r["schemaname"], r["indexname"],
+                )
+                continue
+            usable_rows.append(r)
+        rows = usable_rows
         public_idx = [r for r in rows if r["schemaname"] == "public"]
         backtest_bodies = {_index_body(r["indexdef"]) for r in rows if r["schemaname"] == "backtest"}
 
