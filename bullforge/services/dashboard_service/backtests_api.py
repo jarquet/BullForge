@@ -105,6 +105,34 @@ async def _delete_run_impl(db, run_id: int) -> dict:
     return {"status": "deleted", "run_id": run_id}
 
 
+async def _delete_run(request: web.Request) -> web.Response:
+    """DELETE /api/backtests/{id}."""
+    try:
+        run_id = int(request.match_info["id"])
+    except (KeyError, ValueError):
+        return web.json_response(
+            {"error": "run_id must be an integer"}, status=400,
+        )
+    db = request.app["db"]
+    result = await _delete_run_impl(db, run_id)
+    status = result["status"]
+    if status == "deleted":
+        return web.json_response(result, status=200)
+    if status == "not_found":
+        return web.json_response(
+            {"error": "not found", "run_id": run_id}, status=404,
+        )
+    # still_running
+    return web.json_response(
+        {
+            "error": "run is still running",
+            "run_id": run_id,
+            "current_status": result["current_status"],
+        },
+        status=409,
+    )
+
+
 async def _cancel_job(request: web.Request) -> web.Response:
     """POST /api/backtest-jobs/{job_id}/cancel — cancel by direct job_id."""
     try:
@@ -179,6 +207,7 @@ def register_backtests_routes(app: web.Application) -> None:
     app.router.add_get("/api/backtests", _list)
     app.router.add_post("/api/backtests", _create)
     app.router.add_get("/api/backtests/{id}", _detail)
+    app.router.add_delete("/api/backtests/{id}", _delete_run)
     app.router.add_get("/api/backtests/{id}/folds", _folds)
     app.router.add_get("/api/backtests/{id}/equity", _equity)
     app.router.add_get("/api/backtests/{id}/trades", _trades)

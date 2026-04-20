@@ -272,3 +272,68 @@ async def test_delete_run_impl_nulls_runtime_config_audit_link(db):
         )
     assert row["source_backtest_run_id"] is None
     assert row["new_value"] == "0.65"  # audit row survives with history intact
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/backtests/{id} route tests (real-DB via aiohttp client).
+# ---------------------------------------------------------------------------
+
+from aiohttp import web
+
+from services.dashboard_service.backtests_api import register_backtests_routes
+from services.backtest_service.jobs_db import BacktestJobsDB
+from services.backtest_service.results_db import BacktestResultsDB
+
+
+@pytest_asyncio.fixture
+async def delete_client(aiohttp_client, db):
+    app = web.Application()
+    app["db"] = db
+    app["results_db"] = BacktestResultsDB(db)
+    app["jobs_db"] = BacktestJobsDB(db)
+    register_backtests_routes(app)
+    return await aiohttp_client(app)
+
+
+async def test_delete_route_200_on_terminal_run(delete_client, db):
+    run_id = await _insert_run(db, status="completed")
+    await _insert_sandbox_artifacts(db, run_id)
+
+    resp = await delete_client.delete(f"/api/backtests/{run_id}")
+    assert resp.status == 200
+    body = await resp.json()
+    assert body == {"status": "deleted", "run_id": run_id}
+
+    counts = await _count_artifacts(db, run_id)
+    assert counts["run"] == 0
+    assert counts["sandbox_models"] == 0
+
+
+async def test_delete_route_409_on_running_run(delete_client, db):
+    run_id = await _insert_run(db, status="running")
+
+    resp = await delete_client.delete(f"/api/backtests/{run_id}")
+    assert resp.status == 409
+    body = await resp.json()
+    assert body["run_id"] == run_id
+    assert body["current_status"] == "running"
+
+    # Still there.
+    counts = await _count_artifacts(db, run_id)
+    assert counts["run"] == 1
+
+
+async def test_delete_route_404_on_missing_id(delete_client, db):
+    async with db.pool.acquire() as conn:
+        max_id = await conn.fetchval("SELECT COALESCE(MAX(id), 0) FROM backtest_runs")
+    missing = max_id + 100_000
+
+    resp = await delete_client.delete(f"/api/backtests/{missing}")
+    assert resp.status == 404
+    body = await resp.json()
+    assert body["run_id"] == missing
+
+
+async def test_delete_route_400_on_non_integer_id(delete_client):
+    resp = await delete_client.delete("/api/backtests/not-an-int")
+    assert resp.status == 400
