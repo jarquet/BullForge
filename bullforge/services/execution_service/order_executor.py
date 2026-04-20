@@ -35,6 +35,7 @@ class OrderExecutor:
 
     async def process_signal(
         self, signal: TradingSignal, current_price: float,
+        *, max_qty_cap: Optional[float] = None,
     ) -> Optional[Order]:
         await self._tracker.refresh()
         existing = self._tracker.get_position(signal.symbol)
@@ -57,6 +58,15 @@ class OrderExecutor:
             logger.info("Entry rejected for %s: %s", signal.symbol, reason)
             return None
 
+        if max_qty_cap is not None and qty > max_qty_cap:
+            qty = max_qty_cap
+            if qty * current_price < 1.0:
+                logger.info(
+                    "Entry capped below $1 notional for %s; skipping submit",
+                    signal.symbol,
+                )
+                return None
+
         return await self._execute_open(signal, qty)
 
     async def _execute_open(self, signal: TradingSignal, qty: float) -> Optional[Order]:
@@ -74,6 +84,19 @@ class OrderExecutor:
             signal_strength=signal.strength,
             alpaca_order_id=alpaca_id, status="submitted",
         )
+
+        if self._scope is not None:
+            # Backtest: SimulatedBroker is synchronous and the reconciler is a
+            # no-op, so the terminal status is already known. Skip the orders
+            # INSERT entirely for non-fills to avoid wasted DB round-trips.
+            snap = await self._broker.get_order(alpaca_id)
+            if snap.get("status") != "filled":
+                logger.info(
+                    "skipping order insert for %s %s: broker status=%s",
+                    signal.symbol, alpaca_id, snap.get("status"),
+                )
+                return None
+
         order_id = await self._db.insert_order_if_new(order, scope=self._scope)
 
         try:
@@ -111,6 +134,16 @@ class OrderExecutor:
             signal_strength=signal.strength,
             alpaca_order_id=alpaca_id, status="submitted",
         )
+
+        if self._scope is not None:
+            snap = await self._broker.get_order(alpaca_id)
+            if snap.get("status") != "filled":
+                logger.info(
+                    "skipping order insert for %s %s: broker status=%s",
+                    signal.symbol, alpaca_id, snap.get("status"),
+                )
+                return None
+
         order_id = await self._db.insert_order_if_new(order, scope=self._scope)
 
         try:

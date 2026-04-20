@@ -103,6 +103,52 @@ class BacktestResultsDB:
                 run_id, fold_id, timestamp, equity, cash,
             )
 
+    async def insert_trades_many(
+        self, *, run_id: int, fold_id: int, trades: list[dict],
+    ) -> None:
+        if not trades:
+            return
+        rows = [
+            (
+                run_id, fold_id, t["symbol"], t["side"],
+                t["entry_time"], t["entry_price"], t["quantity"],
+                t["exit_time"], t["exit_price"], t["pnl"], t["signal_strength"],
+            )
+            for t in trades
+        ]
+        async with self._db.pool.acquire() as conn:
+            await conn.executemany(
+                """
+                INSERT INTO backtest_trades (
+                    run_id, fold_id, symbol, side,
+                    entry_time, entry_price, quantity,
+                    exit_time, exit_price, pnl, signal_strength
+                )
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                """,
+                rows,
+            )
+
+    async def insert_equity_points_many(
+        self, *, run_id: int, fold_id: int, points: list[dict],
+    ) -> None:
+        if not points:
+            return
+        rows = [
+            (run_id, fold_id, p["timestamp"], p["equity"], p["cash"])
+            for p in points
+        ]
+        async with self._db.pool.acquire() as conn:
+            await conn.executemany(
+                """
+                INSERT INTO backtest_equity (run_id, fold_id, timestamp, equity, cash)
+                VALUES ($1,$2,$3,$4,$5)
+                ON CONFLICT (run_id, fold_id, timestamp) DO UPDATE
+                SET equity = EXCLUDED.equity, cash = EXCLUDED.cash
+                """,
+                rows,
+            )
+
     async def update_fold_metrics(
         self, *, fold_id: int, metrics: dict,
     ) -> None:

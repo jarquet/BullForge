@@ -233,7 +233,14 @@ class BacktestEngine:
             ]
             signal = await aggregator.aggregate(symbol, ts, pred_dicts)
             if signal is not None and nxt is not None:
-                order = await executor.process_signal(signal, bar["close"])
+                cap = float(nxt["volume"]) * cfg.max_volume_pct
+                if cap <= 0:
+                    last_account = await broker.get_account()
+                    last_ts = ts
+                    continue
+                order = await executor.process_signal(
+                    signal, bar["close"], max_qty_cap=cap,
+                )
                 if order is not None:
                     await self._record_trade(
                         symbol, order, signal, ts, open_trade,
@@ -252,15 +259,16 @@ class BacktestEngine:
             )
 
         # 5) Persist equity + trades + metrics for the fold.
-        for pt in equity.points():
-            await self._results.insert_equity_point(
-                run_id=run_id, fold_id=fold_id,
-                timestamp=pt.timestamp, equity=pt.equity, cash=pt.cash,
-            )
-        for t in completed_trades:
-            await self._results.insert_trade(
-                run_id=run_id, fold_id=fold_id, **t,
-            )
+        await self._results.insert_equity_points_many(
+            run_id=run_id, fold_id=fold_id,
+            points=[
+                {"timestamp": pt.timestamp, "equity": pt.equity, "cash": pt.cash}
+                for pt in equity.points()
+            ],
+        )
+        await self._results.insert_trades_many(
+            run_id=run_id, fold_id=fold_id, trades=completed_trades,
+        )
 
         rets = equity.returns()
         equity_curve = [pt.equity for pt in equity.points()]
@@ -287,7 +295,10 @@ class BacktestEngine:
         fill_snap = await broker.get_order(order.alpaca_order_id)
         if fill_snap["status"] != "filled":
             # Broker may reject (volume cap, no next-bar); skip recording.
-            logger.info(
+            # In normal backtest flow this branch is unreachable because
+            # `_execute_open` returns None for non-fills before we get here;
+            # kept defensive for non-scope direct callers (unit tests).
+            logger.debug(
                 "skipping trade record for %s order %s: status=%s",
                 symbol, order.alpaca_order_id, fill_snap["status"],
             )
