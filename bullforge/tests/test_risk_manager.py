@@ -53,7 +53,7 @@ async def test_check_entry_approved():
         _signal(hour_utc=16), _account(), [], current_price=420.0,
     )
     assert approved is True
-    assert qty == 23
+    assert qty == pytest.approx(100_000.0 * 0.10 / 420.0)
     assert reason == "Approved"
 
 
@@ -64,7 +64,7 @@ async def test_check_entry_qty_scales_with_equity():
         _signal(hour_utc=16), _account(equity=200000.0), [], current_price=420.0,
     )
     assert approved is True
-    assert qty == 47
+    assert qty == pytest.approx(200_000.0 * 0.10 / 420.0)
 
 
 @pytest.mark.asyncio
@@ -95,7 +95,7 @@ async def test_check_entry_short_allowed():
         _signal(direction=-1, hour_utc=16), _account(), [], current_price=420.0,
     )
     assert approved is True
-    assert qty == 23
+    assert qty == pytest.approx(100_000.0 * 0.10 / 420.0)
 
 
 @pytest.mark.asyncio
@@ -193,7 +193,7 @@ async def test_max_position_pct_override():
         _signal(hour_utc=16), _account(), [], current_price=420.0,
     )
     assert approved is True
-    assert qty == 119
+    assert qty == pytest.approx(100_000.0 * 0.5 / 420.0)
 
 
 @pytest.mark.asyncio
@@ -239,7 +239,7 @@ async def test_window_allows_equity_midday():
         _signal(hour_utc=16), _account(), [], current_price=420.0,
     )
     assert approved is True
-    assert qty == 23
+    assert qty == pytest.approx(100_000.0 * 0.10 / 420.0)
 
 
 @pytest.mark.asyncio
@@ -268,6 +268,47 @@ async def test_window_allows_crypto_weekday_midnight():
         sig, _account(), [], current_price=3500.0,
     )
     assert approved is True
+
+
+@pytest.mark.asyncio
+async def test_crypto_fractional_sizing_at_realistic_price():
+    """BTC at a realistic ~$60k must size fractionally, not truncate to zero."""
+    rm = RiskManager(runtime_config=_rc({"execution_max_position_pct": 0.10}))
+    sig = TradingSignal(
+        symbol="BTC/USD",
+        timestamp=datetime(2026, 4, 12, 3, 0, tzinfo=timezone.utc),
+        direction=1, strength=0.8, contributing_predictions=3,
+    )
+    approved, reason, qty = await rm.check_entry(
+        sig, _account(equity=100_000.0), [], current_price=60_000.0,
+    )
+    assert approved is True, reason
+    # $100k * 0.10 / $60k = 0.16666... BTC
+    assert qty == pytest.approx(10_000.0 / 60_000.0)
+
+
+@pytest.mark.asyncio
+async def test_equity_fractional_sizing():
+    """Equity sizing is also fractional (Alpaca supports fractional shares)."""
+    rm = RiskManager(runtime_config=_rc({"execution_max_position_pct": 0.001}))
+    approved, reason, qty = await rm.check_entry(
+        _signal(hour_utc=16), _account(equity=100_000.0), [], current_price=420.0,
+    )
+    assert approved is True, reason
+    # $100k * 0.001 / $420 = 0.2380952... shares
+    assert qty == pytest.approx(100.0 / 420.0)
+
+
+@pytest.mark.asyncio
+async def test_entry_rejected_when_notional_below_one_dollar():
+    """Sizing must clear Alpaca's $1 minimum-notional floor."""
+    rm = RiskManager(runtime_config=_rc({"execution_max_position_pct": 0.000001}))
+    approved, reason, qty = await rm.check_entry(
+        _signal(hour_utc=16), _account(equity=100_000.0), [], current_price=420.0,
+    )
+    assert approved is False
+    assert "too small" in reason.lower()
+    assert qty == 0
 
 
 @pytest.mark.asyncio
