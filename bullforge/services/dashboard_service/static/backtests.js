@@ -44,6 +44,17 @@
 
   const state = { status: 'all', q: '', sort: 'finished_at', order: 'desc' };
 
+  // Multi-select state for the delete feature.
+  // Keys are of the form "run:{id}". Jobs are never added (disabled).
+  const selection = new Set();
+  let lastCheckedBox = null;  // most recently clicked checkbox (for Shift-range, Task 5)
+
+  function selectionKey(kind, id) { return kind + ':' + id; }
+
+  // Stub until Task 6 wires the action bar. Real implementation updates
+  // the 'Delete selected (N)' button visibility and count.
+  function updateActionBar() { /* populated in Task 6 */ }
+
   function fmtPnL(v) {
     if (v === null || v === undefined) return '—';
     const cls = v >= 0 ? 'bt-pos' : 'bt-neg';
@@ -90,6 +101,7 @@
         </div>
         <table class="bt-table">
           <thead><tr>
+            <th class="bt-sel-col"><input type="checkbox" id="bt-select-all" title="Select all on this page"></th>
             <th data-sort="name">Name</th>
             <th>Symbols</th>
             <th>Range</th>
@@ -103,7 +115,7 @@
             <th data-sort="finished_at">Finished</th>
             <th>Runtime</th>
           </tr></thead>
-          <tbody id="bt-rows"><tr><td colspan="12">Loading…</td></tr></tbody>
+          <tbody id="bt-rows"><tr><td colspan="13">Loading…</td></tr></tbody>
         </table>
       </div>
     `;
@@ -149,7 +161,7 @@
       renderRows(data.rows);
     } catch (e) {
       document.getElementById('bt-rows').innerHTML =
-        `<tr><td colspan="10" class="bt-error">Failed to load: ${e.message}</td></tr>`;
+        `<tr><td colspan="13" class="bt-error">Failed to load: ${e.message}</td></tr>`;
     }
   }
 
@@ -365,7 +377,7 @@
     const tbody = document.getElementById('bt-rows');
     if (!rows.length) {
       tbody.innerHTML =
-        '<tr><td colspan="12">No backtests yet. Click New Backtest to start one.</td></tr>';
+        '<tr><td colspan="13">No backtests yet. Click New Backtest to start one.</td></tr>';
       return;
     }
     tbody.innerHTML = rows.map(r => {
@@ -396,7 +408,26 @@
         ? `<span class="bt-status-cancelled">${r.status}</span>`
         : r.status;
       const runtime = fmtBtRuntime(r);
+      const selKey = selectionKey(r.kind, r.id);
+      const isDisabled = r.kind === 'job'
+        || (r.kind === 'run' && r.status === 'running');
+      const isChecked = !isDisabled && selection.has(selKey);
+      const boxTitle = isDisabled
+        ? 'Cancel this backtest first'
+        : 'Select for delete';
+      const checkboxHtml =
+        '<input type="checkbox" class="bt-row-select"' +
+        ' data-sel-key="' + selKey + '"' +
+        ' data-kind="' + r.kind + '"' +
+        ' data-id="' + r.id + '"' +
+        ' data-status="' + (r.status || '') + '"' +
+        (isDisabled ? ' disabled' : '') +
+        (isChecked ? ' checked' : '') +
+        ' title="' + boxTitle + '"' +
+        ' onclick="event.stopPropagation()"' +
+        '>';
       return `<tr class="clickable" onclick="location.hash='${target}'">
+        <td class="bt-sel-col" onclick="event.stopPropagation()">${checkboxHtml}</td>
         <td>${r.name}</td><td>${symsDisplay}</td><td>${range}</td>
         <td>${pnl}</td><td>${sharpe}</td><td>${dd}</td>
         <td>${ntr}</td><td>${hit}</td>
@@ -409,15 +440,33 @@
     if (!tbody.__btCancelDelegated) {
       tbody.addEventListener('click', function (ev) {
         const btn = ev.target && ev.target.closest('.bt-cancel-btn');
-        if (!btn) return;
-        ev.stopPropagation();
-        cancelBacktest({
-          kind: btn.dataset.cancelKind,
-          id: parseInt(btn.dataset.cancelId, 10),
-          name: btn.dataset.cancelName || '',
-        });
+        if (btn) {
+          ev.stopPropagation();
+          cancelBacktest({
+            kind: btn.dataset.cancelKind,
+            id: parseInt(btn.dataset.cancelId, 10),
+            name: btn.dataset.cancelName || '',
+          });
+          return;
+        }
+        const box = ev.target && ev.target.matches('.bt-row-select') ? ev.target : null;
+        if (box && !box.disabled) {
+          const key = box.dataset.selKey;
+          if (box.checked) selection.add(key);
+          else selection.delete(key);
+          lastCheckedBox = box;
+          updateActionBar();  // stub now; replaced in Task 6
+        }
       });
       tbody.__btCancelDelegated = true;
+    }
+
+    // Prune selection keys whose rows are no longer rendered. This keeps
+    // the selection set bounded and handles rows that vanish between polls
+    // (e.g., deleted by another tab).
+    const visibleKeys = new Set(rows.map(r => selectionKey(r.kind, r.id)));
+    for (const key of Array.from(selection)) {
+      if (!visibleKeys.has(key)) selection.delete(key);
     }
   }
 

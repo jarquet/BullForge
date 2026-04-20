@@ -110,3 +110,15 @@
   font-weight: 600;
 }
 .bt-running-runtime { color: var(--text-muted); font-style: italic; }
+.bt-table th.bt-sel-col,
+.bt-table td.bt-sel-col {
+  width: 28px;
+  text-align: center;
+  cursor: default;
+}
+.bt-table th.bt-sel-col { cursor: default; }
+.bt-table .bt-row-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+.bt-table .bt-row-select { cursor: pointer; }
