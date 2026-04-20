@@ -17,12 +17,18 @@ UTC = timezone.utc
 async def db():
     d = Database(Settings())
     await d.connect()
-    # Isolate: clear queue so claim_next is deterministic across runs.
+    # Isolate: clear queue so claim_next is deterministic, and scrub any
+    # _seed_run leftovers so they don't accumulate as 'running' rows in the
+    # live backtests list. Scoped DELETE on backtest_runs (not TRUNCATE
+    # CASCADE) because runtime_config_audit.source_backtest_run_id is FK-
+    # linked and CASCADE would wipe the whole audit log on a dev DB.
     async with d.pool.acquire() as conn:
         await conn.execute("TRUNCATE TABLE backtest_jobs RESTART IDENTITY CASCADE")
+        await conn.execute("DELETE FROM backtest_runs WHERE name = 'jobs-db-test-run'")
     yield d
     async with d.pool.acquire() as conn:
         await conn.execute("TRUNCATE TABLE backtest_jobs RESTART IDENTITY CASCADE")
+        await conn.execute("DELETE FROM backtest_runs WHERE name = 'jobs-db-test-run'")
     await d.disconnect()
 
 
