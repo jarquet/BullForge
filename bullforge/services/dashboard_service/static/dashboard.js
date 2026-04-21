@@ -230,7 +230,9 @@ async function loadTrades() {
             '<td>' + t.symbol + '</td>' +
             '<td>' + t.side + '</td>' +
             '<td>' + fmtMoney(t.entry_price) + '</td>' +
+            '<td>' + fmtTradeTime(t.entry_time, t.symbol) + '</td>' +
             '<td>' + fmtMoney(t.exit_price) + '</td>' +
+            '<td>' + fmtTradeTime(t.exit_time, t.symbol) + '</td>' +
             '<td>' + fmt(t.quantity, 1) + '</td>' +
             '<td class="' + pnlClass + '">' + fmtMoney(t.pnl) + '</td>' +
             '<td>' + fmtDuration(t.hold_duration_seconds) + '</td>' +
