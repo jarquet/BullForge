@@ -34,13 +34,13 @@
 
   const barsTb = document.querySelector("#freshness-bars tbody");
   barsTb.innerHTML = body.bars.map(b =>
-    `<tr><td>${b.symbol}</td><td>${fmtTime(b.last_bar)}</td><td>${ageStr(b.age_seconds)}</td>` +
+    `<tr class="${b.disabled ? "row-disabled" : ""}"><td>${b.symbol}</td><td>${fmtTime(b.last_bar)}</td><td>${ageStr(b.age_seconds)}</td>` +
     `<td><span class="status-cell ${b.color}">${b.color}</span></td></tr>`
   ).join("");
 
   const featTb = document.querySelector("#freshness-features tbody");
   featTb.innerHTML = body.features.map(f =>
-    `<tr><td>${f.symbol}</td><td>${fmtTime(f.last_feature)}</td><td>${ageStr(f.age_seconds)}</td>` +
+    `<tr class="${f.disabled ? "row-disabled" : ""}"><td>${f.symbol}</td><td>${fmtTime(f.last_feature)}</td><td>${ageStr(f.age_seconds)}</td>` +
     `<td><span class="status-cell ${f.color}">${f.color}</span></td></tr>`
   ).join("");
 

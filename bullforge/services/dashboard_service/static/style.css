@@ -144,6 +144,18 @@ nav {
 .status-cell.warned { background: rgba(243, 156, 18, 0.2); color: var(--yellow); }
 .status-cell.disabled { background: rgba(231, 76, 60, 0.2); color: var(--red); }
 
+#freshness-bars .status-cell.green,
+#freshness-features .status-cell.green { background: rgba(46, 204, 113, 0.2); color: var(--green); }
+#freshness-bars .status-cell.yellow,
+#freshness-features .status-cell.yellow { background: rgba(243, 156, 18, 0.2); color: var(--yellow); }
+#freshness-bars .status-cell.red,
+#freshness-features .status-cell.red { background: rgba(231, 76, 60, 0.2); color: var(--red); }
+#freshness-bars .status-cell.disabled,
+#freshness-features .status-cell.disabled { background: rgba(136, 136, 136, 0.18); color: var(--text-muted); }
+
+#freshness-bars tr.row-disabled td,
+#freshness-features tr.row-disabled td { opacity: 0.5; }
+
 .halt-list .halt-item {
     background: rgba(231, 76, 60, 0.1);
     border: 1px solid var(--red);
