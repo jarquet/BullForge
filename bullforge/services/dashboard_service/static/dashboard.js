@@ -98,6 +98,35 @@ function fmtTime(iso) {
     return '<time datetime="' + utc + '" title="UTC: ' + utc + '">' + local + '</time>';
 }
 
+function fmtTradeTime(iso, symbol) {
+    if (!iso) return '--';
+    var hasTz = /[zZ]|[+-]\d\d:?\d\d$/.test(iso);
+    var d = new Date(hasTz ? iso : iso + 'Z');
+    if (isNaN(d.getTime())) return '--';
+    var pad = function (n) { return String(n).padStart(2, '0'); };
+    var utc = d.toISOString().replace(/\.\d+Z$/, 'Z');
+    var text, title;
+
+    if (symbol && symbol.indexOf('/') !== -1) {
+        // Crypto — render in UTC
+        text = d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate()) +
+               ' ' + pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds());
+        title = 'UTC';
+    } else {
+        // Equity — render in America/New_York (handles EST/EDT automatically)
+        var parts = new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'America/New_York',
+            year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit', second: '2-digit',
+            hour12: false
+        }).formatToParts(d).reduce(function (acc, p) { acc[p.type] = p.value; return acc; }, {});
+        text = parts.year + '-' + parts.month + '-' + parts.day +
+               ' ' + parts.hour + ':' + parts.minute + ':' + parts.second;
+        title = 'ET (UTC: ' + utc + ')';
+    }
+    return '<time datetime="' + utc + '" title="' + title + '">' + text + '</time>';
+}
+
 function setPnlClass(el, value) {
     el.classList.remove('positive', 'negative');
     if (value > 0) el.classList.add('positive');
