@@ -108,12 +108,12 @@ function fmtTradeTime(iso, symbol) {
     var text, title;
 
     if (symbol && symbol.indexOf('/') !== -1) {
-        // Crypto — render in UTC
+        // Crypto â€” render in UTC
         text = d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate()) +
                ' ' + pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds());
         title = 'UTC';
     } else {
-        // Equity — render in America/New_York (handles EST/EDT automatically)
+        // Equity â€” render in America/New_York (handles EST/EDT automatically)
         var parts = new Intl.DateTimeFormat('en-CA', {
             timeZone: 'America/New_York',
             year: 'numeric', month: '2-digit', day: '2-digit',
