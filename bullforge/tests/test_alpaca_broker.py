@@ -30,6 +30,7 @@ def broker(mock_settings, mock_client):
 async def test_get_account(broker, mock_client):
     mock_account = MagicMock()
     mock_account.equity = "100000.00"
+    mock_account.last_equity = "99500.00"
     mock_account.buying_power = "200000.00"
     mock_account.cash = "100000.00"
     mock_account.portfolio_value = "100000.00"
@@ -38,6 +39,7 @@ async def test_get_account(broker, mock_client):
     result = await broker.get_account()
 
     assert result["equity"] == 100000.0
+    assert result["last_equity"] == 99500.0
     assert result["buying_power"] == 200000.0
     assert result["cash"] == 100000.0
     assert result["portfolio_value"] == 100000.0
