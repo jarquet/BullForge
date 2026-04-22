@@ -1,9 +1,26 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import List, Tuple
 
 # Button layout type: list of rows, each row is list of (label, callback_data)
 ButtonLayout = List[List[Tuple[str, str]]]
+
+
+def _format_signed_money(value: float) -> str:
+    sign = "+" if value >= 0 else "-"
+    return f"{sign}${abs(value):,.2f}"
+
+
+def _format_duration(seconds: int) -> str:
+    seconds = max(0, int(seconds))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h {m}m {s}s"
+    if m:
+        return f"{m}m {s}s"
+    return f"{s}s"
 
 
 def format_alert(alert: dict) -> Tuple[str, ButtonLayout]:
@@ -55,6 +72,58 @@ def format_alert(alert: dict) -> Tuple[str, ButtonLayout]:
         buttons = [
             [("Acknowledge", "ack")],
         ]
+
+    elif alert_type == "position_closed":
+        symbol = alert.get("symbol", "?")
+        side = alert.get("side", "?")
+        qty = float(alert.get("quantity") or 0.0)
+        entry_time = alert.get("entry_time") or "--"
+        exit_time = alert.get("exit_time") or "--"
+        entry_price = float(alert.get("entry_price") or 0.0)
+        exit_price = float(alert.get("exit_price") or 0.0)
+        pnl = float(alert.get("pnl") or 0.0)
+        pnl_pct = float(alert.get("pnl_pct") or 0.0) * 100.0
+        hold_s = int(alert.get("hold_duration_seconds") or 0)
+        account = alert.get("account") or {}
+
+        lines = [
+            f"[TRADE CLOSED] {symbol} {side}",
+            f"Entry: {entry_time} UTC @ ${entry_price:,.2f}",
+            f"Exit:  {exit_time} UTC @ ${exit_price:,.2f}",
+            f"Qty:   {qty:g}",
+            f"P&L:   {_format_signed_money(pnl)} ({pnl_pct:+.2f}%)",
+            f"Hold:  {_format_duration(hold_s)}",
+        ]
+
+        if account:
+            equity = float(account.get("equity") or 0.0)
+            day_pnl = float(account.get("day_pnl") or 0.0)
+            day_pnl_pct = float(account.get("day_pnl_pct") or 0.0) * 100.0
+            day_trades = int(account.get("day_trades") or 0)
+            day_wins = int(account.get("day_wins") or 0)
+            day_losses = int(account.get("day_losses") or 0)
+            day_realized = float(account.get("day_realized_pnl") or 0.0)
+
+            lines.append("")
+            lines.append("Account (today, UTC)")
+            lines.append(
+                f"Equity:     ${equity:,.2f}   "
+                f"({_format_signed_money(day_pnl)}, {day_pnl_pct:+.2f}%)"
+            )
+            if day_trades > 0:
+                plural = "trade" if day_trades == 1 else "trades"
+                lines.append(
+                    f"Realized:   {_format_signed_money(day_realized)} "
+                    f"on {day_trades} {plural}"
+                )
+            if day_wins + day_losses > 0:
+                rate = float(account.get("day_win_rate") or 0.0) * 100.0
+                lines.append(
+                    f"Win rate:   {rate:.1f}% ({day_wins}W / {day_losses}L)"
+                )
+
+        text = "\n".join(lines)
+        buttons = []
 
     else:
         text = f"[INFO] {reason}"
@@ -109,9 +178,6 @@ def format_status(
             lines.append(f"  Tier {h['tier']}: {h['reason']}")
 
     return "\n".join(lines)
-
-
-from datetime import datetime, timezone
 
 
 def format_positions(positions: list[dict]) -> str:
