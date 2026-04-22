@@ -52,7 +52,7 @@ async def main() -> None:
     aggregator = SignalAggregator(runtime_config=runtime_config)
     risk_manager = RiskManager(runtime_config=runtime_config)
     position_tracker = PositionTracker(broker)
-    core = ReconcilerCore(db=db, redis_client=redis_client)
+    core = ReconcilerCore(db=db, redis_client=redis_client, broker=broker)
     executor = OrderExecutor(
         broker=broker,
         risk_manager=risk_manager,

@@ -55,6 +55,7 @@ class AlpacaBroker:
         account = self._client.get_account()
         return {
             "equity": float(account.equity),
+            "last_equity": float(account.last_equity),
             "buying_power": float(account.buying_power),
             "cash": float(account.cash),
             "portfolio_value": float(account.portfolio_value),
