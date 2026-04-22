@@ -32,6 +32,11 @@ from services.monitoring_service.telegram_alerts import (
 logger = logging.getLogger(__name__)
 
 
+# Alert types whose publication on `monitoring:alerts` should NOT result in
+# a Telegram message. They remain on the Redis channel for other consumers.
+TELEGRAM_SUPPRESSED_ALERT_TYPES = frozenset({"model_warned", "model_disabled"})
+
+
 HELP_TEXT = (
     "BullForge commands:\n"
     "/help — this list\n"
@@ -113,6 +118,13 @@ class TelegramBot:
     async def _on_alert(self, message: str) -> None:
         try:
             alert = json.loads(message)
+            alert_type = alert.get("type")
+            if alert_type in TELEGRAM_SUPPRESSED_ALERT_TYPES:
+                logger.debug(
+                    "Suppressed Telegram delivery for alert type %s",
+                    alert_type,
+                )
+                return
             await self.send_alert(alert)
         except Exception:
             logger.exception("Failed to process alert for Telegram")

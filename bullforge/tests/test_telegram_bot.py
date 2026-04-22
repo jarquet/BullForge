@@ -85,11 +85,23 @@ async def test_send_alert(bot):
 
 
 @pytest.mark.asyncio
-async def test_on_alert_from_redis(bot):
-    alert = {"tier": 2, "type": "model_disabled", "model_id": 3, "reason": "Critical"}
-
+async def test_on_alert_suppresses_model_warned(bot):
+    alert = {"tier": 1, "type": "model_warned", "model_id": 3, "reason": "x"}
     await bot._on_alert(json.dumps(alert))
+    bot._bot.send_message.assert_not_called()
 
+
+@pytest.mark.asyncio
+async def test_on_alert_suppresses_model_disabled(bot):
+    alert = {"tier": 2, "type": "model_disabled", "model_id": 3, "reason": "x"}
+    await bot._on_alert(json.dumps(alert))
+    bot._bot.send_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_on_alert_delivers_non_suppressed_type(bot):
+    alert = {"tier": 3, "type": "direction_halt", "reason": "half down"}
+    await bot._on_alert(json.dumps(alert))
     bot._bot.send_message.assert_called_once()
 
 
