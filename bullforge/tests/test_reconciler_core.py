@@ -270,3 +270,99 @@ async def test_anomaly_does_not_also_emit_events_total(core, mock_db, mock_redis
     counters = _monitoring_calls(mock_redis)
     events = [c for c in counters if c["counter"] == "reconciler_events_total"]
     assert len(events) == 0
+
+
+# ---------------------------------------------------------------------------
+# position_closed alert tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_broker():
+    b = AsyncMock()
+    b.get_account = AsyncMock(return_value={
+        "equity": 101_000.0, "last_equity": 100_000.0,
+    })
+    return b
+
+
+def _alert_payloads(mock_redis, channel):
+    return [
+        json.loads(call.args[1])
+        for call in mock_redis.publish.await_args_list
+        if call.args[0] == channel
+    ]
+
+
+@pytest.mark.asyncio
+async def test_closing_fill_publishes_position_closed(
+    mock_db, mock_redis, mock_broker,
+):
+    core = ReconcilerCore(
+        db=mock_db, redis_client=mock_redis, broker=mock_broker,
+    )
+    open_trade = Trade(
+        id=42, symbol="SPY", side="long",
+        entry_time=datetime(2026, 4, 22, 13, 0, tzinfo=timezone.utc),
+        entry_price=100.0, quantity=2.0, entry_order_id=1,
+    )
+    mock_db.get_open_trade.return_value = open_trade
+    mock_db.query_closed_trades.return_value = []
+    mock_db.upsert_order_from_alpaca.return_value = UpsertResult(
+        order=_order(status="filled", side="sell", filled_price=105.0),
+        old_status="submitted", new_status="filled", inserted=False,
+    )
+    snap = _snapshot(status="filled", side="sell")
+    snap["filled_avg_price"] = 105.0
+
+    await core.apply_alpaca_order(snap, source="stream")
+
+    alerts = _alert_payloads(mock_redis, "monitoring:alerts")
+    assert len(alerts) == 1
+    a = alerts[0]
+    assert a["type"] == "position_closed"
+    assert a["symbol"] == "SPY"
+    assert a["side"] == "long"
+    assert a["quantity"] == 2.0
+    assert a["entry_price"] == 100.0
+    assert a["exit_price"] == 105.0
+    assert a["pnl"] == pytest.approx(10.0)
+    assert a["pnl_pct"] == pytest.approx(10.0 / (100.0 * 2.0))
+    assert a["trade_id"] == 42
+    assert a["account"]["equity"] == 101_000.0
+    assert a["account"]["day_pnl"] == pytest.approx(1_000.0)
+
+
+@pytest.mark.asyncio
+async def test_opening_fill_does_not_publish_position_closed(
+    mock_db, mock_redis, mock_broker,
+):
+    core = ReconcilerCore(
+        db=mock_db, redis_client=mock_redis, broker=mock_broker,
+    )
+    mock_db.get_open_trade.return_value = None
+    mock_db.upsert_order_from_alpaca.return_value = _upsert_result(
+        old_status="submitted", new_status="filled",
+    )
+    await core.apply_alpaca_order(_snapshot(status="filled"), source="stream")
+    assert _alert_payloads(mock_redis, "monitoring:alerts") == []
+
+
+@pytest.mark.asyncio
+async def test_closing_fill_without_broker_skips_alert(mock_db, mock_redis):
+    core = ReconcilerCore(db=mock_db, redis_client=mock_redis, broker=None)
+    open_trade = Trade(
+        id=1, symbol="SPY", side="long",
+        entry_time=datetime(2026, 4, 22, 13, 0, tzinfo=timezone.utc),
+        entry_price=100.0, quantity=1.0, entry_order_id=1,
+    )
+    mock_db.get_open_trade.return_value = open_trade
+    mock_db.upsert_order_from_alpaca.return_value = UpsertResult(
+        order=_order(status="filled", side="sell", filled_price=101.0),
+        old_status="submitted", new_status="filled", inserted=False,
+    )
+    snap = _snapshot(status="filled", side="sell")
+    snap["filled_avg_price"] = 101.0
+
+    await core.apply_alpaca_order(snap, source="stream")
+    assert _alert_payloads(mock_redis, "monitoring:alerts") == []

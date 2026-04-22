@@ -2,22 +2,26 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from shared.db import Database
 from shared.models import Order, Trade
+from services.execution_service.day_stats import compute_day_stats
 
 logger = logging.getLogger(__name__)
 
 TERMINAL_STATUSES = {"filled", "cancelled", "rejected", "expired"}
 
 _MONITORING_CHANNEL = "monitoring:reconciler"
+_ALERTS_CHANNEL = "monitoring:alerts"
 
 
 class ReconcilerCore:
-    def __init__(self, db: Database, redis_client=None):
+    def __init__(self, db: Database, redis_client=None, broker=None):
         self._db = db
         self._redis = redis_client
+        self._broker = broker
 
     async def _publish_counter(self, name: str, **labels) -> None:
         if self._redis is None:
@@ -110,6 +114,12 @@ class ReconcilerCore:
                 pnl=pnl,
                 hold_duration_seconds=hold_secs,
             )
+            await self._publish_position_closed(
+                open_trade=open_trade,
+                order=order,
+                pnl=pnl,
+                hold_duration_seconds=hold_secs,
+            )
         else:
             trade_side = "long" if order.side == "buy" else "short"
             trade = Trade(
@@ -135,3 +145,49 @@ class ReconcilerCore:
             "origin": order.origin,
         })
         await self._redis.publish(channel, payload)
+
+    async def _publish_position_closed(
+        self,
+        *,
+        open_trade: Trade,
+        order: Order,
+        pnl: float,
+        hold_duration_seconds: int,
+    ) -> None:
+        if self._redis is None or self._broker is None:
+            return
+        try:
+            day = await compute_day_stats(
+                self._db, self._broker, datetime.now(timezone.utc),
+            )
+            notional = open_trade.entry_price * open_trade.quantity
+            pnl_pct = (pnl / notional) if notional else 0.0
+            payload = {
+                "type": "position_closed",
+                "tier": 0,
+                "trade_id": open_trade.id,
+                "symbol": open_trade.symbol,
+                "side": open_trade.side,
+                "quantity": float(open_trade.quantity),
+                "entry_time": _iso(open_trade.entry_time),
+                "entry_price": float(open_trade.entry_price),
+                "exit_time": _iso(order.filled_at),
+                "exit_price": float(order.filled_price),
+                "pnl": float(pnl),
+                "pnl_pct": float(pnl_pct),
+                "hold_duration_seconds": int(hold_duration_seconds),
+                "account": day,
+            }
+            await self._redis.publish(_ALERTS_CHANNEL, json.dumps(payload))
+        except Exception:
+            logger.exception("Failed to publish position_closed alert")
+
+
+def _iso(dt: Optional[datetime]) -> Optional[str]:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
