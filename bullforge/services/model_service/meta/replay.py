@@ -19,7 +19,9 @@ class PairSimulator:
     """Walks bars forward from `entry_idx`, returns first-touch outcome.
 
     Stop wins on same-bar collisions (conservative; matches typical
-    intra-bar stop-fill behavior).
+    intra-bar stop-fill behavior). Returns idealized fills (±target_pct /
+    −stop_pct) regardless of intra-bar gap-through; gap-through slippage
+    is not modeled.
     """
 
     def simulate(
@@ -32,6 +34,11 @@ class PairSimulator:
         stop_pct: float,
         max_hold_bars: int,
     ) -> SimResult:
+        if direction not in (1, -1):
+            raise ValueError(
+                f"direction must be 1 (long) or -1 (short); got {direction!r}"
+            )
+
         if entry_idx + 1 >= len(bars):
             return SimResult(False, False, entry_idx, 0.0)
 
@@ -39,7 +46,7 @@ class PairSimulator:
         if direction == 1:
             target_price = entry_price * (1.0 + target_pct)
             stop_price = entry_price * (1.0 - stop_pct)
-        else:
+        elif direction == -1:
             target_price = entry_price * (1.0 - target_pct)
             stop_price = entry_price * (1.0 + stop_pct)
 

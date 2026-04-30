@@ -95,6 +95,13 @@ class TestPairSimulator:
         assert res.realized_return == 0.0
         assert res.exit_idx == 0
 
+    def test_invalid_direction_raises(self):
+        bars = _bar_df([100, 101, 101], highs=[100.2, 101.5, 101.5], lows=[99.8, 100.5, 100.5])
+        sim = PairSimulator()
+        with pytest.raises(ValueError, match="direction"):
+            sim.simulate(bars, entry_idx=0, direction=0,
+                         target_pct=0.01, stop_pct=0.005, max_hold_bars=10)
+
 
 def test_compute_atr_pct():
     # ATR-14 needs at least 15 bars of high/low/close
