@@ -2637,25 +2637,42 @@ class Database:
                 row.realized_ev, row.source,
             )
 
-    async def insert_meta_features_batch(self, rows: list[MetaFeatureRow]) -> None:
+    async def insert_meta_features_batch(
+        self,
+        rows: list[MetaFeatureRow],
+        *,
+        on_conflict: str = "upsert",
+    ) -> None:
+        """`on_conflict='upsert'` overwrites; `'skip'` keeps existing rows."""
         if not rows:
             return
+        if on_conflict == "skip":
+            conflict_clause = "ON CONFLICT (symbol, timestamp, direction) DO NOTHING"
+        elif on_conflict == "upsert":
+            conflict_clause = (
+                "ON CONFLICT (symbol, timestamp, direction) DO UPDATE SET "
+                "feature_vector = EXCLUDED.feature_vector, "
+                "entry_label = EXCLUDED.entry_label, "
+                "optimal_pair_idx = EXCLUDED.optimal_pair_idx, "
+                "realized_ev = EXCLUDED.realized_ev, "
+                "source = EXCLUDED.source"
+            )
+        else:
+            raise ValueError(f"unknown on_conflict mode: {on_conflict!r}")
+
         async with self.pool.acquire() as conn:
             await conn.executemany(
-                """
+                f"""
                 INSERT INTO meta_features
                     (symbol, timestamp, direction, feature_vector,
                      entry_label, optimal_pair_idx, realized_ev, source)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                ON CONFLICT (symbol, timestamp, direction) DO UPDATE SET
-                    feature_vector = EXCLUDED.feature_vector,
-                    entry_label = EXCLUDED.entry_label,
-                    optimal_pair_idx = EXCLUDED.optimal_pair_idx,
-                    realized_ev = EXCLUDED.realized_ev,
-                    source = EXCLUDED.source
+                {conflict_clause}
                 """,
-                [(r.symbol, r.timestamp, r.direction, json.dumps(r.feature_vector),
-                  r.entry_label, r.optimal_pair_idx, r.realized_ev, r.source) for r in rows],
+                [(r.symbol, r.timestamp, r.direction,
+                  json.dumps(r.feature_vector),
+                  r.entry_label, r.optimal_pair_idx, r.realized_ev, r.source)
+                 for r in rows],
             )
 
     async def query_meta_features(
@@ -2691,6 +2708,56 @@ class Database:
             return await conn.fetchval(
                 "SELECT COUNT(*) FROM meta_features WHERE symbol = $1 AND direction = $2",
                 symbol, direction,
+            )
+
+    async def query_unlabeled_meta_features(
+        self, *, older_than: datetime, limit: int = 5000,
+    ) -> list[MetaFeatureRow]:
+        """Live rows older than `older_than` with NULL labels.
+
+        Used by MetaLabelBackfiller. Returns at most `limit` rows ordered by
+        timestamp ASC so the oldest get labeled first.
+        """
+        async with self.pool.acquire() as conn:
+            recs = await conn.fetch(
+                """
+                SELECT symbol, timestamp, direction, feature_vector,
+                       entry_label, optimal_pair_idx, realized_ev, source
+                FROM meta_features
+                WHERE source = 'live'
+                  AND entry_label IS NULL
+                  AND timestamp <= $1
+                ORDER BY timestamp ASC
+                LIMIT $2
+                """,
+                older_than, limit,
+            )
+        return [
+            MetaFeatureRow(
+                symbol=r["symbol"], timestamp=r["timestamp"],
+                direction=r["direction"],
+                feature_vector=json.loads(r["feature_vector"]),
+                source=r["source"], entry_label=r["entry_label"],
+                optimal_pair_idx=r["optimal_pair_idx"],
+                realized_ev=r["realized_ev"],
+            ) for r in recs
+        ]
+
+    async def update_meta_feature_labels(
+        self, *, symbol: str, timestamp: datetime, direction: int,
+        entry_label: int, optimal_pair_idx: int, realized_ev: float,
+    ) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE meta_features
+                SET entry_label = $4,
+                    optimal_pair_idx = $5,
+                    realized_ev = $6
+                WHERE symbol = $1 AND timestamp = $2 AND direction = $3
+                """,
+                symbol, timestamp, direction,
+                entry_label, optimal_pair_idx, realized_ev,
             )
 
     # ── Meta-signal shadow methods ────────────────────────────────
