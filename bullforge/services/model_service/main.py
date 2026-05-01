@@ -7,6 +7,7 @@ import signal
 from datetime import datetime, timezone
 
 from aiohttp import web
+import pandas as pd
 
 from shared.config import Settings
 from shared.db import Database
@@ -17,6 +18,8 @@ from services.model_service.trainer import Trainer
 from services.model_service.inference import InferenceEngine
 from services.model_service.health import create_health_app
 from services.model_service.scheduler import RetrainScheduler
+from services.model_service.meta.label_backfill import MetaLabelBackfiller
+from services.model_service.meta.regime import RegimeBuilder
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,6 +27,87 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%SZ",
 )
 logger = logging.getLogger("model_service")
+
+
+def on_feature_update_factory(
+    *, inference, redis, runtime_config, db, regime_builder,
+):
+    """Build the feature-update handler with meta-shadow path bolted on."""
+    async def on_feature_update(message: str) -> None:
+        data = json.loads(message)
+        symbol = data["symbol"]
+        timeframe = data["timeframe"]
+        logger.debug("Feature update for %s %s, running inference", symbol, timeframe)
+
+        predictions = await inference.predict(symbol, timeframe)
+        if not predictions:
+            return
+
+        await db.insert_predictions(predictions)
+        await redis.publish(
+            "model:predictions",
+            json.dumps({
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "predictions": [
+                    {
+                        "horizon_minutes": p.horizon_minutes,
+                        "direction": p.predicted_direction,
+                        "confidence": p.confidence,
+                        "model_id": p.model_id,
+                    }
+                    for p in predictions
+                ],
+            }),
+        )
+        logger.info(
+            "Published %d predictions for %s %s",
+            len(predictions), symbol, timeframe,
+        )
+
+        # Meta-shadow path
+        if not await runtime_config.get("meta_inference_enabled"):
+            return
+        try:
+            latest = await db.query_feature_rows(symbol, timeframe, limit=1)
+            if not latest:
+                return
+            fr = latest[0]
+            atr_14 = float(fr.features.get("atr_14") or 0.0)
+            # close price isn't carried on the feature row; sma_20 is a
+            # close-tracking stand-in for the ATR% scaling. Acceptable for
+            # Phase 1 shadow mode.
+            close = float(fr.features.get("sma_20") or 0.0)
+            atr_pct = (atr_14 / close) if close > 0 else 0.0
+            symbol_state = {
+                "realized_vol": fr.features.get("realized_vol", 0.02),
+                "atr_price_ratio": atr_pct,
+                "dist_sma_50": fr.features.get("dist_sma_50", 0.0),
+                "dist_sma_200bar": fr.features.get("dist_sma_200", 0.0),
+                "dist_sma_200day": fr.features.get("dist_sma_200d", 0.0),
+            }
+            regime = regime_builder.regime_at(fr.timestamp)
+            signals = await inference.predict_meta(
+                symbol=symbol, timeframe=timeframe,
+                base_predictions=[
+                    {"model_id": p.model_id, "direction": p.predicted_direction,
+                     "confidence": p.confidence}
+                    for p in predictions
+                ],
+                regime=regime, symbol_state=symbol_state,
+                timestamp=fr.timestamp,
+            )
+            if signals:
+                payload = {
+                    "symbol": symbol, "timeframe": timeframe,
+                    "timestamp": fr.timestamp.isoformat(),
+                    "feature_vector": {},
+                    "signals": signals,
+                }
+                await redis.publish("model:meta_signals", json.dumps(payload))
+        except Exception:
+            logger.exception("Meta inference path failed")
+    return on_feature_update
 
 
 async def main() -> None:
@@ -124,39 +208,49 @@ async def main() -> None:
     scheduler_task = asyncio.create_task(scheduler.run_forever())
     logger.info("Retrain scheduler started")
 
-    # Subscribe to feature updates for reactive inference
-    async def on_feature_update(message: str) -> None:
-        data = json.loads(message)
-        symbol = data["symbol"]
-        timeframe = data["timeframe"]
-        logger.debug("Feature update for %s %s, running inference", symbol, timeframe)
+    # Pre-load SPY bars once at startup for the live regime builder.
+    spy_recs = await db.query_bars("SPY", "1m", limit=200000)
+    if spy_recs:
+        spy_df = pd.DataFrame([
+            {"timestamp": b.timestamp, "close": b.close} for b in spy_recs
+        ]).set_index("timestamp")
+    else:
+        spy_df = pd.DataFrame(columns=["close"])
+    regime_builder = RegimeBuilder(
+        spy_bars=spy_df,
+        max_staleness_hours=int(
+            await runtime_config.get("meta_regime_max_staleness_hours")
+        ),
+    )
 
-        predictions = await inference_engine.predict(symbol, timeframe)
-        if predictions:
-            await db.insert_predictions(predictions)
-            await redis_client.publish(
-                "model:predictions",
-                json.dumps({
-                    "symbol": symbol,
-                    "timeframe": timeframe,
-                    "predictions": [
-                        {
-                            "horizon_minutes": p.horizon_minutes,
-                            "direction": p.predicted_direction,
-                            "confidence": p.confidence,
-                            "model_id": p.model_id,
-                        }
-                        for p in predictions
-                    ],
-                }),
-            )
-            logger.info(
-                "Published %d predictions for %s %s",
-                len(predictions), symbol, timeframe,
-            )
+    # Load any active meta-models registered by previous nightly cycles.
+    await inference_engine.load_meta_models()
+    # Wire the inference engine's pair grid + stats TTL from RuntimeConfig.
+    inference_engine._pair_grid = await runtime_config.get("meta_pair_grid")
+    inference_engine._meta_stats_ttl_s = float(
+        await runtime_config.get("meta_rolling_stats_ttl_seconds")
+    )
 
+    on_feature_update = on_feature_update_factory(
+        inference=inference_engine, redis=redis_client,
+        runtime_config=runtime_config, db=db,
+        regime_builder=regime_builder,
+    )
     await redis_client.subscribe("feature:updates", on_feature_update)
     logger.info("Subscribed to feature:updates for reactive inference")
+
+    # Start the meta label-backfiller as a background task.
+    backfill_interval_s = int(
+        await runtime_config.get("meta_label_backfill_interval_minutes")
+    ) * 60
+    pair_grid = await runtime_config.get("meta_pair_grid")
+    max_hold_min = int(await runtime_config.get("meta_max_hold_minutes"))
+    backfiller = MetaLabelBackfiller(
+        db=db, max_hold_minutes=max_hold_min, pair_grid=pair_grid,
+        interval_seconds=float(backfill_interval_s),
+    )
+    backfiller_task = asyncio.create_task(backfiller.run_forever())
+    logger.info("MetaLabelBackfiller started (interval=%ds)", backfill_interval_s)
 
     # Start health check server
     health_app = create_health_app(db, redis_client, inference_engine)
@@ -192,6 +286,12 @@ async def main() -> None:
         scheduler_task.cancel()
         try:
             await scheduler_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        backfiller.stop()
+        backfiller_task.cancel()
+        try:
+            await backfiller_task
         except (asyncio.CancelledError, Exception):
             pass
         await runner.cleanup()

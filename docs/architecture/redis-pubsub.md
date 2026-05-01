@@ -9,6 +9,7 @@ All channels flow through the shared `RedisClient` in [bullforge/shared/redis.py
 | Channel | Publisher(s) | Subscriber(s) | Payload | Purpose |
 |---|---|---|---|---|
 | `model:predictions` | `services/model_service/main.py` | `services/execution_service/main.py` (`on_prediction`) | `{symbol, timeframe, predictions: [...]}` | Per-model predictions fan out to execution for signal aggregation. |
+| `model:meta_signals` | `services/model_service/main.py` | `services/execution_service/main.py` (`MetaShadowWriter`) | `{symbol, timeframe, timestamp, feature_vector, signals: [{direction, estimator_type, model_id, entry_probability, kelly_fraction, pair_index, target_pct, stop_pct}]}` | Meta-model shadow decisions per prediction event. Phase 1: log only, never gates execution. |
 | `models:status` | `services/monitoring_service/halt_manager.py` | `services/execution_service/main.py` (`on_model_status`) | `{model_id: "active"|"warned"|"disabled", ...}` or `{"_halt": "full"}` | Model enable/disable state; execution filters signals from disabled models. |
 | `model:retrained` | `services/model_service/scheduler.py` | *(none currently)* | `{as_of, completed_at, ok, errors, skipped, results: [...]}` | Retrain-cycle summary. Consumed by operators via logs; available for future dashboards. |
 | `market:ticks` | `services/data_pipeline/stream.py` | `services/feature_engine/main.py` | Bar payload (symbol, timeframe, timestamp, OHLCV) | Live bar updates trigger reactive feature computation. |
