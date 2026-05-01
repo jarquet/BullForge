@@ -219,6 +219,8 @@ class MetaTrainer:
             auc = float(roc_auc_score(y_test, proba))
         except ValueError:
             auc = 0.5
+        if np.isnan(auc):
+            auc = 0.5  # single-class y_test → roc_auc_score may return NaN
         bins = np.linspace(0, 1, 11)
         cal_err = total = 0.0
         for lo, hi in zip(bins[:-1], bins[1:]):
@@ -226,11 +228,30 @@ class MetaTrainer:
             if mask.sum() == 0: continue
             cal_err += mask.sum() * abs(proba[mask].mean() - y_test.values[mask].mean())
             total += mask.sum()
-        return {"auc": auc, "accuracy": float(accuracy_score(y_test, y_pred)),
-                "calibration_error": float(cal_err / max(total, 1))}
+        cal_err_norm = float(cal_err / max(total, 1))
+        if np.isnan(cal_err_norm):
+            cal_err_norm = 0.0
+        try:
+            acc = float(accuracy_score(y_test, y_pred))
+        except ValueError:
+            acc = 0.0
+        if np.isnan(acc):
+            acc = 0.0
+        return {"auc": auc, "accuracy": acc, "calibration_error": cal_err_norm}
 
     def _evaluate_exec(self, model, X_test, y_kelly_test, y_pair_test) -> dict[str, float]:
         from sklearn.metrics import mean_absolute_error, accuracy_score
         kelly_pred, pair_pred = model.predict(X_test)
-        return {"kelly_mae": float(mean_absolute_error(y_kelly_test, kelly_pred)),
-                "pair_accuracy": float(accuracy_score(y_pair_test, pair_pred))}
+        try:
+            kelly_mae = float(mean_absolute_error(y_kelly_test, kelly_pred))
+        except ValueError:
+            kelly_mae = 0.0
+        if np.isnan(kelly_mae):
+            kelly_mae = 0.0
+        try:
+            pair_acc = float(accuracy_score(y_pair_test, pair_pred))
+        except ValueError:
+            pair_acc = 0.0
+        if np.isnan(pair_acc):
+            pair_acc = 0.0
+        return {"kelly_mae": kelly_mae, "pair_accuracy": pair_acc}

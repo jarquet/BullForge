@@ -148,6 +148,48 @@ async def test_artifact_filename_includes_direction_and_estimator():
     assert "meta_entry" in saved_name
 
 
+def test_evaluate_entry_clamps_nan_to_safe_defaults():
+    """When y_test is single-class, sklearn's roc_auc_score raises ValueError
+    or returns NaN. Either way, the trainer must emit JSON-safe metrics
+    (Postgres JSONB rejects NaN), clamping to chance/zero defaults."""
+    trainer = MetaTrainer(
+        db=_mock_db_for_trainer(), model_store=_mock_store(),
+        sub_model_pairs={"long": [[2, 1]]},
+    )
+    fake_model = MagicMock()
+    fake_model.predict_proba = MagicMock(
+        return_value=np.array([[0.3, 0.7], [0.4, 0.6], [0.2, 0.8]])
+    )
+    X = pd.DataFrame({"f": [0.1, 0.2, 0.3]})
+    y_single_class = pd.Series([1, 1, 1])
+
+    metrics = trainer._evaluate_entry(fake_model, X, y_single_class)
+
+    assert metrics["auc"] == 0.5
+    for k, v in metrics.items():
+        assert not np.isnan(v), f"metric {k} is NaN: {metrics}"
+
+
+def test_evaluate_exec_clamps_nan_to_safe_defaults():
+    """Single-class or empty exec test sets must not produce NaN metrics."""
+    trainer = MetaTrainer(
+        db=_mock_db_for_trainer(), model_store=_mock_store(),
+        sub_model_pairs={"long": [[2, 1]]},
+    )
+    fake_model = MagicMock()
+    fake_model.predict = MagicMock(
+        return_value=(np.array([]), np.array([], dtype=int))
+    )
+    X = pd.DataFrame({"f": []})
+    y_kelly = pd.Series([], dtype=float)
+    y_pair = pd.Series([], dtype=int)
+
+    metrics = trainer._evaluate_exec(fake_model, X, y_kelly, y_pair)
+
+    for k, v in metrics.items():
+        assert not np.isnan(v), f"metric {k} is NaN: {metrics}"
+
+
 def test_model_store_saves_and_loads_calibrated_entry(tmp_path):
     from services.model_service.meta.calibrator import CalibratedEntryEstimator
     from services.model_service.meta.estimators.lightgbm import LightGBMEntryEstimator
