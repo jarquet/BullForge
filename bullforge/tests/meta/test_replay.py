@@ -118,3 +118,78 @@ def test_compute_atr_pct_warmup_returns_nan():
     bars = _bar_df([100] * 5)
     atr_pct = compute_atr_pct(bars, idx=2, period=14)
     assert pd.isna(atr_pct)
+
+
+from unittest.mock import AsyncMock, MagicMock
+from services.model_service.meta.replay import build_replay_rows
+
+
+@pytest.mark.asyncio
+async def test_build_replay_rows_emits_one_row_per_direction():
+    # 60 SPY-like bars, ATR will be defined from idx >= 14
+    bars = _bar_df([100 + 0.05 * i for i in range(60)])
+    # Convert timestamp column to UTC-aware Timestamps for the mock return
+    bars["timestamp"] = pd.to_datetime(bars["timestamp"], utc=True)
+
+    db = AsyncMock()
+    db.query_bars_between.return_value = bars.to_dict("records")
+    db.query_feature_rows.return_value = [
+        MagicMock(symbol="AAPL", timestamp=ts.to_pydatetime(), timeframe="1m",
+                  features={"atr_14": 0.5, "sma_20": 100.0, "realized_vol": 0.02,
+                            "dist_sma_50": 0.0, "dist_sma_200": 0.0,
+                            "dist_sma_200d": 0.0})
+        for ts in bars["timestamp"]
+    ]
+    db.query_predictions_in_range.return_value = [
+        {"model_id": 1, "symbol": "AAPL", "timestamp": ts.to_pydatetime(),
+         "predicted_direction": 1, "confidence": 0.7}
+        for ts in bars["timestamp"]
+    ]
+    db.query_all_active_models.return_value = [
+        MagicMock(id=1, symbol="AAPL", model_type="gradient_boost"),
+    ]
+    db.query_prediction_outcomes.return_value = [
+        {"is_correct": True, "predicted_direction": 1, "confidence": 0.7}
+    ] * 10
+
+    spy_df = pd.DataFrame({"close": [400.0] * 60},
+                          index=pd.to_datetime(bars["timestamp"], utc=True))
+    from services.model_service.meta.regime import RegimeBuilder
+    rb_factory = lambda: RegimeBuilder(spy_bars=spy_df, max_staleness_hours=48)
+
+    rows = await build_replay_rows(
+        db=db, symbol="AAPL", direction=1,
+        as_of=bars["timestamp"].iloc[-1].to_pydatetime(),
+        window_days=1, pair_grid=[[2, 1], [3, 1.5], [4, 2]],
+        max_hold_bars=10, regime_builder_factory=rb_factory,
+    )
+
+    assert len(rows) > 0
+    for r in rows:
+        assert r.symbol == "AAPL"
+        assert r.direction == 1
+        assert r.source == "replay"
+        assert r.entry_label in (0, 1)
+        assert r.optimal_pair_idx in (0, 1, 2)
+
+
+@pytest.mark.asyncio
+async def test_build_replay_rows_returns_empty_when_no_bars():
+    db = AsyncMock()
+    db.query_bars_between.return_value = []
+    db.query_feature_rows.return_value = []
+    db.query_predictions_in_range.return_value = []
+    db.query_all_active_models.return_value = []
+    db.query_prediction_outcomes.return_value = []
+
+    from services.model_service.meta.regime import RegimeBuilder
+    spy_df = pd.DataFrame(columns=["close"])
+    rb_factory = lambda: RegimeBuilder(spy_bars=spy_df, max_staleness_hours=48)
+
+    rows = await build_replay_rows(
+        db=db, symbol="AAPL", direction=1,
+        as_of=datetime(2026, 4, 30, 14, 0, tzinfo=timezone.utc),
+        window_days=1, pair_grid=[[2, 1]], max_hold_bars=10,
+        regime_builder_factory=rb_factory,
+    )
+    assert rows == []

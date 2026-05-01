@@ -853,6 +853,34 @@ class Database:
             for r in rows
         ]
 
+    async def query_predictions_in_range(
+        self,
+        *,
+        symbol: str,
+        timeframe: str,
+        start: datetime,
+        end: datetime,
+    ) -> list[dict]:
+        """Return prediction rows in [start, end) for symbol/timeframe.
+
+        Returns dicts (not Prediction dataclasses) so callers can dict-key
+        them by timestamp. Spans all horizons and all model_ids in range.
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT symbol, timestamp, timeframe, horizon_minutes,
+                       model_id, predicted_direction, confidence
+                FROM predictions
+                WHERE symbol = $1 AND timeframe = $2
+                  AND timestamp >= $3 AND timestamp < $4
+                  AND backtest_run_id IS NULL AND fold_index IS NULL
+                ORDER BY timestamp ASC
+                """,
+                symbol, timeframe, start, end,
+            )
+        return [dict(r) for r in rows]
+
     async def insert_order(
         self,
         order: Order,
