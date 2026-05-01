@@ -1,15 +1,45 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
 from shared.db import Database
 from shared.models import BacktestScope, ModelMetadata, Prediction
+from services.model_service.meta.feature_assembler import MetaFeatureAssembler
 from services.model_service.model_store import ModelStore
 
 logger = logging.getLogger(__name__)
+
+
+_META_DIR_RX = re.compile(r"meta_(entry|exec)_(long|short)_([a-z]+)")
+_DIR_TO_INT = {"long": 1, "short": -1}
+
+
+class _MetaState:
+    """Rolling-stats cache + pair grid for meta inference."""
+    def __init__(self, pair_grid: list[list[float]], ttl_s: float):
+        self.pair_grid = pair_grid
+        self.ttl_s = ttl_s
+        self._cache: dict[int, tuple[float, dict]] = {}
+
+    async def stats_for(self, db, model_id: int, now_s: float) -> dict:
+        cached = self._cache.get(model_id)
+        if cached and now_s - cached[0] < self.ttl_s:
+            return cached[1]
+        outcomes = await db.query_prediction_outcomes(model_id, limit=200)
+        if outcomes:
+            correct = sum(1 for o in outcomes if o["is_correct"])
+            acc = correct / len(outcomes)
+            avg_conf = float(sum(o["confidence"] for o in outcomes)) / len(outcomes)
+            cal_err = abs(avg_conf - acc)
+        else:
+            acc, cal_err = 0.0, 0.0
+        v = {"accuracy": acc, "calibration_error": cal_err, "is_disabled": False}
+        self._cache[model_id] = (now_s, v)
+        return v
 
 
 class InferenceEngine:
@@ -105,3 +135,88 @@ class InferenceEngine:
             ))
 
         return predictions
+
+    async def load_meta_models(self) -> None:
+        active = await self._db.query_all_active_models()
+        meta = [m for m in active if m.model_type in ("meta_entry", "meta_exec")]
+        new: dict[tuple[str, int, str], dict] = {}
+        for m in meta:
+            mtch = _META_DIR_RX.search(m.artifact_path or "")
+            if not mtch:
+                continue
+            kind, dir_label, est = mtch.group(1), mtch.group(2), mtch.group(3)
+            key = (m.symbol, _DIR_TO_INT[dir_label], est)
+            slot = new.setdefault(key, {"entry": None, "exec": None})
+            try:
+                model = self._model_store.load(m.artifact_path)
+            except FileNotFoundError:
+                continue
+            slot[kind] = (model, m)
+        self._meta_models = new
+
+    async def predict_meta(
+        self, *, symbol: str, timeframe: str,
+        base_predictions: list[dict], regime: dict, symbol_state: dict,
+        timestamp,
+    ) -> list[dict]:
+        if not getattr(self, "_meta_models", None):
+            return []
+        from time import time as _now
+        ms = getattr(self, "_meta_state", None) or _MetaState(
+            pair_grid=getattr(self, "_pair_grid", [[2, 1], [3, 1.5], [4, 2]]),
+            ttl_s=getattr(self, "_meta_stats_ttl_s", 600.0),
+        )
+        self._meta_state = ms
+        atr_pct = float(symbol_state.get("atr_price_ratio") or 0.0)
+        if atr_pct <= 0:
+            return []
+
+        # Normalize base predictions: replay/DB rows use "predicted_direction",
+        # in-memory pubsub rows use "direction". Accept either.
+        norm_preds = [
+            {"model_id": p["model_id"],
+             "direction": p.get("direction", p.get("predicted_direction", 0)),
+             "confidence": p["confidence"]}
+            for p in base_predictions
+        ]
+
+        model_ids = sorted({p["model_id"] for p in norm_preds})
+        rolling: dict[int, dict] = {}
+        now_s = _now()
+        for mid in model_ids:
+            rolling[mid] = await ms.stats_for(self._db, mid, now_s)
+        assembler = MetaFeatureAssembler(model_ids=model_ids)
+        feature_vec = assembler.assemble(
+            predictions=norm_preds, rolling_stats=rolling,
+            regime=regime, symbol_state=symbol_state, timestamp=timestamp,
+        )
+        X = pd.DataFrame([feature_vec])
+
+        signals: list[dict] = []
+        for (sym, direction, est), slot in self._meta_models.items():
+            if sym != symbol:
+                continue
+            entry_pair = slot["entry"]
+            exec_pair = slot["exec"]
+            if entry_pair is None or exec_pair is None:
+                continue
+            entry_model, entry_meta = entry_pair
+            exec_model, _exec_meta = exec_pair
+            entry_p = float(entry_model.predict_proba(X)[0, 1])
+            kelly_arr, pair_arr = exec_model.predict(X)
+            kelly = float(kelly_arr[0])
+            pair_idx = int(pair_arr[0])
+            pair_idx = max(0, min(pair_idx, len(ms.pair_grid) - 1))
+            tm, sm = ms.pair_grid[pair_idx]
+            target_pct = float(tm) * atr_pct
+            stop_pct = float(sm) * atr_pct
+            signals.append({
+                "direction": direction, "estimator_type": est,
+                "model_id": entry_meta.id,
+                "entry_probability": entry_p,
+                "kelly_fraction": kelly,
+                "pair_index": pair_idx,
+                "target_pct": target_pct,
+                "stop_pct": stop_pct,
+            })
+        return signals

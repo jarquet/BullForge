@@ -221,6 +221,83 @@ CONFIG_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Rolling window in calendar days for computing per-sub-model live accuracy and calibration error features.",
         "reference": "https://en.wikipedia.org/wiki/Moving_average",
     },
+    "meta_inference_enabled": {
+        "default": False, "type": "json",
+        "label": "Meta-Model Shadow Inference",
+        "description": (
+            "Master switch for meta-model shadow inference. When off, "
+            "predict_meta returns empty and model:meta_signals is not "
+            "published. Flip on after the first successful nightly retrain."
+        ),
+        "reference": "https://en.wikipedia.org/wiki/Stacked_generalization",
+    },
+    "meta_estimator_types": {
+        "default": ["lightgbm"], "type": "json",
+        "label": "Meta Estimator Types",
+        "description": (
+            "Subset of {lightgbm, mlp, baseline} to train and serve. "
+            "Each entry produces one active artifact per (symbol, direction)."
+        ),
+        "reference": "https://en.wikipedia.org/wiki/Ensemble_learning",
+    },
+    "meta_pair_grid": {
+        "default": [[2, 1], [3, 1.5], [4, 2]], "type": "json",
+        "label": "Meta (Target, Stop) Multipliers x ATR-14",
+        "description": (
+            "List of [target_mult, stop_mult] pairs. Per candidate bar, "
+            "target_pct = target_mult x ATR-14/close; stop_pct similarly. "
+            "Adapts pair sizes per-symbol via ATR scaling."
+        ),
+        "reference": "https://en.wikipedia.org/wiki/Average_true_range",
+    },
+    "meta_train_window_days": {
+        "default": 60, "type": "int", "min": 7, "max": 365,
+        "label": "Meta Training Window (days)",
+        "description": "Replay window for offline meta-training.",
+        "reference": "https://en.wikipedia.org/wiki/Walk_forward_optimization",
+    },
+    "meta_max_hold_minutes": {
+        "default": 30, "type": "int", "min": 1, "max": 1440,
+        "label": "Meta Outcome Max-Hold (minutes)",
+        "description": (
+            "Bar-walking simulation cuts off after this many minutes if "
+            "neither target nor stop has been hit."
+        ),
+        "reference": "https://en.wikipedia.org/wiki/Position_(finance)",
+    },
+    "meta_min_train_rows": {
+        "default": 500, "type": "int", "min": 100, "max": 100000,
+        "label": "Meta Min Training Rows",
+        "description": "Skip a (symbol, direction) if fewer labeled rows exist.",
+        "reference": "https://en.wikipedia.org/wiki/Sample_size_determination",
+    },
+    "meta_label_backfill_interval_minutes": {
+        "default": 15, "type": "int", "min": 1, "max": 1440,
+        "label": "Meta Label-Backfill Interval (minutes)",
+        "description": (
+            "How often the backfill loop fills entry_label / "
+            "optimal_pair_idx / realized_ev on live meta_features rows."
+        ),
+        "reference": "https://en.wikipedia.org/wiki/Label_(computer_science)",
+    },
+    "meta_regime_max_staleness_hours": {
+        "default": 48, "type": "int", "min": 1, "max": 720,
+        "label": "Meta Regime SPY Staleness Cap (hours)",
+        "description": (
+            "Forward-fill SPY regime values for crypto bars up to this "
+            "many hours; older than this returns zeros."
+        ),
+        "reference": "https://en.wikipedia.org/wiki/SPDR_S%26P_500_ETF_Trust",
+    },
+    "meta_rolling_stats_ttl_seconds": {
+        "default": 600, "type": "int", "min": 10, "max": 86400,
+        "label": "Meta Rolling-Stats Cache TTL (seconds)",
+        "description": (
+            "Per-base-model accuracy/calibration cache TTL during meta "
+            "inference. Rebuilds when expired."
+        ),
+        "reference": "https://en.wikipedia.org/wiki/Cache_(computing)",
+    },
 }
 
 

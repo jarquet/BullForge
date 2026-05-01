@@ -140,3 +140,32 @@ def test_execution_key_defaults_and_bounds():
     assert CONFIG_SCHEMA["execution_max_position_pct"]["default"] == 0.02
     assert CONFIG_SCHEMA["execution_max_positions"]["default"] == 5
     assert CONFIG_SCHEMA["execution_max_exposure"]["default"] == 0.2
+
+
+def test_meta_config_keys_present():
+    expected = {
+        "meta_inference_enabled",
+        "meta_estimator_types",
+        "meta_pair_grid",
+        "meta_train_window_days",
+        "meta_max_hold_minutes",
+        "meta_min_train_rows",
+        "meta_label_backfill_interval_minutes",
+        "meta_regime_max_staleness_hours",
+        "meta_rolling_stats_ttl_seconds",
+    }
+    assert expected.issubset(CONFIG_SCHEMA.keys())
+
+
+def test_meta_pair_grid_default_shape():
+    grid = CONFIG_SCHEMA["meta_pair_grid"]["default"]
+    assert isinstance(grid, list)
+    assert len(grid) == 3
+    for pair in grid:
+        assert len(pair) == 2
+        target_mult, stop_mult = pair
+        assert target_mult > stop_mult > 0
+
+
+def test_meta_inference_enabled_defaults_off():
+    assert CONFIG_SCHEMA["meta_inference_enabled"]["default"] is False
