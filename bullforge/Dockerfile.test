@@ -8,6 +8,7 @@ COPY services/feature_engine/requirements.txt /tmp/req-feature.txt
 COPY services/model_service/requirements.txt /tmp/req-model.txt
 COPY services/execution_service/requirements.txt /tmp/req-execution.txt
 COPY services/monitoring_service/requirements.txt /tmp/req-monitoring.txt
+COPY services/dashboard_service/requirements.txt /tmp/req-dashboard.txt
 
 RUN cat /tmp/req-*.txt | sort -u > /tmp/requirements-all.txt && \
     pip install --no-cache-dir -r /tmp/requirements-all.txt
