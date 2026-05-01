@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -14,8 +13,43 @@ from services.model_service.model_store import ModelStore
 logger = logging.getLogger(__name__)
 
 
-_META_DIR_RX = re.compile(r"meta_(entry|exec)_(long|short)_([a-z]+)")
 _DIR_TO_INT = {"long": 1, "short": -1}
+
+
+def _parse_meta_artifact(path: str) -> Optional[Tuple[str, str, str]]:
+    """Extract (kind, direction_label, estimator_type) from a meta artifact path.
+
+    Production paths follow the ModelStore format
+    ``{model_type}_{symbol}_{timeframe}_{horizon}m_{timestamp}.{ext}`` where
+    ``model_type`` is ``meta_{entry|exec}_{long|short}_{estimator}``. The
+    estimator boundary is detected as the first segment that starts with an
+    uppercase letter (the symbol). For non-production paths that have no
+    uppercase boundary (e.g., test fixtures ending in ``_<id>.{ext}``) a
+    trailing pure-digit segment is treated as the boundary instead.
+
+    This replaces the older ``meta_(entry|exec)_(long|short)_([a-z]+)`` regex
+    so estimator names containing digits or underscores (``xgboost_v2``,
+    ``catboost_3``) parse correctly.
+    """
+    if not path:
+        return None
+    name = path.replace("\\", "/").rsplit("/", 1)[-1]
+    name = name.rsplit(".", 1)[0]
+    parts = name.split("_")
+    if len(parts) < 4 or parts[0] != "meta":
+        return None
+    kind, dir_label = parts[1], parts[2]
+    if kind not in ("entry", "exec") or dir_label not in ("long", "short"):
+        return None
+    for i in range(3, len(parts)):
+        if parts[i] and parts[i][0].isupper():
+            est = "_".join(parts[3:i])
+            return (kind, dir_label, est) if est else None
+    end = len(parts)
+    if parts[-1].isdigit():
+        end -= 1
+    est = "_".join(parts[3:end])
+    return (kind, dir_label, est) if est else None
 
 
 class _MetaState:
@@ -141,10 +175,10 @@ class InferenceEngine:
         meta = [m for m in active if m.model_type in ("meta_entry", "meta_exec")]
         new: dict[tuple[str, int, str], dict] = {}
         for m in meta:
-            mtch = _META_DIR_RX.search(m.artifact_path or "")
-            if not mtch:
+            parsed = _parse_meta_artifact(m.artifact_path or "")
+            if not parsed:
                 continue
-            kind, dir_label, est = mtch.group(1), mtch.group(2), mtch.group(3)
+            kind, dir_label, est = parsed
             key = (m.symbol, _DIR_TO_INT[dir_label], est)
             slot = new.setdefault(key, {"entry": None, "exec": None})
             try:

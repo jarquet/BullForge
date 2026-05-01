@@ -4,8 +4,54 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from services.model_service.inference import InferenceEngine
+from services.model_service.inference import InferenceEngine, _parse_meta_artifact
 from shared.models import ModelMetadata
+
+
+def test_parse_meta_artifact_simple_estimator():
+    parsed = _parse_meta_artifact(
+        "/m/meta_entry_long_lightgbm_AAPL_1m_0m_20260430T140000Z.joblib"
+    )
+    assert parsed == ("entry", "long", "lightgbm")
+
+
+def test_parse_meta_artifact_estimator_with_underscore_and_digits():
+    """Tightening of the old [a-z]+ regex: estimator names like xgboost_v2
+    must parse as a single estimator, not be truncated to `xgboost`."""
+    parsed = _parse_meta_artifact(
+        "/m/meta_exec_short_xgboost_v2_BTC-USD_1m_0m_20260430T140000Z.joblib"
+    )
+    assert parsed == ("exec", "short", "xgboost_v2")
+
+
+def test_parse_meta_artifact_estimator_with_trailing_digit_segment():
+    """catboost_3 has a digit segment in the middle of the model_type — the
+    parser stops at the symbol boundary (uppercase) so `_3` stays in the
+    estimator portion."""
+    parsed = _parse_meta_artifact(
+        "/m/meta_entry_long_catboost_3_AAPL_1m_0m_20260430T140000Z.joblib"
+    )
+    assert parsed == ("entry", "long", "catboost_3")
+
+
+def test_parse_meta_artifact_test_fixture_format():
+    """Test fixtures use a simpler `meta_entry_long_lightgbm_<id>.joblib`
+    format with no symbol — the trailing pure-digit segment is stripped."""
+    parsed = _parse_meta_artifact("/m/meta_entry_long_lightgbm_11.joblib")
+    assert parsed == ("entry", "long", "lightgbm")
+
+
+def test_parse_meta_artifact_rejects_non_meta_paths():
+    assert _parse_meta_artifact("") is None
+    assert _parse_meta_artifact("/m/lstm_AAPL_1m_5m.joblib") is None
+    assert _parse_meta_artifact("/m/meta_entry_garbage_lightgbm_AAPL_1m.joblib") is None
+
+
+def test_parse_meta_artifact_handles_windows_path_separators():
+    parsed = _parse_meta_artifact(
+        "C:\\models\\meta_entry_long_lightgbm_AAPL_1m_0m_20260430T140000Z.joblib"
+    )
+    assert parsed == ("entry", "long", "lightgbm")
 
 
 def _md(mid, model_type, estimator_type=None, dir_label=None):

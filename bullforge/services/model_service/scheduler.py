@@ -200,10 +200,13 @@ class RetrainScheduler:
         max_hold = int(config.get("meta_max_hold_minutes", 30))
         min_rows = int(config.get("meta_min_train_rows", 500))
 
-        # Pre-load SPY bars once for this whole cycle's RegimeBuilder
+        # Pre-load SPY bars once for this whole cycle's RegimeBuilder.
+        # Buffer is +35 days (not +7): RegimeBuilder.vol_regime needs a 30-day
+        # rolling median, so anything less leaves most of the warmup window
+        # producing NaN regime values.
         spy_recs = await self._db.query_bars(
             "SPY", "1m",
-            since=(as_of - timedelta(days=train_window + 7)).isoformat(),
+            since=(as_of - timedelta(days=train_window + 35)).isoformat(),
             limit=400000,
         )
         # query_bars returns list[Bar]; build a lightweight DataFrame for RegimeBuilder

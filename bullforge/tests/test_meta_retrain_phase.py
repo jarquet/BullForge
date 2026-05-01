@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
@@ -48,3 +48,51 @@ async def test_run_once_invokes_meta_phase_per_symbol_direction():
     # Should pass the per-cycle config snapshot (positionally or as kwarg)
     call = mock_meta.await_args
     assert ("config" in call.kwargs) or (len(call.args) >= 1)
+
+
+@pytest.mark.asyncio
+async def test_train_meta_phase_preloads_spy_with_35_day_buffer():
+    """RegimeBuilder.vol_regime needs a 30-day rolling median, so the SPY
+    pre-load must extend at least train_window + 30 days (we use +35) before
+    `as_of`. Phase 1.5 cleanup of the older +7 buffer."""
+    rc = AsyncMock()
+    redis = AsyncMock()
+    inference = AsyncMock()
+    db = AsyncMock()
+    db.query_bars.return_value = []
+
+    sched = RetrainScheduler(
+        db_dsn="postgres://x", artifacts_dir="/tmp/x", runtime_config=rc,
+        inference_engine=inference, redis_client=redis,
+        symbols=["AAPL"], timeframes=["1m"], horizons_by_tf={"1m": [5]},
+        min_samples=10, db=db,
+    )
+
+    as_of = datetime(2026, 4, 30, 14, 0, tzinfo=timezone.utc)
+    train_window = 60
+    config = {
+        "meta_estimator_types": ["lightgbm"],
+        "meta_pair_grid": [[2, 1]],
+        "meta_train_window_days": train_window,
+        "meta_max_hold_minutes": 30,
+        "meta_min_train_rows": 100,
+        "meta_regime_max_staleness_hours": 48,
+    }
+
+    with patch("services.model_service.scheduler.MetaTrainer") as MockTrainer:
+        instance = MagicMock()
+        instance.train_entry = AsyncMock(return_value=None)
+        instance.train_exec = AsyncMock(return_value=None)
+        MockTrainer.return_value = instance
+        await sched._train_meta_phase(config=config, as_of=as_of)
+
+    db.query_bars.assert_awaited_once()
+    kwargs = db.query_bars.await_args.kwargs
+    args = db.query_bars.await_args.args
+    since = kwargs.get("since") or (args[2] if len(args) >= 3 else None)
+    assert since is not None
+    since_dt = datetime.fromisoformat(since)
+    delta = as_of - since_dt
+    assert delta >= timedelta(days=train_window + 30), (
+        f"SPY pre-load buffer too small: {delta} < {train_window + 30} days"
+    )
