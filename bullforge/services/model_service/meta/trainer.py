@@ -7,9 +7,8 @@ import pandas as pd
 from shared.db import Database
 from shared.models import ModelMetadata
 from services.model_service.model_store import ModelStore
-from services.model_service.meta.factory import create_meta_entry, create_meta_exec, get_cold_start_min_rows
+from services.model_service.meta.factory import create_meta_entry, create_meta_exec
 from services.model_service.meta.calibrator import CalibratedEntryEstimator
-from services.model_service.meta.feature_assembler import MetaFeatureAssembler
 from services.model_service.meta.replay import build_replay_rows
 from services.model_service.meta.regime import RegimeBuilder
 
