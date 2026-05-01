@@ -7,10 +7,14 @@ from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import pandas as pd
+
 from shared.db import Database
 from shared.redis import RedisClient
 from shared.runtime_config import RuntimeConfig
 from services.model_service.inference import InferenceEngine
+from services.model_service.meta.regime import RegimeBuilder
+from services.model_service.meta.trainer import MetaTrainer
 from services.model_service.model_store import ModelStore
 from services.model_service.trainer import Trainer
 from services.model_service.worker import train_one_job
@@ -134,6 +138,15 @@ class RetrainScheduler:
                     "model_type": mt, "status": "error", "error": str(e),
                 })
 
+        # ── Meta phase ────────────────────────────────────────────────
+        try:
+            meta_results = await self._train_meta_phase(
+                config=config, as_of=as_of,
+            )
+            results.extend(meta_results)
+        except Exception:
+            logger.exception("Meta retrain phase failed")
+
         await self._inference.load_models()
 
         summary = {
@@ -173,3 +186,77 @@ class RetrainScheduler:
         return {"symbol": symbol, "timeframe": timeframe, "horizon": horizon,
                 "model_type": "lstm", "status": "ok", "model_id": meta.id,
                 "metrics": meta.metrics}
+
+    async def _train_meta_phase(
+        self, *, config: dict, as_of: datetime,
+    ) -> list[dict]:
+        if self._db is None:
+            logger.warning("Meta phase skipped — no Database instance")
+            return []
+        store = ModelStore(self._artifacts_dir)
+        estimator_types = config.get("meta_estimator_types") or ["lightgbm"]
+        pair_grid = config.get("meta_pair_grid") or [[2, 1], [3, 1.5], [4, 2]]
+        train_window = int(config.get("meta_train_window_days", 60))
+        max_hold = int(config.get("meta_max_hold_minutes", 30))
+        min_rows = int(config.get("meta_min_train_rows", 500))
+
+        # Pre-load SPY bars once for this whole cycle's RegimeBuilder
+        spy_recs = await self._db.query_bars(
+            "SPY", "1m",
+            since=(as_of - timedelta(days=train_window + 7)).isoformat(),
+            limit=400000,
+        )
+        # query_bars returns list[Bar]; build a lightweight DataFrame for RegimeBuilder
+        if spy_recs:
+            spy_df = pd.DataFrame([
+                {"timestamp": b.timestamp, "close": b.close} for b in spy_recs
+            ])
+            spy_df = spy_df.set_index("timestamp")
+        else:
+            spy_df = pd.DataFrame(columns=["close"])
+
+        rb_factory = lambda: RegimeBuilder(
+            spy_bars=spy_df,
+            max_staleness_hours=int(config.get("meta_regime_max_staleness_hours", 48)),
+        )
+
+        trainer = MetaTrainer(
+            db=self._db, model_store=store,
+            sub_model_pairs={"long": pair_grid, "short": pair_grid},
+        )
+
+        out: list[dict] = []
+        for symbol in self._symbols:
+            for direction in (1, -1):
+                for et in estimator_types:
+                    try:
+                        meta_e = await trainer.train_entry(
+                            symbol=symbol, direction=direction,
+                            estimator_type=et, as_of=as_of,
+                            train_window_days=train_window,
+                            max_hold_minutes=max_hold,
+                            min_train_rows=min_rows,
+                            regime_builder_factory=rb_factory,
+                        )
+                        meta_x = await trainer.train_exec(
+                            symbol=symbol, direction=direction,
+                            estimator_type=et, as_of=as_of,
+                            train_window_days=train_window,
+                            max_hold_minutes=max_hold,
+                            min_train_rows=min_rows,
+                            regime_builder_factory=rb_factory,
+                        )
+                        out.append({
+                            "symbol": symbol, "direction": direction,
+                            "estimator_type": et,
+                            "model_type": "meta", "status": "ok",
+                            "entry_id": meta_e.id if meta_e else None,
+                            "exec_id": meta_x.id if meta_x else None,
+                        })
+                    except Exception as e:
+                        logger.exception("Meta train failed for %s %s %s",
+                                         symbol, direction, et)
+                        out.append({"symbol": symbol, "direction": direction,
+                                    "estimator_type": et, "model_type": "meta",
+                                    "status": "error", "error": str(e)})
+        return out
