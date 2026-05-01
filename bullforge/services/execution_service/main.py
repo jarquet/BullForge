@@ -145,6 +145,11 @@ async def main() -> None:
     await redis_client.subscribe("models:status", on_model_status)
     logger.info("Subscribed to models:status")
 
+    from services.execution_service.meta_shadow_writer import MetaShadowWriter
+    meta_writer = MetaShadowWriter(db=db)
+    await redis_client.subscribe("model:meta_signals", meta_writer.handle_message)
+    logger.info("Subscribed to model:meta_signals (shadow writer)")
+
     broker_relay = BrokerRelay(redis_client=redis_client, broker=broker)
     await broker_relay.start()
     logger.info("BrokerRelay started")
