@@ -175,6 +175,7 @@ async def test_train_entry_deactivates_prior_active_before_insert():
     db.deactivate_models.assert_any_call(
         "AAPL", "1m", 0,
         model_type="meta_entry", estimator_type="lightgbm",
+        artifact_path_like="%meta_entry_long_lightgbm%",
     )
     db.insert_model_metadata.assert_called_once()
 
@@ -198,7 +199,75 @@ async def test_train_exec_deactivates_prior_active_before_insert():
     db.deactivate_models.assert_any_call(
         "AAPL", "1m", 0,
         model_type="meta_exec", estimator_type="lightgbm",
+        artifact_path_like="%meta_exec_long_lightgbm%",
     )
+
+
+@pytest.mark.asyncio
+async def test_train_entry_deactivation_is_direction_scoped():
+    """Critical regression: train_entry(direction=1) and train_entry(direction=-1)
+    must NOT cross-deactivate each other. Direction is encoded in artifact_path,
+    so the deactivate scope MUST include an artifact_path LIKE filter that
+    matches only the direction being trained. Without this, the second
+    direction's iteration silently flipped the first direction's just-inserted
+    is_active=TRUE row to FALSE, leaving only one direction's meta active per
+    symbol — half of all shadow-mode predictions never fired."""
+    db = _mock_db_for_trainer()
+    rows = _replay_rows()
+    with patch("services.model_service.meta.trainer.build_replay_rows",
+               new=AsyncMock(return_value=rows)):
+        trainer = MetaTrainer(
+            db=db, model_store=_mock_store(),
+            sub_model_pairs={"long": [[2, 1], [3, 1.5], [4, 2]],
+                             "short": [[2, 1], [3, 1.5], [4, 2]]},
+        )
+        await trainer.train_entry(
+            symbol="AAPL", direction=1,
+            estimator_type="lightgbm", as_of=_ts(0),
+            train_window_days=60, max_hold_minutes=30,
+            min_train_rows=100,
+        )
+        await trainer.train_entry(
+            symbol="AAPL", direction=-1,
+            estimator_type="lightgbm", as_of=_ts(0),
+            train_window_days=60, max_hold_minutes=30,
+            min_train_rows=100,
+        )
+
+    long_call = db.deactivate_models.call_args_list[0]
+    short_call = db.deactivate_models.call_args_list[1]
+    assert long_call.kwargs.get("artifact_path_like") == "%meta_entry_long_lightgbm%"
+    assert short_call.kwargs.get("artifact_path_like") == "%meta_entry_short_lightgbm%"
+
+
+@pytest.mark.asyncio
+async def test_train_exec_deactivation_is_direction_scoped():
+    db = _mock_db_for_trainer()
+    rows = _replay_rows()
+    with patch("services.model_service.meta.trainer.build_replay_rows",
+               new=AsyncMock(return_value=rows)):
+        trainer = MetaTrainer(
+            db=db, model_store=_mock_store(),
+            sub_model_pairs={"long": [[2, 1], [3, 1.5], [4, 2]],
+                             "short": [[2, 1], [3, 1.5], [4, 2]]},
+        )
+        await trainer.train_exec(
+            symbol="AAPL", direction=1,
+            estimator_type="lightgbm", as_of=_ts(0),
+            train_window_days=60, max_hold_minutes=30,
+            min_train_rows=100,
+        )
+        await trainer.train_exec(
+            symbol="AAPL", direction=-1,
+            estimator_type="lightgbm", as_of=_ts(0),
+            train_window_days=60, max_hold_minutes=30,
+            min_train_rows=100,
+        )
+
+    long_call = db.deactivate_models.call_args_list[0]
+    short_call = db.deactivate_models.call_args_list[1]
+    assert long_call.kwargs.get("artifact_path_like") == "%meta_exec_long_lightgbm%"
+    assert short_call.kwargs.get("artifact_path_like") == "%meta_exec_short_lightgbm%"
 
 
 def test_evaluate_entry_clamps_nan_to_safe_defaults():

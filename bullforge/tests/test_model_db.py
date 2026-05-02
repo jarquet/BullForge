@@ -151,6 +151,34 @@ async def test_deactivate_models_with_model_type_scopes_predicate(settings, mock
 
 
 @pytest.mark.asyncio
+async def test_deactivate_models_with_artifact_path_like_scopes_to_pattern(settings, mock_pool):
+    """MetaTrainer encodes direction in artifact_path (`meta_entry_long_*`,
+    `meta_entry_short_*`) — there is no direction column. Without a path
+    filter, training the second direction's meta_entry would deactivate the
+    first direction's just-inserted active row, leaving only the LAST
+    direction trained alive per (symbol, model_type). This regression test
+    verifies the LIKE clause is wired into the UPDATE so direction-scoped
+    deactivation works."""
+    from shared.db import Database
+
+    pool, conn = mock_pool
+    conn.execute = AsyncMock()
+    db = Database(settings)
+    db.pool = pool
+
+    await db.deactivate_models(
+        "SPY", "1m", 0,
+        model_type="meta_entry", estimator_type="lightgbm",
+        artifact_path_like="%meta_entry_long_lightgbm%",
+    )
+
+    conn.execute.assert_called_once()
+    sql, *params = conn.execute.call_args[0]
+    assert "artifact_path LIKE $" in sql
+    assert "%meta_entry_long_lightgbm%" in params
+
+
+@pytest.mark.asyncio
 async def test_insert_prediction(settings, mock_pool):
     from shared.db import Database
 

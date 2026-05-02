@@ -3,7 +3,9 @@ from unittest.mock import AsyncMock, MagicMock
 import json
 import pytest
 
-from services.model_service.main import on_feature_update_factory
+from services.model_service.main import (
+    on_feature_update_factory, on_model_retrained_factory,
+)
 
 
 def _ts():
@@ -85,6 +87,37 @@ async def test_handler_skips_meta_publish_when_disabled():
     await handler(json.dumps({"symbol": "AAPL", "timeframe": "1m"}))
     channels = [c.args[0] for c in redis.publish.call_args_list]
     assert "model:meta_signals" not in channels
+
+
+@pytest.mark.asyncio
+async def test_on_model_retrained_refreshes_in_memory_state():
+    """retrain_now.py runs in a SEPARATE process and creates its own
+    throwaway InferenceEngine. The live model_service container's actual
+    InferenceEngine never gets refreshed, leaving in-memory _models /
+    _meta_models pointing at the previous retrain's artifacts. Symptom:
+    inference fires LightGBM shape errors after a successful manual
+    retrain because the in-memory model has 194 features but the new
+    feature_vector has 134. Fix: have the live model_service subscribe
+    to model:retrained — published unconditionally at the end of every
+    run_once — and reload both base and meta models on receipt."""
+    inference = AsyncMock()
+    handler = on_model_retrained_factory(inference=inference)
+    await handler(json.dumps({"as_of": _ts().isoformat(), "ok": 180}))
+
+    inference.load_models.assert_awaited_once()
+    inference.load_meta_models.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_on_model_retrained_swallows_loader_exceptions():
+    """A retrain notification must never bring down the redis subscriber.
+    If load_meta_models raises (corrupt artifact, transient DB error),
+    the handler logs and continues so future feature:updates still flow."""
+    inference = AsyncMock()
+    inference.load_models.side_effect = RuntimeError("boom")
+    handler = on_model_retrained_factory(inference=inference)
+    # Must not raise.
+    await handler(json.dumps({"as_of": _ts().isoformat()}))
 
 
 @pytest.mark.asyncio
