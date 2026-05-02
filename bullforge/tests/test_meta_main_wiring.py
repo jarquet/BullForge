@@ -41,6 +41,9 @@ def _make_db():
             "dist_sma_50": 0.0, "dist_sma_200": 0.0, "dist_sma_200d": 0.0,
         },
     )]
+    # Default latest close > 0 so meta inference fires; tests that care
+    # about the close override this explicitly.
+    db.query_latest_close.return_value = 100.0
     return db
 
 
@@ -206,6 +209,92 @@ async def test_handler_publishes_real_feature_vector_in_meta_signals():
     for k, v in payload["feature_vector"].items():
         assert isinstance(k, str)
         assert isinstance(v, float)
+
+
+@pytest.mark.asyncio
+async def test_atr_pct_uses_real_close_not_sma_20():
+    """The meta-shadow path scales target/stop multipliers by atr_pct =
+    atr_14 / close. Earlier code used sma_20 as a close stand-in because
+    the feature row didn't carry the raw close — that biases atr_pct away
+    from the true ratio during trends (sma_20 lags the actual close).
+
+    Fix: source the latest bars_1m close at-or-before the feature row
+    timestamp via Database.query_latest_close and divide by that. Here
+    we set sma_20=100.0 but the *real* close=120.0 — atr_price_ratio
+    must come out as atr_14/close=0.5/120.0, not the old
+    atr_14/sma_20=0.5/100.0.
+    """
+    rc = AsyncMock()
+    rc.get.side_effect = lambda k: {
+        "meta_inference_enabled": True,
+        "meta_pair_grid": [[2, 1], [3, 1.5], [4, 2]],
+        "meta_rolling_stats_ttl_seconds": 600,
+    }.get(k)
+    redis = AsyncMock()
+    inference = _make_inference([{
+        "direction": 1, "estimator_type": "lightgbm",
+        "entry_probability": 0.6, "kelly_fraction": 0.05,
+        "pair_index": 1, "target_pct": 0.01, "stop_pct": 0.005,
+        "model_id": 11,
+    }])
+    db = _make_db()
+    db.query_latest_close.return_value = 120.0
+
+    handler = on_feature_update_factory(
+        inference=inference, redis=redis, runtime_config=rc, db=db,
+        regime_builder=_make_rb(),
+    )
+    await handler(json.dumps({"symbol": "AAPL", "timeframe": "1m"}))
+
+    # Inspect the symbol_state that was actually handed to predict_meta.
+    inference.predict_meta.assert_awaited_once()
+    call_kwargs = inference.predict_meta.await_args.kwargs
+    symbol_state = call_kwargs["symbol_state"]
+    expected = 0.5 / 120.0
+    legacy_wrong = 0.5 / 100.0
+    assert symbol_state["atr_price_ratio"] == pytest.approx(expected)
+    assert symbol_state["atr_price_ratio"] != pytest.approx(legacy_wrong)
+    # And the latest-close lookup happened with the feature row's UTC ts.
+    db.query_latest_close.assert_awaited_once()
+    args, kwargs = (db.query_latest_close.await_args.args,
+                    db.query_latest_close.await_args.kwargs)
+    # Symbol & timestamp positional or kw — accept either binding style.
+    bound = list(args) + list(kwargs.values())
+    assert "AAPL" in bound
+    assert _ts() in bound
+
+
+@pytest.mark.asyncio
+async def test_atr_pct_missing_close_propagates_nan():
+    """When bars_1m has no close at-or-before the feature timestamp
+    (cold start, gapped symbol), query_latest_close returns None.
+    The handler must propagate NaN into atr_price_ratio rather than
+    silently falling back to sma_20 — predict_meta's NaN filter (Task 3)
+    will then drop sym_atr_price_ratio from the published feature
+    vector instead of poisoning it with a biased value.
+    """
+    import math
+    rc = AsyncMock()
+    rc.get.side_effect = lambda k: {
+        "meta_inference_enabled": True,
+        "meta_pair_grid": [[2, 1]],
+        "meta_rolling_stats_ttl_seconds": 600,
+    }.get(k)
+    redis = AsyncMock()
+    inference = _make_inference([])  # predict_meta returns no signals (atr<=0)
+    db = _make_db()
+    db.query_latest_close.return_value = None
+
+    handler = on_feature_update_factory(
+        inference=inference, redis=redis, runtime_config=rc, db=db,
+        regime_builder=_make_rb(),
+    )
+    await handler(json.dumps({"symbol": "AAPL", "timeframe": "1m"}))
+
+    inference.predict_meta.assert_awaited_once()
+    symbol_state = inference.predict_meta.await_args.kwargs["symbol_state"]
+    # NaN — not 0.0, not the legacy sma_20 fallback.
+    assert math.isnan(symbol_state["atr_price_ratio"])
 
 
 @pytest.mark.asyncio

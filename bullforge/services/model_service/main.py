@@ -81,11 +81,19 @@ def on_feature_update_factory(
                 return
             fr = latest[0]
             atr_14 = float(fr.features.get("atr_14") or 0.0)
-            # close price isn't carried on the feature row; sma_20 is a
-            # close-tracking stand-in for the ATR% scaling. Acceptable for
-            # Phase 1 shadow mode.
-            close = float(fr.features.get("sma_20") or 0.0)
-            atr_pct = (atr_14 / close) if close > 0 else 0.0
+            # ATR% must scale by the real close, not the sma_20 stand-in.
+            # sma_20 lags the actual close so during trends atr_pct =
+            # atr_14 / sma_20 is biased away from the true atr_14 / close.
+            # Pull the latest bars_1m close at-or-before the feature row
+            # timestamp; if none exists (cold-start, gapped symbol),
+            # propagate NaN so predict_meta's NaN filter drops the
+            # sym_atr_price_ratio feature instead of poisoning the vector
+            # with a biased fallback.
+            close = await db.query_latest_close(symbol, fr.timestamp)
+            if close is None or close <= 0:
+                atr_pct = float("nan")
+            else:
+                atr_pct = atr_14 / float(close)
             symbol_state = {
                 "realized_vol": fr.features.get("realized_vol", 0.02),
                 "atr_price_ratio": atr_pct,
