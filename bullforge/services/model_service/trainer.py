@@ -82,7 +82,8 @@ class Trainer:
         feature_columns = list(X.columns)
 
         await self._db.deactivate_models(
-            symbol, timeframe, horizon_minutes, scope=self._scope,
+            symbol, timeframe, horizon_minutes,
+            model_type=model_type, scope=self._scope,
         )
 
         meta = ModelMetadata(

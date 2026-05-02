@@ -62,7 +62,9 @@ async def test_trainer_trains_gradient_boost(mock_db, mock_model_store):
     assert len(meta.feature_columns) == 3
     assert meta.id == 1
 
-    mock_db.deactivate_models.assert_called_once_with("SPY", "1m", 5, scope=None)
+    mock_db.deactivate_models.assert_called_once_with(
+        "SPY", "1m", 5, model_type="gradient_boost", scope=None,
+    )
     mock_db.insert_model_metadata.assert_called_once()
 
 
@@ -93,8 +95,11 @@ async def test_trainer_deactivates_old_model_before_insert(mock_db, mock_model_s
     trainer = Trainer(db=mock_db, model_store=mock_model_store, min_samples=50)
     await trainer.train("SPY", "1m", 5, as_of=datetime(2026, 4, 13, tzinfo=timezone.utc))
 
-    # deactivate should be called before insert
-    mock_db.deactivate_models.assert_called_once_with("SPY", "1m", 5, scope=None)
+    # deactivate should be called before insert, scoped to this model_type
+    # so a later run of a different model_type doesn't wipe this row.
+    mock_db.deactivate_models.assert_called_once_with(
+        "SPY", "1m", 5, model_type="gradient_boost", scope=None,
+    )
     mock_db.insert_model_metadata.assert_called_once()
 
 

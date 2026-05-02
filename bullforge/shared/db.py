@@ -745,9 +745,36 @@ class Database:
         timeframe: str,
         horizon_minutes: int,
         *,
+        model_type: Optional[str] = None,
+        estimator_type: Optional[str] = None,
         scope: Optional[BacktestScope] = None,
     ) -> None:
+        """Deactivate active models for the given key.
+
+        When `model_type` is given, only rows with that model_type are
+        deactivated. This is required so retraining one model_type (e.g.,
+        lstm) does not silently flip another model_type's just-trained
+        active row to is_active=FALSE — that bug left cpu-phase base models
+        orphaned once the gpu phase ran. When `estimator_type` is also
+        given, the predicate narrows further; this matters for meta models
+        where multiple estimator_types share a model_type.
+        With both filters None, all active rows for the (symbol, timeframe,
+        horizon, scope) key are deactivated (legacy behavior, preserved
+        so backtest scope cleanup and other call sites still work).
+        """
         scope_clause, scope_args = _scope_filter(scope, next_arg=4)
+        extra_clauses: list[str] = []
+        extra_args: list = []
+        next_idx = 4 + len(scope_args)
+        if model_type is not None:
+            extra_clauses.append(f"AND model_type = ${next_idx}")
+            extra_args.append(model_type)
+            next_idx += 1
+        if estimator_type is not None:
+            extra_clauses.append(f"AND estimator_type = ${next_idx}")
+            extra_args.append(estimator_type)
+            next_idx += 1
+        extra = (" " + " ".join(extra_clauses)) if extra_clauses else ""
         async with self.pool.acquire() as conn:
             await conn.execute(
                 f"""
@@ -755,9 +782,9 @@ class Database:
                 SET is_active = FALSE
                 WHERE symbol = $1 AND timeframe = $2
                     AND horizon_minutes = $3 AND is_active = TRUE
-                    {scope_clause}
+                    {scope_clause}{extra}
                 """,
-                symbol, timeframe, horizon_minutes, *scope_args,
+                symbol, timeframe, horizon_minutes, *scope_args, *extra_args,
             )
 
     async def insert_prediction(
