@@ -116,7 +116,7 @@ async def test_predict_meta_no_meta_models_returns_empty():
         base_predictions=[], regime={}, symbol_state={},
         timestamp=datetime.now(timezone.utc),
     )
-    assert out == []
+    assert out == ([], {})
 
 
 @pytest.mark.asyncio
@@ -152,14 +152,22 @@ async def test_predict_meta_returns_signal_per_loaded_estimator():
         timestamp=datetime.now(timezone.utc),
     )
 
-    assert len(out) == 1
-    sig = out[0]
+    signals, feature_vec = out
+    assert len(signals) == 1
+    sig = signals[0]
     assert sig["estimator_type"] == "lightgbm"
     assert sig["direction"] == 1
     assert 0.0 <= sig["entry_probability"] <= 1.0
     assert 0.0 <= sig["kelly_fraction"] <= 1.0
     assert sig["pair_index"] == 1
     assert sig["target_pct"] > 0
+    # The assembled L2 vector is surfaced alongside the signals so the
+    # publisher can forward it on model:meta_signals. JSON-friendly
+    # str→float dict (no numpy scalars).
+    assert feature_vec
+    for k, v in feature_vec.items():
+        assert isinstance(k, str)
+        assert isinstance(v, float)
 
 
 @pytest.mark.asyncio
@@ -185,4 +193,4 @@ async def test_predict_meta_skips_when_atr_zero():
                        "dist_sma_200day": 0.0},
         timestamp=datetime.now(timezone.utc),
     )
-    assert out == []
+    assert out == ([], {})

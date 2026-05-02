@@ -94,7 +94,7 @@ def on_feature_update_factory(
                 "dist_sma_200day": fr.features.get("dist_sma_200d", 0.0),
             }
             regime = regime_builder.regime_at(fr.timestamp)
-            signals = await inference.predict_meta(
+            signals, feature_vec = await inference.predict_meta(
                 symbol=symbol, timeframe=timeframe,
                 base_predictions=[
                     {"model_id": p.model_id, "direction": p.predicted_direction,
@@ -105,10 +105,14 @@ def on_feature_update_factory(
                 timestamp=fr.timestamp,
             )
             if signals:
+                # feature_vec is the L2 dict that the meta estimator just
+                # scored. Forward it verbatim so MetaShadowWriter persists
+                # the real keys/values into meta_features.feature_vector
+                # — without this, every live row was a placeholder stub.
                 payload = {
                     "symbol": symbol, "timeframe": timeframe,
                     "timestamp": fr.timestamp.isoformat(),
-                    "feature_vector": {},
+                    "feature_vector": feature_vec,
                     "signals": signals,
                 }
                 await redis.publish("model:meta_signals", json.dumps(payload))

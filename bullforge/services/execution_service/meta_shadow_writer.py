@@ -62,10 +62,24 @@ class MetaShadowWriter:
             if d in seen_dirs:
                 continue
             seen_dirs.add(d)
+            if not feature_vector:
+                # Publisher contract: model_service forwards the assembled
+                # L2 vector with every model:meta_signals event. An empty
+                # dict here means a publisher bug or a pre-warmup race.
+                # Fail loud rather than mask it with a placeholder — the
+                # MetaFeatureRow guard would reject the empty dict anyway,
+                # and the historical {"_": 0.0} fallback poisoned the
+                # meta_features table with useless stub rows.
+                logger.warning(
+                    "MetaShadowWriter: empty feature_vector for %s dir=%s "
+                    "ts=%s — skipping meta_features insert",
+                    symbol, d, ts,
+                )
+                continue
             try:
                 row = MetaFeatureRow(
                     symbol=symbol, timestamp=ts, direction=d,
-                    feature_vector=feature_vector or {"_": 0.0},
+                    feature_vector=feature_vector,
                     source="live",
                 )
                 await self._db.insert_meta_feature(row)

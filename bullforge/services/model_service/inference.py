@@ -232,9 +232,19 @@ class InferenceEngine:
         self, *, symbol: str, timeframe: str,
         base_predictions: list[dict], regime: dict, symbol_state: dict,
         timestamp,
-    ) -> list[dict]:
+    ) -> tuple[list[dict], dict[str, float]]:
+        """Run meta-model inference for a single (symbol, timeframe) event.
+
+        Returns ``(signals, feature_vector)``: the per-(direction, estimator)
+        decisions plus the assembled L2 feature dict that those decisions
+        were scored against. The publisher in ``model_service/main.py``
+        forwards both onto ``model:meta_signals`` so the shadow-mode writer
+        can persist the real vector into ``meta_features.feature_vector``
+        verbatim — previously the payload carried ``{}`` and the writer
+        substituted a useless ``{"_": 0.0}`` placeholder.
+        """
         if not getattr(self, "_meta_models", None):
-            return []
+            return [], {}
         from time import time as _now
         ms = getattr(self, "_meta_state", None) or _MetaState(
             pair_grid=getattr(self, "_pair_grid", [[2, 1], [3, 1.5], [4, 2]]),
@@ -243,7 +253,7 @@ class InferenceEngine:
         self._meta_state = ms
         atr_pct = float(symbol_state.get("atr_price_ratio") or 0.0)
         if atr_pct <= 0:
-            return []
+            return [], {}
 
         # Normalize base predictions: replay/DB rows use "predicted_direction",
         # in-memory pubsub rows use "direction". Accept either.
@@ -281,6 +291,13 @@ class InferenceEngine:
             predictions=norm_preds, rolling_stats=rolling,
             regime=regime, symbol_state=symbol_state, timestamp=timestamp,
         )
+        # Coerce every value to a builtin Python float — the assembler
+        # inherits int/numpy types from upstream dicts (e.g., regime
+        # builder returns numpy scalars on the SPY frame), and those do
+        # not survive json.dumps cleanly. Doing it once here keeps the
+        # publisher's payload JSON-clean and the round-trip into
+        # meta_features.feature_vector lossless.
+        feature_vec = {str(k): float(v) for k, v in feature_vec.items()}
         X = pd.DataFrame([feature_vec])
 
         signals: list[dict] = []
@@ -310,4 +327,4 @@ class InferenceEngine:
                 "target_pct": target_pct,
                 "stop_pct": stop_pct,
             })
-        return signals
+        return signals, feature_vec
