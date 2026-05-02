@@ -165,7 +165,13 @@ class MetaTrainer:
             regime_builder_factory=regime_builder_factory or self._default_rb_factory,
         )
         if replay:
-            await self._db.insert_meta_features_batch(replay, on_conflict="skip")
+            # `replace_replay` overwrites prior replay rows (so a schema
+            # change in build_replay_rows actually takes effect on the
+            # next retrain) but never touches live rows (whose labels
+            # are filled by MetaLabelBackfiller from real bar walks).
+            await self._db.insert_meta_features_batch(
+                replay, on_conflict="replace_replay",
+            )
 
         rows = await self._db.query_meta_features(
             symbol, direction=direction, limit=200000,
@@ -201,7 +207,13 @@ class MetaTrainer:
             regime_builder_factory=regime_builder_factory or self._default_rb_factory,
         )
         if replay:
-            await self._db.insert_meta_features_batch(replay, on_conflict="skip")
+            # `replace_replay` overwrites prior replay rows (so a schema
+            # change in build_replay_rows actually takes effect on the
+            # next retrain) but never touches live rows (whose labels
+            # are filled by MetaLabelBackfiller from real bar walks).
+            await self._db.insert_meta_features_batch(
+                replay, on_conflict="replace_replay",
+            )
 
         rows = await self._db.query_meta_features(
             symbol, direction=direction, limit=200000,
