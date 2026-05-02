@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
@@ -33,6 +33,43 @@ class RegimeBuilder:
         median30d = vol60.rolling(30 * 24 * 60, min_periods=60).median()
         df["vol_regime"] = vol60 / median30d.replace(0.0, np.nan)
         return df
+
+    def append_bar(self, timestamp: datetime, close: float) -> None:
+        """Append a single SPY 1m bar from a market:ticks event and
+        re-run the enrichment so the new tail row carries fresh
+        trend_1m/momentum/vol_regime values.
+
+        Idempotent on duplicate timestamps: a re-published tick is a
+        no-op (we keep the existing close — first-write-wins). This
+        preserves the index's monotonic + unique invariants that
+        regime_at's searchsorted lookup relies on.
+
+        Re-enriches the full dataframe rather than incrementally
+        patching the tail. At ~200K rows the pandas vectorized cost is
+        cheap (~tens of ms) and "correct over clever" beats a partial
+        update that has to re-derive the rolling 30-day vol-regime
+        median from a sliding window.
+        """
+        if timestamp.tzinfo is None or timestamp.tzinfo != timezone.utc:
+            raise ValueError(
+                f"timestamp must be UTC, got tzinfo={timestamp.tzinfo}"
+            )
+        # Idempotent dup-check before mutation.
+        if not self._df.empty and timestamp in self._df.index:
+            return
+        new_row = pd.DataFrame(
+            {"close": [float(close)]},
+            index=pd.DatetimeIndex([timestamp], name=self._df.index.name),
+        )
+        # Strip any pre-computed enrichment columns from the existing
+        # frame before re-concat so _enrich starts from a clean (close)
+        # column set — otherwise re-running pct_change etc. on a frame
+        # that already carries trend_1m/momentum/vol_regime is wasteful.
+        if self._df.empty:
+            combined = new_row
+        else:
+            combined = pd.concat([self._df[["close"]], new_row])
+        self._df = self._enrich(combined)
 
     def regime_at(self, ts: datetime) -> dict[str, float]:
         zeros = {k: 0.0 for k in _FIELDS}
