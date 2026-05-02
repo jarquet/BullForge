@@ -129,6 +129,23 @@ class TestAppendBar:
         # to 500.0 — must be strongly positive (prior closes ~402).
         assert regime["spy_trend_1m"] > 0.1
 
+    def test_append_bar_sorts_out_of_order_arrivals(self):
+        """Websocket reconnect/replay can deliver a market:ticks event
+        with a timestamp earlier than the current tail. Without an explicit
+        sort the index goes non-monotonic and regime_at's searchsorted
+        silently lands on the wrong row. sort_index() after concat is the
+        guard."""
+        rb = RegimeBuilder(
+            spy_bars=pd.DataFrame(columns=["close"]),
+            max_staleness_hours=48,
+        )
+        t1 = datetime(2026, 4, 30, 14, 1, tzinfo=timezone.utc)
+        t0 = datetime(2026, 4, 30, 14, 0, tzinfo=timezone.utc)
+        rb.append_bar(t1, close=400.5)
+        rb.append_bar(t0, close=400.0)
+        assert rb._df.index.is_monotonic_increasing
+        assert rb._df.index.is_unique
+
     def test_append_bar_to_empty_frame(self):
         """Cold start: builder constructed with an empty frame must
         accept the first append_bar without exploding."""

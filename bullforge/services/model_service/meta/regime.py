@@ -69,6 +69,7 @@ class RegimeBuilder:
             combined = new_row
         else:
             combined = pd.concat([self._df[["close"]], new_row])
+            combined = combined.sort_index()
         self._df = self._enrich(combined)
 
     def regime_at(self, ts: datetime) -> dict[str, float]:

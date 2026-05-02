@@ -314,12 +314,8 @@ async def test_on_market_tick_appends_spy_bar_to_regime_builder():
         "open": 400.0, "high": 401.0, "low": 399.5,
         "close": 400.5, "volume": 12345.0,
     }))
-    rb.append_bar.assert_called_once()
-    call_args = rb.append_bar.call_args
-    # Accept positional or kw bindings.
-    bound = list(call_args.args) + list(call_args.kwargs.values())
-    assert ts in bound
-    assert 400.5 in bound
+    # Handler signature is fixed-positional: append_bar(ts, close).
+    rb.append_bar.assert_called_once_with(ts, 400.5)
 
 
 @pytest.mark.asyncio
@@ -344,18 +340,27 @@ async def test_on_market_tick_swallows_malformed_message():
     rb = MagicMock()
     rb.append_bar = MagicMock()
     handler = on_market_tick_factory(regime_builder=rb)
-    # Garbage JSON.
+
+    # Garbage JSON: parse fails before append_bar is ever reached.
     await handler("not json at all")
-    # Missing required fields.
+    rb.append_bar.assert_not_called()
+    rb.append_bar.reset_mock()
+
+    # Missing required fields: validation rejects before append_bar.
     await handler(json.dumps({"symbol": "SPY"}))
-    # append_bar that itself raises must also be swallowed.
+    rb.append_bar.assert_not_called()
+    rb.append_bar.reset_mock()
+
+    # append_bar that itself raises must also be swallowed. Here the call
+    # IS attempted (payload is valid), so assert call happened — not that
+    # it didn't.
     rb.append_bar.side_effect = RuntimeError("boom")
     await handler(json.dumps({
         "symbol": "SPY",
         "timestamp": _ts().isoformat(),
         "close": 400.0,
     }))
-    # If we got here without an exception, the handler is defensive.
+    assert rb.append_bar.call_count >= 1
 
 
 @pytest.mark.asyncio
