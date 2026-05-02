@@ -1,3 +1,5 @@
+import logging
+import math
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 import numpy as np
@@ -168,6 +170,135 @@ async def test_predict_meta_returns_signal_per_loaded_estimator():
     for k, v in feature_vec.items():
         assert isinstance(k, str)
         assert isinstance(v, float)
+
+
+@pytest.mark.asyncio
+async def test_predict_meta_drops_non_finite_features(caplog):
+    """Important review finding: NaN/Inf must not survive into the
+    published feature_vector. The whole point of Task 3 was to stop
+    putting garbage in meta_features.feature_vector — non-finite floats
+    are the same class of garbage. ``json.dumps`` would emit them as the
+    non-standard ``NaN``/``Infinity`` tokens and Postgres ``JSONB``
+    rejects those, either crashing the writer or corrupting the row.
+
+    We expect predict_meta to filter every non-finite key out of
+    feature_vec and log a single warning naming the dropped keys (with
+    the symbol, timestamp, direction context); finite values must be
+    preserved unchanged.
+    """
+    db = AsyncMock()
+    db.query_all_active_models.return_value = [
+        _md(11, "meta_entry", "lightgbm", dir_label="long"),
+        _md(12, "meta_exec", "lightgbm", dir_label="long"),
+    ]
+    db.query_prediction_outcomes_for_slot.return_value = []
+
+    fake_entry = MagicMock()
+    fake_entry.predict_proba = MagicMock(return_value=np.array([[0.4, 0.6]]))
+    fake_exec = MagicMock()
+    fake_exec.predict = MagicMock(
+        return_value=(np.array([0.07]), np.array([1])))
+
+    def _load(path):
+        return fake_entry if "11" in path else fake_exec
+    store = MagicMock(); store.load.side_effect = _load
+
+    eng = InferenceEngine(db=db, model_store=store)
+    await eng.load_meta_models()
+
+    # Inject NaN via regime (RegimeBuilder zeroes after staleness, but
+    # other paths can plausibly NaN out under degenerate inputs) and Inf
+    # via symbol_state (atr_price_ratio is finite/positive — required
+    # for predict_meta to proceed at all — but realized_vol can blow up
+    # on a near-flat denominator).
+    caplog.set_level(logging.WARNING, logger="services.model_service.inference")
+    out = await eng.predict_meta(
+        symbol="AAPL", timeframe="1m",
+        base_predictions=[{"model_id": 1, "direction": 1, "confidence": 0.7}],
+        regime={"spy_trend_1m": float("nan"), "spy_trend_1h": 0.0,
+                "spy_trend_1d": 0.0, "spy_momentum": 0.0, "vol_regime": 1.0},
+        symbol_state={"realized_vol": float("inf"),
+                       "atr_price_ratio": 0.005,
+                       "dist_sma_50": float("-inf"),
+                       "dist_sma_200bar": 0.0,
+                       "dist_sma_200day": 0.0},
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    signals, feature_vec = out
+    # The signal still flows — one bad feature must not silence the
+    # entire shadow signal.
+    assert len(signals) == 1
+    # Every surviving value is finite; no NaN/Inf leaks into the
+    # JSON-bound payload.
+    assert feature_vec
+    for k, v in feature_vec.items():
+        assert isinstance(k, str)
+        assert isinstance(v, float)
+        assert math.isfinite(v), f"non-finite value survived for key {k}: {v!r}"
+
+    # The three injected non-finite inputs map to known assembler keys.
+    expected_dropped = {
+        "regime_spy_trend_1m", "sym_realized_vol", "sym_dist_sma_50",
+    }
+    for dropped in expected_dropped:
+        assert dropped not in feature_vec
+
+    # Single warning per inference call, naming the dropped keys.
+    drop_warnings = [
+        r for r in caplog.records
+        if r.levelno == logging.WARNING
+        and "non-finite" in r.getMessage().lower()
+    ]
+    assert len(drop_warnings) == 1, drop_warnings
+    msg = drop_warnings[0].getMessage()
+    for dropped in expected_dropped:
+        assert dropped in msg
+    # Context: symbol + direction(s) appear in the log.
+    assert "AAPL" in msg
+
+
+@pytest.mark.asyncio
+async def test_predict_meta_no_warning_when_all_features_finite(caplog):
+    """Companion to the drop test: if every value is finite, predict_meta
+    must not emit the non-finite-features warning."""
+    db = AsyncMock()
+    db.query_all_active_models.return_value = [
+        _md(11, "meta_entry", "lightgbm", dir_label="long"),
+        _md(12, "meta_exec", "lightgbm", dir_label="long"),
+    ]
+    db.query_prediction_outcomes_for_slot.return_value = []
+
+    fake_entry = MagicMock()
+    fake_entry.predict_proba = MagicMock(return_value=np.array([[0.4, 0.6]]))
+    fake_exec = MagicMock()
+    fake_exec.predict = MagicMock(
+        return_value=(np.array([0.07]), np.array([1])))
+
+    def _load(path):
+        return fake_entry if "11" in path else fake_exec
+    store = MagicMock(); store.load.side_effect = _load
+
+    eng = InferenceEngine(db=db, model_store=store)
+    await eng.load_meta_models()
+
+    caplog.set_level(logging.WARNING, logger="services.model_service.inference")
+    await eng.predict_meta(
+        symbol="AAPL", timeframe="1m",
+        base_predictions=[{"model_id": 1, "direction": 1, "confidence": 0.7}],
+        regime={"spy_trend_1m": 0.0, "spy_trend_1h": 0.0, "spy_trend_1d": 0.0,
+                "spy_momentum": 0.0, "vol_regime": 1.0},
+        symbol_state={"realized_vol": 0.02, "atr_price_ratio": 0.005,
+                       "dist_sma_50": 0.0, "dist_sma_200bar": 0.0,
+                       "dist_sma_200day": 0.0},
+        timestamp=datetime.now(timezone.utc),
+    )
+    drop_warnings = [
+        r for r in caplog.records
+        if r.levelno == logging.WARNING
+        and "non-finite" in r.getMessage().lower()
+    ]
+    assert drop_warnings == []
 
 
 @pytest.mark.asyncio

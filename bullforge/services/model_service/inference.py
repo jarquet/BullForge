@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -291,13 +292,36 @@ class InferenceEngine:
             predictions=norm_preds, rolling_stats=rolling,
             regime=regime, symbol_state=symbol_state, timestamp=timestamp,
         )
-        # Coerce every value to a builtin Python float — the assembler
-        # inherits int/numpy types from upstream dicts (e.g., regime
-        # builder returns numpy scalars on the SPY frame), and those do
-        # not survive json.dumps cleanly. Doing it once here keeps the
-        # publisher's payload JSON-clean and the round-trip into
-        # meta_features.feature_vector lossless.
-        feature_vec = {str(k): float(v) for k, v in feature_vec.items()}
+        # Coerce every value to a builtin Python float and drop any
+        # non-finite (NaN/Inf) entries — the assembler inherits int/numpy
+        # types from upstream dicts (e.g., regime builder returns numpy
+        # scalars on the SPY frame), and those do not survive json.dumps
+        # cleanly. Worse, NaN/Inf are valid Python floats so float() does
+        # not catch them, but json.dumps emits the non-standard
+        # NaN/Infinity/-Infinity tokens that Postgres JSONB and strict
+        # JSON consumers reject — corrupting meta_features.feature_vector
+        # or crashing the writer. Drop here so a single degenerate
+        # feature can't silence the whole shadow signal; the empty-vector
+        # case still falls into the writer's existing warn-and-skip.
+        coerced: dict[str, float] = {}
+        dropped_keys: list[str] = []
+        for k, v in feature_vec.items():
+            fv = float(v)
+            if math.isfinite(fv):
+                coerced[str(k)] = fv
+            else:
+                dropped_keys.append(str(k))
+        if dropped_keys:
+            directions = sorted({
+                int(d) for (sym, d, _est) in self._meta_models
+                if sym == symbol
+            })
+            logger.warning(
+                "predict_meta dropped non-finite feature(s) for %s ts=%s "
+                "directions=%s: %s",
+                symbol, timestamp, directions, sorted(dropped_keys),
+            )
+        feature_vec = coerced
         X = pd.DataFrame([feature_vec])
 
         signals: list[dict] = []
