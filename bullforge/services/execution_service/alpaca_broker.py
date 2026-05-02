@@ -10,6 +10,7 @@ from alpaca.trading.requests import MarketOrderRequest, GetOrdersRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 
 from shared.config import Settings
+from shared.symbol_utils import is_crypto
 
 logger = logging.getLogger(__name__)
 
@@ -76,11 +77,14 @@ class AlpacaBroker:
         self, symbol: str, qty: float, side: str
     ) -> str:
         order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
+        # Alpaca's crypto endpoint rejects `day` (error 42210000) and accepts
+        # only `gtc` or `ioc`; equities keep the standard `day` default.
+        tif = TimeInForce.GTC if is_crypto(symbol) else TimeInForce.DAY
         request = MarketOrderRequest(
             symbol=symbol,
             qty=qty,
             side=order_side,
-            time_in_force=TimeInForce.DAY,
+            time_in_force=tif,
         )
         order = self._client.submit_order(request)
         return str(order.id)
