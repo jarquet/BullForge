@@ -117,6 +117,41 @@ def on_feature_update_factory(
     return on_feature_update
 
 
+def on_model_retrained_factory(*, inference):
+    """Build the model:retrained handler that refreshes the live
+    InferenceEngine's in-memory _models and _meta_models.
+
+    scheduler.run_once publishes "model:retrained" at the end of every
+    cycle — both for in-process scheduled retrains via run_forever AND
+    for out-of-process manual retrains via retrain_now.py. The latter
+    runs in its own subprocess with a throwaway InferenceEngine, so the
+    live model_service has no other way to learn that the active set in
+    model_registry just changed. Without this subscription, in-memory
+    state drifts from the DB after every manual retrain, surfacing as
+    LightGBM feature-shape errors when meta inference fires against a
+    stale 194-feature in-memory model whose DB row is now 134-feature.
+    """
+    async def on_model_retrained(message: str) -> None:
+        try:
+            payload = json.loads(message) if message else {}
+        except json.JSONDecodeError:
+            payload = {}
+        logger.info(
+            "model:retrained received (ok=%s errors=%s skipped=%s) — "
+            "reloading in-memory model state",
+            payload.get("ok"), payload.get("errors"), payload.get("skipped"),
+        )
+        try:
+            await inference.load_models()
+        except Exception:
+            logger.exception("load_models failed during model:retrained refresh")
+        try:
+            await inference.load_meta_models()
+        except Exception:
+            logger.exception("load_meta_models failed during model:retrained refresh")
+    return on_model_retrained
+
+
 async def main() -> None:
     settings = Settings()
     db = Database(settings)
@@ -245,6 +280,12 @@ async def main() -> None:
     )
     await redis_client.subscribe("feature:updates", on_feature_update)
     logger.info("Subscribed to feature:updates for reactive inference")
+
+    on_model_retrained = on_model_retrained_factory(inference=inference_engine)
+    await redis_client.subscribe("model:retrained", on_model_retrained)
+    logger.info(
+        "Subscribed to model:retrained for in-memory model state refresh"
+    )
 
     # Start the meta label-backfiller as a background task.
     backfill_interval_s = int(

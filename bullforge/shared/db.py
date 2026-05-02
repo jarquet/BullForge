@@ -751,6 +751,7 @@ class Database:
         *,
         model_type: Optional[str] = None,
         estimator_type: Optional[str] = None,
+        artifact_path_like: Optional[str] = None,
         scope: Optional[BacktestScope] = None,
     ) -> None:
         """Deactivate active models for the given key.
@@ -762,7 +763,14 @@ class Database:
         orphaned once the gpu phase ran. When `estimator_type` is also
         given, the predicate narrows further; this matters for meta models
         where multiple estimator_types share a model_type.
-        With both filters None, all active rows for the (symbol, timeframe,
+        When `artifact_path_like` is given (an SQL LIKE pattern), the
+        predicate narrows to rows whose artifact_path matches. This is the
+        only way to scope a deactivation to a meta direction (long vs.
+        short) since direction is encoded in the artifact filename rather
+        than as a column. Without it, training the second direction's
+        meta_entry deactivated the first direction's just-inserted active
+        row, leaving only one direction alive per symbol.
+        With all filters None, all active rows for the (symbol, timeframe,
         horizon, scope) key are deactivated (legacy behavior, preserved
         so backtest scope cleanup and other call sites still work).
         """
@@ -777,6 +785,10 @@ class Database:
         if estimator_type is not None:
             extra_clauses.append(f"AND estimator_type = ${next_idx}")
             extra_args.append(estimator_type)
+            next_idx += 1
+        if artifact_path_like is not None:
+            extra_clauses.append(f"AND artifact_path LIKE ${next_idx}")
+            extra_args.append(artifact_path_like)
             next_idx += 1
         extra = (" " + " ".join(extra_clauses)) if extra_clauses else ""
         async with self.pool.acquire() as conn:
