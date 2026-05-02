@@ -99,3 +99,38 @@ def test_technical_features_preserves_length():
     df = _make_bars_df(80)
     result = compute_technical_features(df)
     assert len(result) == len(df)
+
+
+def test_rsi_is_neutral_on_flat_market():
+    """Crypto minute bars (BTC/USD) on no-trade minutes are emitted by Alpaca
+    with OHLC == prior close. After a stretch of such bars, both avg_gain and
+    avg_loss in the RSI EWM are exactly 0.0, rs = 0/0 = NaN, and RSI inherits
+    the NaN — which then tanks every row at engine.py's notna().all(axis=1)
+    gate. Convention is RSI=50 (neutral) for a flat market.
+
+    Warmup rows (before EWM has min_periods worth of data) must still be NaN
+    so engine.py's warmup drop remains correct.
+    """
+    n = 60
+    timestamps = pd.date_range(
+        "2026-05-02 03:14:00", periods=n, freq="1min", tz="UTC"
+    )
+    close = np.full(n, 90000.0)
+    df = pd.DataFrame({
+        "symbol": "BTC/USD",
+        "timestamp": timestamps,
+        "open": close, "high": close, "low": close, "close": close,
+        "volume": np.zeros(n),
+    })
+
+    result = compute_technical_features(df)
+    rsi = result["rsi_14"]
+
+    # Post-warmup (index >= 14) must be 50.0 exactly.
+    post_warmup = rsi.iloc[14:]
+    assert not post_warmup.isna().any(), (
+        f"rsi_14 has NaN post-warmup: {post_warmup[post_warmup.isna()].index.tolist()}"
+    )
+    assert (post_warmup == 50.0).all(), (
+        f"rsi_14 post-warmup values: {post_warmup.unique()} (want 50.0)"
+    )

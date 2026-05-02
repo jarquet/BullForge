@@ -12,6 +12,16 @@ def _compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
     avg_loss = loss.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
     rs = avg_gain / avg_loss
     rsi = 100.0 - (100.0 / (1.0 + rs))
+    # Flat-market guard: when neither gains nor losses occurred over the EWM
+    # window (e.g. BTC/USD zero-volume bars where Alpaca emits OHLC == prior
+    # close), avg_gain and avg_loss are both exactly 0.0, rs = 0/0 = NaN, and
+    # rsi inherits the NaN. That tanks the row at engine.py's
+    # notna().all(axis=1) gate. The standard convention is RSI=50 (neutral)
+    # when there's no directional pressure. Don't touch warmup rows: those
+    # have NaN in avg_gain/avg_loss themselves (min_periods=period not yet
+    # satisfied), and engine.py is supposed to drop them.
+    flat = (avg_gain == 0.0) & (avg_loss == 0.0)
+    rsi = rsi.mask(flat, 50.0)
     return rsi
 
 
