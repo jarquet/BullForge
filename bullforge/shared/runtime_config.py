@@ -222,7 +222,7 @@ CONFIG_SCHEMA: dict[str, dict[str, Any]] = {
         "reference": "https://en.wikipedia.org/wiki/Moving_average",
     },
     "meta_inference_enabled": {
-        "default": False, "type": "json",
+        "default": False, "type": "bool",
         "label": "Meta-Model Shadow Inference",
         "description": (
             "Master switch for meta-model shadow inference. When off, "
@@ -302,6 +302,12 @@ CONFIG_SCHEMA: dict[str, dict[str, Any]] = {
 
 
 def _parse(value: str, type_: str) -> Any:
+    if type_ == "bool":
+        if value == "true":
+            return True
+        if value == "false":
+            return False
+        raise ValueError(f"invalid bool value: {value!r}")
     if type_ == "int":
         return int(value)
     if type_ == "float":
@@ -312,6 +318,8 @@ def _parse(value: str, type_: str) -> Any:
 
 
 def _serialize(value: Any, type_: str) -> str:
+    if type_ == "bool":
+        return "true" if value else "false"
     if type_ == "json":
         return json.dumps(value)
     return str(value)
