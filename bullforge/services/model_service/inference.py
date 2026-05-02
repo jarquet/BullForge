@@ -197,6 +197,7 @@ class InferenceEngine:
         active = await self._db.query_all_active_models()
         meta = [m for m in active if m.model_type in ("meta_entry", "meta_exec")]
         new: dict[tuple[str, int, str], dict] = {}
+        loaded_count = 0
         for m in meta:
             parsed = _parse_meta_artifact(m.artifact_path or "")
             if not parsed:
@@ -209,7 +210,15 @@ class InferenceEngine:
             except FileNotFoundError:
                 continue
             slot[kind] = (model, m)
+            loaded_count += 1
         self._meta_models = new
+        complete_slots = sum(
+            1 for s in new.values() if s["entry"] is not None and s["exec"] is not None
+        )
+        logger.info(
+            "Loaded %d meta artifacts across %d slots (%d complete entry+exec pairs)",
+            loaded_count, len(new), complete_slots,
+        )
 
     async def predict_meta(
         self, *, symbol: str, timeframe: str,
