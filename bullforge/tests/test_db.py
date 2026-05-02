@@ -78,6 +78,34 @@ async def test_insert_and_query_bar(db):
 
 
 @pytest.mark.asyncio
+async def test_query_bars_accepts_datetime_since(db):
+    """asyncpg refuses to coerce str → TIMESTAMPTZ when binding parameters,
+    so query_bars must accept a datetime for `since`. Regression: the meta
+    retrain phase was crashing here because we passed an ISO string."""
+    from datetime import datetime, timezone, timedelta
+    from shared.models import Bar
+
+    ts_old = datetime(2026, 4, 10, 14, 0, 0, tzinfo=timezone.utc)
+    ts_new = datetime(2026, 4, 10, 16, 0, 0, tzinfo=timezone.utc)
+    await db.insert_bar(Bar(symbol="SPY", timestamp=ts_old, open=1, high=1,
+                            low=1, close=1, volume=1, timeframe="1m"))
+    await db.insert_bar(Bar(symbol="SPY", timestamp=ts_new, open=2, high=2,
+                            low=2, close=2, volume=2, timeframe="1m"))
+
+    cutoff = ts_old + timedelta(hours=1)
+    rows = await db.query_bars("SPY", "1m", limit=10, since=cutoff)
+    assert len(rows) == 1
+    assert rows[0].close == 2
+
+    # Legacy ISO-string form still works (parsed internally).
+    rows_str = await db.query_bars(
+        "SPY", "1m", limit=10, since=cutoff.isoformat(),
+    )
+    assert len(rows_str) == 1
+    assert rows_str[0].close == 2
+
+
+@pytest.mark.asyncio
 async def test_insert_bar_upsert_on_duplicate(db):
     """Inserting a bar with the same symbol+timestamp should update, not error."""
     from datetime import datetime, timezone

@@ -103,8 +103,14 @@ class InferenceEngine:
         self._db = db
         self._model_store = model_store
         self._scope = scope
+        # Key is (symbol, timeframe, horizon_minutes, model_type). The
+        # model_type element is required because multiple model_types can
+        # share the same (symbol, timeframe, horizon) — e.g., a freshly
+        # retrained gradient_boost AND lstm both active for SPY 1m 5m. An
+        # earlier version of this key omitted model_type and silently
+        # collapsed both into one slot, dropping half the active models.
         self._models: Dict[
-            Tuple[str, str, int], Tuple[object, ModelMetadata]
+            Tuple[str, str, int, str], Tuple[object, ModelMetadata]
         ] = {}
 
     async def load_models(self) -> None:
@@ -114,7 +120,8 @@ class InferenceEngine:
         for meta in active_models:
             try:
                 model = self._model_store.load(meta.artifact_path)
-                key = (meta.symbol, meta.timeframe, meta.horizon_minutes)
+                key = (meta.symbol, meta.timeframe, meta.horizon_minutes,
+                       meta.model_type)
                 self._models[key] = (model, meta)
                 logger.info(
                     "Loaded model: %s %s %dm (%s, id=%d)",

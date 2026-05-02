@@ -6,7 +6,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import asyncpg
 
@@ -387,7 +387,7 @@ class Database:
         symbol: str,
         timeframe: str,
         limit: int = 100,
-        since: Optional[str] = None,
+        since: Optional[Union[str, datetime]] = None,
     ) -> List[Bar]:
         table = "bars_1m" if timeframe == "1m" else "bars_daily"
         query = f"""
@@ -395,8 +395,12 @@ class Database:
             FROM {table}
             WHERE symbol = $1
         """
-        args = [symbol]
+        args: list = [symbol]
         if since:
+            # asyncpg refuses to coerce str → TIMESTAMPTZ when binding the
+            # parameter, so accept either form and normalize to datetime.
+            if isinstance(since, str):
+                since = datetime.fromisoformat(since)
             query += " AND timestamp >= $2"
             args.append(since)
         query += " ORDER BY timestamp DESC LIMIT $" + str(len(args) + 1)
