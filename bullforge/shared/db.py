@@ -2823,7 +2823,18 @@ class Database:
         *,
         on_conflict: str = "upsert",
     ) -> None:
-        """`on_conflict='upsert'` overwrites; `'skip'` keeps existing rows."""
+        """Batch-insert meta_features rows.
+
+        Modes:
+        * ``upsert`` — always overwrite the existing row.
+        * ``skip`` — never overwrite; keeps the existing row as-is.
+        * ``replace_replay`` — overwrite only if the existing row's
+          source is ``'replay'``; live shadow rows stay untouched. This
+          is what the meta retrain phase wants: re-write its own prior
+          replay rows when the assembler schema changes (so a 1m-only
+          retrain replaces older all-timeframe rows), but never clobber
+          live-mode rows that may already be labeled.
+        """
         if not rows:
             return
         if on_conflict == "skip":
@@ -2836,6 +2847,16 @@ class Database:
                 "optimal_pair_idx = EXCLUDED.optimal_pair_idx, "
                 "realized_ev = EXCLUDED.realized_ev, "
                 "source = EXCLUDED.source"
+            )
+        elif on_conflict == "replace_replay":
+            conflict_clause = (
+                "ON CONFLICT (symbol, timestamp, direction) DO UPDATE SET "
+                "feature_vector = EXCLUDED.feature_vector, "
+                "entry_label = EXCLUDED.entry_label, "
+                "optimal_pair_idx = EXCLUDED.optimal_pair_idx, "
+                "realized_ev = EXCLUDED.realized_ev, "
+                "source = EXCLUDED.source "
+                "WHERE meta_features.source = 'replay'"
             )
         else:
             raise ValueError(f"unknown on_conflict mode: {on_conflict!r}")

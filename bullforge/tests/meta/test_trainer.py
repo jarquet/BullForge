@@ -74,10 +74,14 @@ async def test_train_entry_uses_replay_dataset():
     assert meta.model_type == "meta_entry"
     assert meta.estimator_type == "lightgbm"
     db.insert_meta_features_batch.assert_called_once()
-    # The trainer must call insert with on_conflict="skip" so replay rows
-    # don't overwrite live rows that may share keys.
+    # `replace_replay` overwrites prior retrains' replay rows (so a
+    # schema change in build_replay_rows actually takes effect) but
+    # leaves live rows alone. Plain "skip" was the prior behavior and
+    # caused stale replay rows to persist forever after a schema change,
+    # producing meta artifacts whose feature count didn't match
+    # inference. See Phase 1.5 batch 6.
     kw = db.insert_meta_features_batch.call_args.kwargs
-    assert kw.get("on_conflict") == "skip"
+    assert kw.get("on_conflict") == "replace_replay"
 
 
 @pytest.mark.asyncio

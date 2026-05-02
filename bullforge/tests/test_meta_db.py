@@ -83,3 +83,61 @@ async def test_insert_meta_features_batch_skip_preserves_live(db):
     assert len(rows) == 1
     assert rows[0].source == "live"
     assert rows[0].feature_vector == {"v": 1.0}
+
+
+@pytest.mark.asyncio
+async def test_insert_meta_features_batch_replace_replay_overwrites_replay_only(db):
+    """`replace_replay` must overwrite a row whose existing source is
+    'replay' (so a schema change in build_replay_rows actually takes
+    effect on the next retrain) AND leave a row whose existing source
+    is 'live' alone (so live labels filled by MetaLabelBackfiller stay
+    intact)."""
+    # Replay row at one timestamp
+    old_replay = MetaFeatureRow(
+        symbol="TST_RR", timestamp=_ts(0), direction=1,
+        feature_vector={"old_schema_col_1": 1.0, "old_schema_col_2": 2.0},
+        source="replay", entry_label=0, optimal_pair_idx=0, realized_ev=0.0,
+    )
+    # Live row at a different timestamp
+    live = MetaFeatureRow(
+        symbol="TST_RR", timestamp=_ts(15), direction=1,
+        feature_vector={"v": 7.0}, source="live",
+        entry_label=1, optimal_pair_idx=2, realized_ev=0.012,
+    )
+    await db.insert_meta_features_batch([old_replay, live])
+
+    # New retrain produces fresh replay rows for BOTH timestamps with a
+    # different schema (post Phase 1.5 fix).
+    new_replay_at_old = MetaFeatureRow(
+        symbol="TST_RR", timestamp=_ts(0), direction=1,
+        feature_vector={"new_schema_col": 99.0}, source="replay",
+        entry_label=1, optimal_pair_idx=1, realized_ev=0.005,
+    )
+    new_replay_at_live = MetaFeatureRow(
+        symbol="TST_RR", timestamp=_ts(15), direction=1,
+        feature_vector={"new_schema_col": 88.0}, source="replay",
+        entry_label=0, optimal_pair_idx=0, realized_ev=0.0,
+    )
+    await db.insert_meta_features_batch(
+        [new_replay_at_old, new_replay_at_live], on_conflict="replace_replay",
+    )
+
+    rows = await db.query_meta_features("TST_RR", direction=1, limit=10)
+    rows_by_ts = {r.timestamp: r for r in rows}
+
+    # Replay row was overwritten with new schema.
+    overwritten = rows_by_ts[_ts(0)]
+    assert overwritten.source == "replay"
+    assert overwritten.feature_vector == {"new_schema_col": 99.0}, (
+        "replace_replay must overwrite an existing replay row"
+    )
+
+    # Live row was NOT overwritten — labels and feature_vector preserved.
+    preserved = rows_by_ts[_ts(15)]
+    assert preserved.source == "live"
+    assert preserved.feature_vector == {"v": 7.0}, (
+        "replace_replay must NOT clobber live rows"
+    )
+    assert preserved.entry_label == 1
+    assert preserved.optimal_pair_idx == 2
+    assert preserved.realized_ev == pytest.approx(0.012)
