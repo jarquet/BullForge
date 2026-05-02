@@ -74,6 +74,28 @@ class FeatureEngine:
         valid_df = features_df[valid_mask]
         valid_timestamps = df.loc[valid_mask, "timestamp"]
 
+        # Per-column NaN diagnostic: when the filter drops rows, log a single
+        # WARNING naming the top-5 offending columns and the bar window so an
+        # operator can reproduce the stall without enabling debug logs.
+        total_rows = len(features_df)
+        valid_rows = int(valid_mask.sum())
+        if valid_rows < total_rows:
+            nan_counts = features_df.isna().sum().sort_values(ascending=False)
+            nan_counts = nan_counts[nan_counts > 0].head(5)
+            top_n_str = ", ".join(
+                f"{col}={int(cnt)}" for col, cnt in nan_counts.items()
+            )
+            first_ts = df["timestamp"].iloc[0].isoformat()
+            last_ts = df["timestamp"].iloc[-1].isoformat()
+            logger.warning(
+                "feature_engine: %s %s dropped %d/%d rows; "
+                "top-5 NaN cols: %s; bars %s..%s (%d bars)",
+                symbol, timeframe,
+                total_rows - valid_rows, total_rows,
+                top_n_str,
+                first_ts, last_ts, len(df),
+            )
+
         feature_rows = []
         for idx in valid_df.index:
             row_features = valid_df.loc[idx].dropna().to_dict()
