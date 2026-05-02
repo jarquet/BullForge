@@ -69,6 +69,11 @@ async def test_run_once_dispatches_cpu_then_gpu_phase():
     assert pool_instance.submit.call_count == 1
     assert lstm_mock.await_count == 1
     inference_engine.load_models.assert_awaited_once()
+    # Meta models must also be reloaded after the meta phase, otherwise
+    # freshly-trained meta artifacts sit on disk + in model_registry but
+    # the running InferenceEngine's _meta_models dict remains stale until
+    # restart, and predict_meta returns [] for every event.
+    inference_engine.load_meta_models.assert_awaited_once()
     redis_client.publish.assert_awaited()
     # last_retrain_time stored as ISO string
     set_calls = runtime_config.set.call_args_list
@@ -111,3 +116,4 @@ async def test_run_once_handles_worker_error():
 
     assert any(r["status"] == "error" for r in summary["results"])
     inference_engine.load_models.assert_awaited_once()
+    inference_engine.load_meta_models.assert_awaited_once()

@@ -148,6 +148,12 @@ class RetrainScheduler:
             logger.exception("Meta retrain phase failed")
 
         await self._inference.load_models()
+        # Also reload meta models — meta artifacts created in this cycle's
+        # _train_meta_phase live in model_registry but are not in the
+        # InferenceEngine's _meta_models dict until load_meta_models() runs.
+        # Without this, shadow inference sees an empty _meta_models dict
+        # until the model_service process is restarted.
+        await self._inference.load_meta_models()
 
         summary = {
             "as_of": as_of.isoformat(),
