@@ -200,6 +200,25 @@ class RetrainScheduler:
         max_hold = int(config.get("meta_max_hold_minutes", 30))
         min_rows = int(config.get("meta_min_train_rows", 500))
 
+        # Pre-flight: meta training replays over historical predictions.
+        # If the predictions table is empty in the training window, every
+        # (symbol, direction, estimator_type) iteration would hit
+        # "Insufficient data" silently. Surface that once at WARNING level
+        # instead, and skip the loop entirely.
+        since_window = as_of - timedelta(days=train_window)
+        pred_count = await self._db.count_predictions_in_window(
+            start=since_window, end=as_of,
+        )
+        if pred_count == 0:
+            logger.warning(
+                "Meta phase skipped — predictions table has no live rows in "
+                "[%s, %s]. Expected on a fresh deploy; live inference must "
+                "populate predictions before meta training has anything to "
+                "replay over.",
+                since_window.isoformat(), as_of.isoformat(),
+            )
+            return []
+
         # Pre-load SPY bars once for this whole cycle's RegimeBuilder.
         # Buffer is +35 days (not +7): RegimeBuilder.vol_regime needs a 30-day
         # rolling median, so anything less leaves most of the warmup window
@@ -249,10 +268,18 @@ class RetrainScheduler:
                             min_train_rows=min_rows,
                             regime_builder_factory=rb_factory,
                         )
+                        # If both train_entry and train_exec returned None
+                        # (insufficient data — logged inside the trainer),
+                        # report skipped so the run_once summary line
+                        # accurately distinguishes ok vs. skipped vs. error.
+                        status = (
+                            "ok" if (meta_e is not None or meta_x is not None)
+                            else "skipped_insufficient_data"
+                        )
                         out.append({
                             "symbol": symbol, "direction": direction,
                             "estimator_type": et,
-                            "model_type": "meta", "status": "ok",
+                            "model_type": "meta", "status": status,
                             "entry_id": meta_e.id if meta_e else None,
                             "exec_id": meta_x.id if meta_x else None,
                         })

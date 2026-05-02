@@ -880,6 +880,29 @@ class Database:
             for r in rows
         ]
 
+    async def count_predictions_in_window(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+    ) -> int:
+        """Count live predictions (any symbol/timeframe/horizon) in [start, end).
+
+        Used by the meta-retrain pre-flight check: if zero, the meta phase
+        logs once and skips, instead of running N × M trainer invocations
+        that all hit "Insufficient data" silently.
+        """
+        async with self.pool.acquire() as conn:
+            n = await conn.fetchval(
+                """
+                SELECT COUNT(*)::INT FROM predictions
+                WHERE timestamp >= $1 AND timestamp < $2
+                  AND backtest_run_id IS NULL AND fold_index IS NULL
+                """,
+                start, end,
+            )
+        return int(n or 0)
+
     async def query_predictions_in_range(
         self,
         *,
