@@ -10,11 +10,21 @@ def compute_volume_features(df: pd.DataFrame) -> pd.DataFrame:
     low = df["low"]
     volume = df["volume"].astype(float)
 
-    # VWAP (cumulative for the session)
+    # VWAP (cumulative for the session). Crypto bars (BTC/USD especially) can
+    # have long zero-volume prefixes — and during quiet hours every bar in the
+    # 500-bar window can be zero-volume — which makes cumsum(volume)=0 and
+    # cumulative_tp_vol/cumulative_vol = 0/0 = NaN for the whole window. That
+    # NaN tanks every row at engine.py's notna().all(axis=1) gate. Where no
+    # trades have occurred yet, fall back to the bar's typical price (the only
+    # sensible price reference when there's no volume to weight against). Once
+    # the cumulative volume is positive, real VWAP takes over and never goes
+    # back to NaN (cumsum is monotone non-decreasing).
     typical_price = (high + low + close) / 3
     cumulative_tp_vol = (typical_price * volume).cumsum()
     cumulative_vol = volume.cumsum()
-    vwap = cumulative_tp_vol / cumulative_vol
+    vwap = (cumulative_tp_vol / cumulative_vol).mask(
+        cumulative_vol == 0, typical_price
+    )
 
     # On-Balance Volume
     direction = np.sign(close.diff())

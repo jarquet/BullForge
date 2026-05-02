@@ -109,3 +109,75 @@ def test_volume_ratio_is_neutral_when_rolling_window_is_all_zero():
         assert np.isnan(result["volume_ratio_10"].iloc[idx]), (
             f"volume_ratio_10[{idx}] should be NaN (warmup)"
         )
+
+
+def test_vwap_is_neutral_when_cumulative_volume_is_zero():
+    """Crypto minute bars (BTC/USD especially) have long zero-volume stretches.
+    VWAP = cumsum(typical_price * volume) / cumsum(volume). When the cumulative
+    volume up to bar N is exactly 0 (i.e. every bar from the start of the
+    chronological window through N has volume=0), VWAP becomes 0/0 = NaN. That
+    NaN propagates through the entire prefix — and if the whole window is
+    zero-volume (a quiet weekend BTC stretch), VWAP is NaN for every row, which
+    in turn causes engine.py's `features_df.notna().all(axis=1)` gate to drop
+    every single row. Result: feature_engine logs `Computed 0 feature rows`
+    every minute and downstream predictions stall on a stale timestamp.
+    """
+    n = 60
+    timestamps = pd.date_range(
+        "2026-05-02 03:14:00", periods=n, freq="1min", tz="UTC"
+    )
+    # Flat price (no trades → Alpaca emits OHLC = prior close), zero volume
+    base = 90000.0
+    close = np.full(n, base)
+    df = pd.DataFrame({
+        "symbol": "BTC/USD",
+        "timestamp": timestamps,
+        "open": close, "high": close, "low": close, "close": close,
+        "volume": np.zeros(n),
+    })
+
+    result = compute_volume_features(df)
+
+    # VWAP must be finite (not NaN, not inf) for every row.
+    vwap = result["vwap"]
+    assert not vwap.isna().any(), f"vwap has NaN: {vwap[vwap.isna()].index.tolist()}"
+    assert np.isfinite(vwap).all(), "vwap has inf"
+    # When no trades have occurred, the neutral VWAP is the bar's typical price
+    # (since there's no volume-weighting, the price itself is the only sensible
+    # reference). For a flat zero-vol bar, typical_price == close == base.
+    assert (vwap == base).all(), f"expected vwap=={base} on flat zero-vol bars, got {vwap.unique()}"
+
+
+def test_vwap_handles_zero_volume_prefix():
+    """First several bars zero-volume, then trades resume: prefix VWAP must
+    not be NaN, and post-prefix VWAP must reflect the volume-weighted average
+    of the trades that did happen.
+    """
+    n = 30
+    timestamps = pd.date_range(
+        "2026-05-02 03:14:00", periods=n, freq="1min", tz="UTC"
+    )
+    base = 90000.0
+    close = np.full(n, base, dtype=float)
+    close[15:] = base + 10.0  # price ticks up at index 15
+    volume = np.zeros(n)
+    volume[15:] = 1.0  # trades resume from index 15
+
+    df = pd.DataFrame({
+        "symbol": "BTC/USD",
+        "timestamp": timestamps,
+        "open": close, "high": close, "low": close, "close": close,
+        "volume": volume,
+    })
+
+    result = compute_volume_features(df)
+
+    vwap = result["vwap"]
+    assert not vwap.isna().any(), f"vwap has NaN at indices {vwap[vwap.isna()].index.tolist()}"
+    # Prefix (zero-volume): VWAP must equal the bar's typical price (= close).
+    for idx in range(0, 15):
+        assert vwap.iloc[idx] == base, f"vwap[{idx}] = {vwap.iloc[idx]}, want {base}"
+    # Post-prefix: VWAP equals (typical_price * volume).cumsum / volume.cumsum
+    # which simplifies to the cumulative weighted price; for constant typical
+    # price = base + 10 with constant volume = 1, vwap = base + 10.
+    assert vwap.iloc[-1] == base + 10.0
