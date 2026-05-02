@@ -49,6 +49,22 @@ _ALPACA_STATUS_MAP = {
 }
 
 
+def _require_utc(dt: datetime, name: str = "datetime") -> datetime:
+    """Validate that a datetime is timezone-aware and UTC.
+
+    Raises ValueError if `dt` is naive or has a non-UTC tzinfo. Returns
+    `dt` unchanged on the happy path so callers can chain it inline.
+
+    Project invariant: all datetimes in BullForge are UTC. This helper
+    enforces that at the DB-helper boundary so a future caller passing
+    a naive datetime gets a loud failure instead of plausible-but-wrong
+    results from asyncpg's session-default timezone semantics.
+    """
+    if dt.tzinfo is None or dt.tzinfo != timezone.utc:
+        raise ValueError(f"{name} must be UTC, got tzinfo={dt.tzinfo}")
+    return dt
+
+
 def _normalize_alpaca_status(raw: str) -> str:
     mapped = _ALPACA_STATUS_MAP.get(raw)
     if mapped is None:
@@ -389,6 +405,8 @@ class Database:
         limit: int = 100,
         since: Optional[Union[str, datetime]] = None,
     ) -> List[Bar]:
+        if isinstance(since, datetime):
+            _require_utc(since, "since")
         table = "bars_1m" if timeframe == "1m" else "bars_daily"
         query = f"""
             SELECT symbol, timestamp, open, high, low, close, volume
@@ -429,6 +447,8 @@ class Database:
         start: datetime,
         end: datetime,
     ) -> list[dict]:
+        _require_utc(start, "start")
+        _require_utc(end, "end")
         table = "bars_1m" if timeframe == "1m" else "bars_daily"
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
@@ -468,6 +488,7 @@ class Database:
         previously carried on the feature row. Restricted to the 1-minute
         table because meta-shadow only fires on 1m feature events.
         """
+        _require_utc(at, "at")
         async with self.pool.acquire() as conn:
             close = await conn.fetchval(
                 """
@@ -629,8 +650,7 @@ class Database:
         as_of is a REQUIRED keyword argument to prevent accidental omission
         that would leak future data into training.
         """
-        if as_of.tzinfo is None or as_of.tzinfo != timezone.utc:
-            raise ValueError(f"as_of must be UTC, got tzinfo={as_of.tzinfo}")
+        _require_utc(as_of, "as_of")
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
@@ -1029,6 +1049,8 @@ class Database:
         logs once and skips, instead of running N × M trainer invocations
         that all hit "Insufficient data" silently.
         """
+        _require_utc(start, "start")
+        _require_utc(end, "end")
         async with self.pool.acquire() as conn:
             n = await conn.fetchval(
                 """
@@ -1053,6 +1075,8 @@ class Database:
         Returns dicts (not Prediction dataclasses) so callers can dict-key
         them by timestamp. Spans all horizons and all model_ids in range.
         """
+        _require_utc(start, "start")
+        _require_utc(end, "end")
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
@@ -1139,6 +1163,8 @@ class Database:
         *,
         scope: Optional[BacktestScope] = None,
     ) -> None:
+        if filled_at is not None:
+            _require_utc(filled_at, "filled_at")
         scope_clause, scope_args = _scope_filter(scope, next_arg=6)
         async with self.pool.acquire() as conn:
             await conn.execute(
@@ -1412,6 +1438,7 @@ class Database:
         pnl: float,
         hold_duration_seconds: int,
     ) -> None:
+        _require_utc(exit_time, "exit_time")
         async with self.pool.acquire() as conn:
             await conn.execute(
                 """
@@ -1465,6 +1492,8 @@ class Database:
         since: Optional[datetime] = None,
         limit: int = 100,
     ) -> list[Trade]:
+        if since is not None:
+            _require_utc(since, "since")
         query = """SELECT id, symbol, side, entry_time, exit_time, entry_price,
                           exit_price, quantity, pnl, hold_duration_seconds,
                           entry_order_id, exit_order_id
@@ -1536,6 +1565,10 @@ class Database:
         trailing_peak}. Downsampled to at most max_points via LTTB-like
         thinning (uniform stride — acceptable for our scale).
         """
+        if from_dt is not None:
+            _require_utc(from_dt, "from_dt")
+        if to_dt is not None:
+            _require_utc(to_dt, "to_dt")
         query = """
             SELECT exit_time, pnl
             FROM trades
@@ -1585,6 +1618,10 @@ class Database:
         Returns {daily_pnl, trade_pnl_histogram, hold_time_buckets,
         side_breakdown}. Each sub-object shaped for direct Chart.js rendering.
         """
+        if from_dt is not None:
+            _require_utc(from_dt, "from_dt")
+        if to_dt is not None:
+            _require_utc(to_dt, "to_dt")
         base_where = "WHERE exit_time IS NOT NULL AND pnl IS NOT NULL"
         args: list = []
         idx = 1
@@ -1688,6 +1725,10 @@ class Database:
         Returns {current_streak_kind: 'win'|'loss', current_streak_length,
         longest_win_streak, longest_loss_streak, ribbon: [{timestamp, win}]}.
         """
+        if from_dt is not None:
+            _require_utc(from_dt, "from_dt")
+        if to_dt is not None:
+            _require_utc(to_dt, "to_dt")
         query = (
             "SELECT exit_time, pnl FROM trades "
             "WHERE exit_time IS NOT NULL AND pnl IS NOT NULL"
@@ -1744,6 +1785,10 @@ class Database:
         UTC day (48 columns). Weekdays Mon-Fri (skip weekends since equities
         don't trade).
         """
+        if from_dt is not None:
+            _require_utc(from_dt, "from_dt")
+        if to_dt is not None:
+            _require_utc(to_dt, "to_dt")
         query = (
             "SELECT EXTRACT(DOW FROM entry_time)::INT AS dow, "
             "       EXTRACT(HOUR FROM entry_time)::INT AS hh, "
@@ -1797,6 +1842,10 @@ class Database:
         For each bucket, sums market value of all positions open at the
         bucket's start time, divided by equity.
         """
+        if from_dt is not None:
+            _require_utc(from_dt, "from_dt")
+        if to_dt is not None:
+            _require_utc(to_dt, "to_dt")
         query = (
             "SELECT symbol, entry_time, exit_time, entry_price, quantity "
             "FROM trades WHERE exit_time IS NOT NULL"
@@ -1850,6 +1899,10 @@ class Database:
         Returns {strategy_series, spy_series, stats:{annualized_return,
         annualized_vol, sharpe, max_drawdown, beta, alpha}}.
         """
+        if from_dt is not None:
+            _require_utc(from_dt, "from_dt")
+        if to_dt is not None:
+            _require_utc(to_dt, "to_dt")
         import math
         # Strategy equity (daily bucketed for clean alignment with SPY dailies).
         equity_query = (
@@ -1978,6 +2031,10 @@ class Database:
         """Per-symbol payload: equity series, trades, side breakdown,
         win rate over time (daily).
         """
+        if from_dt is not None:
+            _require_utc(from_dt, "from_dt")
+        if to_dt is not None:
+            _require_utc(to_dt, "to_dt")
         base_where = "WHERE symbol = $1 AND exit_time IS NOT NULL AND pnl IS NOT NULL"
         args: list = [symbol]
         idx = 2
@@ -2068,8 +2125,7 @@ class Database:
         self, symbol: str, as_of: datetime
     ) -> list[dict]:
         """Trades for symbol with exit_time strictly before as_of. Excludes open trades."""
-        if as_of.tzinfo is None or as_of.tzinfo != timezone.utc:
-            raise ValueError(f"as_of must be UTC, got {as_of.tzinfo}")
+        _require_utc(as_of, "as_of")
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
@@ -2174,6 +2230,10 @@ class Database:
         query_prediction_outcomes: direction matches price movement, flat is
         ±0.1% of entry.
         """
+        if from_dt is not None:
+            _require_utc(from_dt, "from_dt")
+        if to_dt is not None:
+            _require_utc(to_dt, "to_dt")
         query = """
             SELECT
                 DATE_TRUNC('day', p.timestamp) AS date,
@@ -2232,6 +2292,10 @@ class Database:
         Returns num_bins rows: {bin_low, bin_high, count, correct,
         avg_confidence, hit_rate}. All bins returned even if empty.
         """
+        if from_dt is not None:
+            _require_utc(from_dt, "from_dt")
+        if to_dt is not None:
+            _require_utc(to_dt, "to_dt")
         query = """
             WITH outcomes AS (
                 SELECT
@@ -2317,6 +2381,10 @@ class Database:
         daily_series: [{date, pnl_pct, count}, ...]}.
         P&L per signal = predicted_direction * (exit_close - entry_close) / entry_close.
         """
+        if from_dt is not None:
+            _require_utc(from_dt, "from_dt")
+        if to_dt is not None:
+            _require_utc(to_dt, "to_dt")
         query = """
             WITH signals AS (
                 SELECT
@@ -2394,6 +2462,10 @@ class Database:
 
         Returns rows: {regime, count, correct, accuracy, cumulative_pnl_pct}.
         """
+        if from_dt is not None:
+            _require_utc(from_dt, "from_dt")
+        if to_dt is not None:
+            _require_utc(to_dt, "to_dt")
         query = f"""
             WITH spy_series AS (
                 SELECT
@@ -2729,6 +2801,10 @@ class Database:
         from_dt: Optional[datetime] = None,
         to_dt: Optional[datetime] = None,
     ) -> list[dict]:
+        if from_dt is not None:
+            _require_utc(from_dt, "from_dt")
+        if to_dt is not None:
+            _require_utc(to_dt, "to_dt")
         query = """
             SELECT id, timestamp, category, scope, window, metrics
             FROM metric_snapshots
@@ -2954,6 +3030,7 @@ class Database:
         Used by MetaLabelBackfiller. Returns at most `limit` rows ordered by
         timestamp ASC so the oldest get labeled first.
         """
+        _require_utc(older_than, "older_than")
         async with self.pool.acquire() as conn:
             recs = await conn.fetch(
                 """
@@ -2983,6 +3060,7 @@ class Database:
         self, *, symbol: str, timestamp: datetime, direction: int,
         entry_label: int, optimal_pair_idx: int, realized_ev: float,
     ) -> None:
+        _require_utc(timestamp, "timestamp")
         async with self.pool.acquire() as conn:
             await conn.execute(
                 """
