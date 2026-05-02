@@ -115,6 +115,47 @@ async def test_load_models_keeps_both_model_types_for_same_slot(mock_model_store
 
 
 @pytest.mark.asyncio
+async def test_load_models_skips_meta_artifacts(mock_model_store):
+    """Regression for batch-3: meta_entry / meta_exec artifacts must NOT
+    end up in self._models. If they do, predict() iterates them and calls
+    .predict() on a CalibratedEntryEstimator (which only exposes
+    predict_proba), crashing the redis pubsub listener for every 1m
+    feature:updates event."""
+    base_gb = _make_model_metadata("SPY", 5)
+    meta_entry = ModelMetadata(
+        id=99, symbol="SPY", timeframe="1m", horizon_minutes=0,
+        model_type="meta_entry",
+        artifact_path="/path/meta_entry_long_lightgbm_SPY_1m_0m_x.joblib",
+        metrics={}, feature_columns=["base_1_dir"],
+        trained_at=datetime(2026, 4, 11, 14, 0, 0, tzinfo=timezone.utc),
+        train_samples=800, test_samples=200, estimator_type="lightgbm",
+    )
+    meta_exec = ModelMetadata(
+        id=100, symbol="SPY", timeframe="1m", horizon_minutes=0,
+        model_type="meta_exec",
+        artifact_path="/path/meta_exec_long_lightgbm_SPY_1m_0m_x.joblib",
+        metrics={}, feature_columns=["base_1_dir"],
+        trained_at=datetime(2026, 4, 11, 14, 0, 0, tzinfo=timezone.utc),
+        train_samples=800, test_samples=200, estimator_type="lightgbm",
+    )
+
+    mock_db = AsyncMock()
+    mock_db.query_all_active_models = AsyncMock(
+        return_value=[base_gb, meta_entry, meta_exec],
+    )
+
+    engine = InferenceEngine(db=mock_db, model_store=mock_model_store)
+    await engine.load_models()
+
+    assert len(engine._models) == 1
+    assert ("SPY", "1m", 5, "gradient_boost") in engine._models
+    for key in engine._models:
+        assert key[3] not in ("meta_entry", "meta_exec"), (
+            f"Meta artifact leaked into base _models: {key}"
+        )
+
+
+@pytest.mark.asyncio
 async def test_predict(mock_db, mock_model_store):
     engine = InferenceEngine(db=mock_db, model_store=mock_model_store)
     await engine.load_models()

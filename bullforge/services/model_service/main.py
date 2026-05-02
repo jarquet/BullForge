@@ -68,6 +68,13 @@ def on_feature_update_factory(
         # Meta-shadow path
         if not await runtime_config.get("meta_inference_enabled"):
             return
+        # Meta is per-bar 1m only — MetaTrainer hardcodes timeframe="1m"
+        # and build_replay_rows walks 1m bars. Running predict_meta for
+        # 1d events would feed it predictions and a model_id list with a
+        # different feature count than what the artifact was trained on,
+        # producing a LightGBM shape error and zero useful signals.
+        if timeframe != "1m":
+            return
         try:
             latest = await db.query_feature_rows(symbol, timeframe, limit=1)
             if not latest:

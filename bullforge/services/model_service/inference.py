@@ -118,6 +118,14 @@ class InferenceEngine:
         self._models.clear()
 
         for meta in active_models:
+            # Meta artifacts (meta_entry / meta_exec) belong to _meta_models,
+            # not the base inference dict. Without this skip, predict() would
+            # iterate them too and crash with AttributeError because meta
+            # estimators expose predict_proba but no predict — symptom was a
+            # CalibratedEntryEstimator.predict() lookup blowing up the redis
+            # pubsub listener for every 1m feature:updates event.
+            if meta.model_type in ("meta_entry", "meta_exec"):
+                continue
             try:
                 model = self._model_store.load(meta.artifact_path)
                 key = (meta.symbol, meta.timeframe, meta.horizon_minutes,

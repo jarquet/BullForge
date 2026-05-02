@@ -209,8 +209,15 @@ async def build_replay_rows(
         return []
 
     active_models = await db.query_all_active_models()
+    # Meta replay walks 1m bars and feeds the assembler features keyed off
+    # 1m base predictions only. Including 1d (or other-timeframe) base
+    # models in the slot list inflates the trained meta's feature count
+    # to a shape that 1m-only inference can never reproduce — symptom was
+    # `LightGBMError: data has 74 features but training had 194`. Keep the
+    # slot list aligned with the per-bar inference path.
     base_models = [m for m in active_models
                    if m.symbol == symbol
+                   and m.timeframe == "1m"
                    and m.model_type not in ("meta_entry", "meta_exec")]
     if not base_models:
         return []

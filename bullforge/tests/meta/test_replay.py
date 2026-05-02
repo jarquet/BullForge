@@ -242,6 +242,64 @@ async def test_build_replay_rows_resolves_old_model_ids_to_active_slot():
 
 
 @pytest.mark.asyncio
+async def test_build_replay_rows_filters_base_models_to_1m_timeframe():
+    """Regression for the LightGBM `data has 74 features but training had
+    194` shape mismatch: meta walks 1m bars and feeds the assembler 1m
+    base predictions. Including 1d (or other-timeframe) base models in the
+    slot list inflates the trained meta's feature count to a shape that
+    1m-only inference can never reproduce. base_models must be filtered
+    to timeframe=='1m' here, mirroring the inference path."""
+    bars = _bar_df([100 + 0.05 * i for i in range(60)])
+    bars["timestamp"] = pd.to_datetime(bars["timestamp"], utc=True)
+
+    db = AsyncMock()
+    db.query_bars_between.return_value = bars.to_dict("records")
+    db.query_feature_rows.return_value = [
+        MagicMock(symbol="AAPL", timestamp=ts.to_pydatetime(), timeframe="1m",
+                  features={"atr_14": 0.5, "sma_20": 100.0, "realized_vol": 0.02,
+                            "dist_sma_50": 0.0, "dist_sma_200": 0.0,
+                            "dist_sma_200d": 0.0})
+        for ts in bars["timestamp"]
+    ]
+    db.query_predictions_in_range.return_value = [
+        {"model_id": 1, "symbol": "AAPL", "timestamp": ts.to_pydatetime(),
+         "predicted_direction": 1, "confidence": 0.7}
+        for ts in bars["timestamp"]
+    ]
+    base_1m = MagicMock(id=1, symbol="AAPL", timeframe="1m",
+                        horizon_minutes=5, model_type="lstm")
+    base_1d = MagicMock(id=2, symbol="AAPL", timeframe="1d",
+                        horizon_minutes=1, model_type="lstm")
+    db.query_all_active_models.return_value = [base_1m, base_1d]
+    db.query_models_for_symbol.return_value = [base_1m, base_1d]
+    db.query_prediction_outcomes_for_slot.return_value = [
+        {"is_correct": True, "predicted_direction": 1, "confidence": 0.7}
+    ] * 10
+
+    spy_df = pd.DataFrame({"close": [400.0] * 60},
+                          index=pd.to_datetime(bars["timestamp"], utc=True))
+    from services.model_service.meta.regime import RegimeBuilder
+    rb_factory = lambda: RegimeBuilder(spy_bars=spy_df, max_staleness_hours=48)
+
+    rows = await build_replay_rows(
+        db=db, symbol="AAPL", direction=1,
+        as_of=bars["timestamp"].iloc[-1].to_pydatetime(),
+        window_days=1, pair_grid=[[2, 1]], max_hold_bars=10,
+        regime_builder_factory=rb_factory,
+    )
+
+    # Feature vector must reflect ONLY the 1m base model (one slot).
+    # If 1d leaked in we'd see base_2_* keys; reject that.
+    assert len(rows) > 0
+    sample_vec = rows[0].feature_vector
+    base_keys = [k for k in sample_vec if k.startswith("base_")]
+    assert any("base_1_" in k for k in base_keys)
+    assert not any("base_2_" in k for k in base_keys), (
+        f"1d base model leaked into 1m meta features: {base_keys}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_build_replay_rows_drops_predictions_for_unmapped_slot():
     """Predictions whose model_id refers to a slot that no longer has any
     active model are dropped (rather than producing garbage rows). Edge
