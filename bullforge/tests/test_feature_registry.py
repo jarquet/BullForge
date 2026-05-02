@@ -111,10 +111,20 @@ def test_compute_all_btc_zero_volume_window_produces_features():
     features = registry.compute_all(df)
 
     # The engine drops rows where any feature is NaN. After the fix, the post-
-    # warmup tail must yield at least one all-non-NaN row.
+    # warmup tail must yield ~all rows non-NaN, not just one.
+    #
+    # max_warmup is the longest warmup window across the registered
+    # calculators: technical's sma_50 (window=50) is the longest. price.py
+    # tops out at volatility_20 (20 bars), volume.py at mean_20 (20 bars),
+    # technical's RSI/ATR at 14, calendar at 0. So sma_50 dominates and
+    # max_warmup = 50. We require valid_rows >= n - max_warmup = 150, which
+    # would surface a regression that NaN'd 199 of 200 rows (the previous
+    # `>= 1` threshold would have silently let that pass).
+    max_warmup = 50
     valid_rows = features.notna().all(axis=1).sum()
-    assert valid_rows >= 1, (
-        f"BTC zero-volume flat window produced 0 valid feature rows; "
+    assert valid_rows >= n - max_warmup, (
+        f"BTC zero-volume flat window produced only {valid_rows}/{n} "
+        f"valid feature rows (expected >= {n - max_warmup}); "
         f"per-column NaN counts (last row): "
         f"{features.iloc[-1][features.iloc[-1].isna()].index.tolist()}"
     )
