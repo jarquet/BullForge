@@ -13,23 +13,19 @@ def _ts():
     return datetime(2026, 4, 30, 14, 0, tzinfo=timezone.utc)
 
 
-def _make_inference(predict_meta_return):
-    """predict_meta_return may be either a (signals, feature_vec) tuple
-    (new contract) or a bare signals list (legacy — wrapped as
-    (signals, {})). The handler wiring expects predict_meta to surface
-    both the signals AND the assembled feature vector so that the live
-    model:meta_signals payload carries the actual dict the meta
-    estimator was scored against, not an empty placeholder."""
+def _make_inference(predict_meta_return: tuple[list[dict], dict]):
+    """predict_meta_return is the (signals, feature_vec) tuple the
+    handler wiring expects. predict_meta must surface both the signals
+    AND the assembled feature vector so that the live model:meta_signals
+    payload carries the actual dict the meta estimator was scored
+    against, not an empty placeholder."""
     inference = AsyncMock()
     inference.predict.return_value = [
         MagicMock(model_id=1, predicted_direction=1, confidence=0.7,
                   symbol="AAPL", timestamp=_ts(),
                   horizon_minutes=5)
     ]
-    if isinstance(predict_meta_return, tuple):
-        inference.predict_meta.return_value = predict_meta_return
-    else:
-        inference.predict_meta.return_value = (predict_meta_return, {})
+    inference.predict_meta.return_value = predict_meta_return
     return inference
 
 
@@ -67,12 +63,15 @@ async def test_handler_publishes_meta_signals_when_enabled():
     }.get(k)
 
     redis = AsyncMock()
-    inference = _make_inference([{
+    # This test only asserts that model:meta_signals is published — it does
+    # not exercise the feature_vector contents. Pass {} explicitly so the
+    # contract stays visible at the call site.
+    inference = _make_inference(([{
         "direction": 1, "estimator_type": "lightgbm",
         "entry_probability": 0.6, "kelly_fraction": 0.05,
         "pair_index": 1, "target_pct": 0.01, "stop_pct": 0.005,
         "model_id": 11,
-    }])
+    }], {}))
     db = _make_db()
 
     handler = on_feature_update_factory(
@@ -91,7 +90,9 @@ async def test_handler_skips_meta_publish_when_disabled():
     rc = AsyncMock()
     rc.get.side_effect = lambda k: {"meta_inference_enabled": False}.get(k)
     redis = AsyncMock()
-    inference = _make_inference([])
+    # Meta inference is disabled; predict_meta shouldn't be called and the
+    # tuple is irrelevant. Pass ([], {}) explicitly to keep the contract honest.
+    inference = _make_inference(([], {}))
     db = _make_db()
     handler = on_feature_update_factory(
         inference=inference, redis=redis, runtime_config=rc, db=db,
@@ -142,7 +143,9 @@ async def test_handler_skips_meta_publish_when_no_signals_returned():
         "meta_rolling_stats_ttl_seconds": 600,
     }.get(k)
     redis = AsyncMock()
-    inference = _make_inference([])  # predict_meta returns no signals
+    # predict_meta returns no signals; feature_vec is irrelevant since the
+    # publish branch is skipped. {} explicit per the new contract.
+    inference = _make_inference(([], {}))
     db = _make_db()
     handler = on_feature_update_factory(
         inference=inference, redis=redis, runtime_config=rc, db=db,
@@ -232,12 +235,14 @@ async def test_atr_pct_uses_real_close_not_sma_20():
         "meta_rolling_stats_ttl_seconds": 600,
     }.get(k)
     redis = AsyncMock()
-    inference = _make_inference([{
+    # This test asserts on the symbol_state kwarg passed to predict_meta;
+    # the feature_vec returned isn't exercised. Pass {} explicitly.
+    inference = _make_inference(([{
         "direction": 1, "estimator_type": "lightgbm",
         "entry_probability": 0.6, "kelly_fraction": 0.05,
         "pair_index": 1, "target_pct": 0.01, "stop_pct": 0.005,
         "model_id": 11,
-    }])
+    }], {}))
     db = _make_db()
     db.query_latest_close.return_value = 120.0
 
@@ -282,7 +287,9 @@ async def test_atr_pct_missing_close_propagates_nan():
         "meta_rolling_stats_ttl_seconds": 600,
     }.get(k)
     redis = AsyncMock()
-    inference = _make_inference([])  # predict_meta returns no signals (atr<=0)
+    # predict_meta returns no signals (atr<=0); feature_vec is unused. {}
+    # explicit per the new contract.
+    inference = _make_inference(([], {}))
     db = _make_db()
     db.query_latest_close.return_value = None
 

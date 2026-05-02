@@ -134,3 +134,68 @@ def test_rsi_is_neutral_on_flat_market():
     assert (post_warmup == 50.0).all(), (
         f"rsi_14 post-warmup values: {post_warmup.unique()} (want 50.0)"
     )
+
+
+def test_rsi_transitions_to_neutral_after_partial_flat_market():
+    """The all-flat-from-start fixture (test_rsi_is_neutral_on_flat_market)
+    only exercises the case where avg_gain/avg_loss are 0.0 from the very
+    first EWM-warm row. The other regression vector is mid-stream: a normal
+    market run followed by a stretch of flat bars (e.g. BTC/USD weekend
+    no-trade minutes after a real-volume day). During the flat tail the
+    EWM averages decay geometrically toward 0 but never reach exact 0 in
+    finite float64 steps starting from a non-zero state — so the flat
+    mask doesn't fire mid-stream. What matters for engine.py's
+    notna().all(axis=1) gate is that RSI stays NON-NAN and FINITE
+    throughout the flat tail (both EWMs share the same decay factor, so
+    their ratio is preserved and rs stays well-defined). A regression
+    that re-introduced rs = 0/0 = NaN mid-stream would surface here.
+    """
+    n_normal = 30
+    n_flat = 30
+    n = n_normal + n_flat
+    timestamps = pd.date_range(
+        "2026-05-02 04:00:00", periods=n, freq="1min", tz="UTC"
+    )
+    np.random.seed(7)
+    # 30 normal bars: random-walk closes give the EWM real gain/loss to
+    # chew on, so avg_gain and avg_loss are both strictly > 0 by the end
+    # of this segment.
+    normal_close = 90000.0 + np.cumsum(np.random.randn(n_normal) * 5.0)
+    # 30 flat bars: identical close; every diff is exactly 0.0, so each
+    # EWM update multiplies the prior average by (1 - 1/14). Both decay
+    # at the same rate, so rs (avg_gain/avg_loss) stays stable.
+    flat_close = np.full(n_flat, normal_close[-1])
+    close = np.concatenate([normal_close, flat_close])
+
+    df = pd.DataFrame({
+        "symbol": "BTC/USD",
+        "timestamp": timestamps,
+        "open": close, "high": close, "low": close, "close": close,
+        "volume": np.zeros(n),
+    })
+
+    result = compute_technical_features(df)
+    rsi = result["rsi_14"]
+
+    # Across the entire flat tail (after the EWM has warmed past
+    # min_periods=14), every RSI value must be non-NaN, finite, and
+    # bounded in [0, 100]. The regression we're guarding against is
+    # rs = 0/0 = NaN poisoning rows mid-stream.
+    flat_tail = rsi.iloc[n_normal:]
+    assert not flat_tail.isna().any(), (
+        f"rsi_14 NaN during flat tail at indices "
+        f"{flat_tail[flat_tail.isna()].index.tolist()}"
+    )
+    assert np.isfinite(flat_tail.to_numpy()).all(), (
+        f"rsi_14 non-finite during flat tail: {flat_tail[~np.isfinite(flat_tail)].tolist()}"
+    )
+    assert (flat_tail >= 0).all() and (flat_tail <= 100).all(), (
+        f"rsi_14 out of [0,100] during flat tail: min={flat_tail.min()}, max={flat_tail.max()}"
+    )
+    # Both EWMs decay by the same factor each flat bar, so RSI should be
+    # essentially flat across the tail (the ratio is preserved). Any
+    # drift past a couple of points would mean the masking is wrong.
+    assert flat_tail.std() < 1.0, (
+        f"rsi_14 drifted across flat tail (std={flat_tail.std()}); "
+        f"both EWMs decay at the same rate so the ratio should hold"
+    )
