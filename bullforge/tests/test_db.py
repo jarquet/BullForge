@@ -1,6 +1,8 @@
 import pytest
 import pytest_asyncio
 import asyncpg
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock
 from shared.config import Settings
 from shared.db import Database
 
@@ -172,3 +174,107 @@ async def test_get_bar_range_timeframe_isolated(db):
     e2, l2 = await db.get_bar_range("ISO", "1d")
     assert e1 == l1 == base
     assert e2 == l2 == base + timedelta(days=10)
+
+
+# ── Hermetic UTC enforcement sweep ──────────────────────────────────
+#
+# All public Database helpers that take a datetime arg must reject naive
+# datetimes with a ValueError (project invariant: every datetime is UTC).
+# These tests mock the asyncpg pool so they run without a live DB; the
+# assertion is that _require_utc raises BEFORE pool.acquire() is touched.
+
+NAIVE_DT = datetime(2026, 5, 2, 12, 0, 0)
+UTC_DT = datetime(2026, 5, 2, 12, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def mock_db():
+    """Database with an AsyncMock pool — _require_utc must reject naive
+    datetimes before any pool method is called."""
+    settings = Settings()
+    db = Database(settings)
+    db.pool = AsyncMock()
+    return db
+
+
+# (helper_name, kwargs) pairs — one entry per (helper, datetime-arg).
+# Helpers with two datetime args appear twice (e.g. start naive / end naive).
+NAIVE_DT_CASES = [
+    # Required-datetime helpers
+    ("query_bars_between", dict(symbol="SPY", timeframe="1m", start=NAIVE_DT, end=UTC_DT)),
+    ("query_bars_between", dict(symbol="SPY", timeframe="1m", start=UTC_DT, end=NAIVE_DT)),
+    ("query_latest_close", dict(symbol="SPY", at=NAIVE_DT)),
+    ("query_training_data", dict(symbol="SPY", timeframe="1m", horizon_minutes=15, as_of=NAIVE_DT)),
+    ("count_predictions_in_window", dict(start=NAIVE_DT, end=UTC_DT)),
+    ("count_predictions_in_window", dict(start=UTC_DT, end=NAIVE_DT)),
+    ("query_predictions_in_range", dict(symbol="SPY", timeframe="1m", start=NAIVE_DT, end=UTC_DT)),
+    ("query_predictions_in_range", dict(symbol="SPY", timeframe="1m", start=UTC_DT, end=NAIVE_DT)),
+    ("update_trade_exit", dict(trade_id=1, exit_time=NAIVE_DT, exit_price=1.0,
+                               exit_order_id=1, pnl=0.0, hold_duration_seconds=60)),
+    ("query_trades_closed_before", dict(symbol="SPY", as_of=NAIVE_DT)),
+    ("update_meta_feature_labels", dict(symbol="SPY", timestamp=NAIVE_DT, direction=1,
+                                        entry_label=1, optimal_pair_idx=0, realized_ev=0.0)),
+    ("query_unlabeled_meta_features", dict(older_than=NAIVE_DT)),
+
+    # Optional-datetime helpers — pass naive in the optional slot.
+    ("query_bars", dict(symbol="SPY", timeframe="1m", since=NAIVE_DT)),
+    ("update_order_status", dict(order_id=1, status="filled", filled_at=NAIVE_DT)),
+    ("query_closed_trades", dict(symbol="SPY", since=NAIVE_DT)),
+    ("query_equity_curve", dict(starting_equity=1000.0, from_dt=NAIVE_DT)),
+    ("query_equity_curve", dict(starting_equity=1000.0, to_dt=NAIVE_DT)),
+    ("query_distributions", dict(from_dt=NAIVE_DT)),
+    ("query_distributions", dict(to_dt=NAIVE_DT)),
+    ("query_streaks", dict(from_dt=NAIVE_DT)),
+    ("query_streaks", dict(to_dt=NAIVE_DT)),
+    ("query_heatmap_time_of_day", dict(from_dt=NAIVE_DT)),
+    ("query_heatmap_time_of_day", dict(to_dt=NAIVE_DT)),
+    ("query_exposure_timeline", dict(equity=1000.0, from_dt=NAIVE_DT)),
+    ("query_exposure_timeline", dict(equity=1000.0, to_dt=NAIVE_DT)),
+    ("query_benchmark", dict(starting_equity=1000.0, from_dt=NAIVE_DT)),
+    ("query_benchmark", dict(starting_equity=1000.0, to_dt=NAIVE_DT)),
+    ("query_symbol_drilldown", dict(symbol="SPY", from_dt=NAIVE_DT)),
+    ("query_symbol_drilldown", dict(symbol="SPY", to_dt=NAIVE_DT)),
+    ("query_accuracy_history", dict(model_id=1, from_dt=NAIVE_DT)),
+    ("query_accuracy_history", dict(model_id=1, to_dt=NAIVE_DT)),
+    ("query_calibration_bins", dict(model_id=1, from_dt=NAIVE_DT)),
+    ("query_calibration_bins", dict(model_id=1, to_dt=NAIVE_DT)),
+    ("query_simulated_pnl", dict(model_id=1, from_dt=NAIVE_DT)),
+    ("query_simulated_pnl", dict(model_id=1, to_dt=NAIVE_DT)),
+    ("query_regime_breakdown", dict(model_id=1, from_dt=NAIVE_DT)),
+    ("query_regime_breakdown", dict(model_id=1, to_dt=NAIVE_DT)),
+    ("query_metric_snapshots", dict(category="cat", scope="scp", window="w", from_dt=NAIVE_DT)),
+    ("query_metric_snapshots", dict(category="cat", scope="scp", window="w", to_dt=NAIVE_DT)),
+]
+
+
+@pytest.mark.parametrize("helper_name,call_kwargs", NAIVE_DT_CASES)
+async def test_helper_rejects_naive_datetime(mock_db, helper_name, call_kwargs):
+    """Each public DB helper that takes a datetime arg must raise ValueError
+    on a naive datetime, before touching the pool. Hermetic — no DB."""
+    helper = getattr(mock_db, helper_name)
+    with pytest.raises(ValueError):
+        await helper(**call_kwargs)
+    # Pool must NOT have been touched — validation happens up-front.
+    mock_db.pool.acquire.assert_not_called()
+
+
+def test_require_utc_accepts_utc_datetime():
+    """Happy path: _require_utc returns the datetime unchanged for a UTC dt."""
+    from shared.db import _require_utc
+    out = _require_utc(UTC_DT, "x")
+    assert out is UTC_DT
+
+
+def test_require_utc_rejects_naive_datetime():
+    from shared.db import _require_utc
+    with pytest.raises(ValueError, match="x must be UTC"):
+        _require_utc(NAIVE_DT, "x")
+
+
+def test_require_utc_rejects_non_utc_tzinfo():
+    """A tz-aware datetime in a non-UTC zone is also rejected."""
+    from datetime import timedelta as _td
+    from shared.db import _require_utc
+    other_tz = timezone(_td(hours=-5))
+    with pytest.raises(ValueError, match="must be UTC"):
+        _require_utc(datetime(2026, 5, 2, 12, 0, tzinfo=other_tz), "x")
