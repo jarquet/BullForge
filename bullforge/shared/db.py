@@ -880,6 +880,104 @@ class Database:
             for r in rows
         ]
 
+    async def query_models_for_symbol(
+        self,
+        symbol: str,
+        *,
+        include_inactive: bool = True,
+        scope: Optional[BacktestScope] = None,
+    ) -> list[ModelMetadata]:
+        """Return all models for `symbol`, including inactive (i.e. older
+        retrain cycles). Used by the meta-replay path to map old prediction
+        model_ids back to their logical slot (timeframe, horizon, model_type)
+        so predictions from prior model versions still teach meta-models
+        after a base retrain."""
+        scope_clause, scope_args = _scope_filter(scope, next_arg=2)
+        active_clause = "" if include_inactive else " AND is_active = TRUE"
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT id, symbol, timeframe, horizon_minutes, model_type,
+                       artifact_path, metrics, feature_columns, trained_at,
+                       train_samples, test_samples, is_active, estimator_type,
+                       backtest_run_id, fold_index
+                FROM model_registry
+                WHERE symbol = $1{active_clause}
+                    {scope_clause}
+                ORDER BY trained_at DESC
+                """,
+                symbol, *scope_args,
+            )
+        return [
+            ModelMetadata(
+                id=r["id"],
+                symbol=r["symbol"],
+                timeframe=r["timeframe"],
+                horizon_minutes=r["horizon_minutes"],
+                model_type=r["model_type"],
+                artifact_path=r["artifact_path"],
+                metrics=json.loads(r["metrics"]),
+                feature_columns=json.loads(r["feature_columns"]),
+                trained_at=r["trained_at"],
+                train_samples=r["train_samples"],
+                test_samples=r["test_samples"],
+                is_active=r["is_active"],
+                estimator_type=r["estimator_type"],
+            )
+            for r in rows
+        ]
+
+    async def query_prediction_outcomes_for_slot(
+        self,
+        *,
+        symbol: str,
+        timeframe: str,
+        horizon_minutes: int,
+        model_type: str,
+        limit: int = 200,
+    ) -> list[dict]:
+        """Same shape as query_prediction_outcomes(model_id), but filters
+        by a logical slot (symbol, timeframe, horizon, model_type) instead
+        of a single model_id. Aggregates outcomes across every model_id
+        the symbol has ever had at that slot — needed so a freshly-retrained
+        base model inherits its slot's accuracy history immediately rather
+        than starting at zero on every retrain."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    p.predicted_direction,
+                    p.confidence,
+                    b_exit.close - b_entry.close AS price_move,
+                    CASE
+                        WHEN p.predicted_direction = 1
+                             AND b_exit.close > b_entry.close THEN TRUE
+                        WHEN p.predicted_direction = -1
+                             AND b_exit.close < b_entry.close THEN TRUE
+                        WHEN p.predicted_direction = 0
+                             AND ABS(b_exit.close - b_entry.close)
+                                 / NULLIF(b_entry.close, 0) < 0.001 THEN TRUE
+                        ELSE FALSE
+                    END AS is_correct
+                FROM predictions p
+                JOIN model_registry mr ON mr.id = p.model_id
+                JOIN bars_1m b_entry
+                    ON b_entry.symbol = p.symbol
+                    AND b_entry.timestamp = p.timestamp
+                JOIN bars_1m b_exit
+                    ON b_exit.symbol = p.symbol
+                    AND b_exit.timestamp = p.timestamp
+                        + (p.horizon_minutes * interval '1 minute')
+                WHERE mr.symbol = $1 AND mr.timeframe = $2
+                  AND mr.horizon_minutes = $3 AND mr.model_type = $4
+                  AND p.backtest_run_id IS NULL AND p.fold_index IS NULL
+                ORDER BY p.timestamp DESC
+                LIMIT $5
+                """,
+                symbol, timeframe, horizon_minutes, model_type, limit,
+            )
+        return [dict(r) for r in rows]
+
     async def count_predictions_in_window(
         self,
         *,

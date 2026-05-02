@@ -52,18 +52,34 @@ def _parse_meta_artifact(path: str) -> Optional[Tuple[str, str, str]]:
     return (kind, dir_label, est) if est else None
 
 
+_SlotKey = tuple[str, str, int, str]
+# (symbol, timeframe, horizon_minutes, model_type)
+
+
 class _MetaState:
-    """Rolling-stats cache + pair grid for meta inference."""
+    """Rolling-stats cache + pair grid for meta inference.
+
+    Caches outcomes per logical slot (symbol, timeframe, horizon,
+    model_type) rather than per model_id. Without slot keying, every
+    base retrain mints a fresh model_id whose query_prediction_outcomes
+    returns zero rows on first inference — meta features would see a
+    sudden drop to 0.0 accuracy / 0.0 calibration_error every retrain
+    night until enough live predictions accumulated under the new id.
+    """
     def __init__(self, pair_grid: list[list[float]], ttl_s: float):
         self.pair_grid = pair_grid
         self.ttl_s = ttl_s
-        self._cache: dict[int, tuple[float, dict]] = {}
+        self._cache: dict[_SlotKey, tuple[float, dict]] = {}
 
-    async def stats_for(self, db, model_id: int, now_s: float) -> dict:
-        cached = self._cache.get(model_id)
+    async def stats_for(self, db, slot: _SlotKey, now_s: float) -> dict:
+        cached = self._cache.get(slot)
         if cached and now_s - cached[0] < self.ttl_s:
             return cached[1]
-        outcomes = await db.query_prediction_outcomes(model_id, limit=200)
+        symbol, timeframe, horizon, model_type = slot
+        outcomes = await db.query_prediction_outcomes_for_slot(
+            symbol=symbol, timeframe=timeframe,
+            horizon_minutes=horizon, model_type=model_type, limit=200,
+        )
         if outcomes:
             correct = sum(1 for o in outcomes if o["is_correct"])
             acc = correct / len(outcomes)
@@ -72,7 +88,7 @@ class _MetaState:
         else:
             acc, cal_err = 0.0, 0.0
         v = {"accuracy": acc, "calibration_error": cal_err, "is_disabled": False}
-        self._cache[model_id] = (now_s, v)
+        self._cache[slot] = (now_s, v)
         return v
 
 
@@ -215,10 +231,27 @@ class InferenceEngine:
         ]
 
         model_ids = sorted({p["model_id"] for p in norm_preds})
+        # Resolve each base prediction's model_id back to its logical slot
+        # (timeframe, horizon, model_type) so rolling stats aggregate across
+        # every prior version of the same slot. self._models is loaded by
+        # load_models() and keyed by (symbol, timeframe, horizon); we keep
+        # an inverse id-keyed map here.
+        mid_to_slot: dict[int, _SlotKey] = {
+            meta.id: (meta.symbol, meta.timeframe, meta.horizon_minutes, meta.model_type)
+            for _model, meta in self._models.values()
+        }
         rolling: dict[int, dict] = {}
         now_s = _now()
         for mid in model_ids:
-            rolling[mid] = await ms.stats_for(self._db, mid, now_s)
+            slot = mid_to_slot.get(mid)
+            if slot is None:
+                # Prediction came from a model_id that is no longer active.
+                # Fall back to zero stats; the assembler will still produce
+                # a vector and the meta model can decide what to do.
+                rolling[mid] = {"accuracy": 0.0, "calibration_error": 0.0,
+                                 "is_disabled": False}
+                continue
+            rolling[mid] = await ms.stats_for(self._db, slot, now_s)
         assembler = MetaFeatureAssembler(model_ids=model_ids)
         feature_vec = assembler.assemble(
             predictions=norm_preds, rolling_stats=rolling,

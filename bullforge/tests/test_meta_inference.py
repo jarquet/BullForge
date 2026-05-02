@@ -72,6 +72,40 @@ def _md(mid, model_type, estimator_type=None, dir_label=None):
 
 
 @pytest.mark.asyncio
+async def test_meta_state_keys_rolling_stats_by_slot_not_model_id():
+    """Regression: _MetaState must aggregate prediction outcomes per
+    (symbol, timeframe, horizon, model_type) slot, not per model_id.
+    Otherwise every base retrain mints a new model_id whose outcome query
+    returns empty, and the meta features see a sudden drop to 0.0
+    accuracy on the first inference after retrain."""
+    from services.model_service.inference import _MetaState
+
+    db = AsyncMock()
+    db.query_prediction_outcomes_for_slot.return_value = [
+        {"is_correct": True, "predicted_direction": 1, "confidence": 0.7}
+    ] * 8 + [
+        {"is_correct": False, "predicted_direction": 1, "confidence": 0.7}
+    ] * 2  # 8/10 correct → 0.8 accuracy
+
+    ms = _MetaState(pair_grid=[[2, 1]], ttl_s=600.0)
+    slot = ("AAPL", "1m", 5, "lstm")
+    stats = await ms.stats_for(db, slot, now_s=1000.0)
+    assert stats["accuracy"] == pytest.approx(0.8)
+    db.query_prediction_outcomes_for_slot.assert_awaited_once()
+    kwargs = db.query_prediction_outcomes_for_slot.await_args.kwargs
+    assert kwargs.get("symbol") == "AAPL"
+    assert kwargs.get("timeframe") == "1m"
+    assert kwargs.get("horizon_minutes") == 5
+    assert kwargs.get("model_type") == "lstm"
+
+    # Cached: second call within TTL must not hit DB again.
+    db.query_prediction_outcomes_for_slot.reset_mock()
+    stats2 = await ms.stats_for(db, slot, now_s=1000.5)
+    assert stats2 == stats
+    db.query_prediction_outcomes_for_slot.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_predict_meta_no_meta_models_returns_empty():
     db = AsyncMock(); db.query_all_active_models.return_value = []
     store = MagicMock()
@@ -92,7 +126,7 @@ async def test_predict_meta_returns_signal_per_loaded_estimator():
         _md(11, "meta_entry", "lightgbm", dir_label="long"),
         _md(12, "meta_exec", "lightgbm", dir_label="long"),
     ]
-    db.query_prediction_outcomes.return_value = []
+    db.query_prediction_outcomes_for_slot.return_value = []
 
     fake_entry = MagicMock()
     fake_entry.predict_proba = MagicMock(return_value=np.array([[0.4, 0.6]]))
@@ -135,7 +169,7 @@ async def test_predict_meta_skips_when_atr_zero():
         _md(11, "meta_entry", "lightgbm", dir_label="long"),
         _md(12, "meta_exec", "lightgbm", dir_label="long"),
     ]
-    db.query_prediction_outcomes.return_value = []
+    db.query_prediction_outcomes_for_slot.return_value = []
 
     store = MagicMock(); store.load.return_value = MagicMock()
 
