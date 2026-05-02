@@ -60,6 +60,7 @@ async def test_train_meta_phase_preloads_spy_with_35_day_buffer():
     inference = AsyncMock()
     db = AsyncMock()
     db.query_bars.return_value = []
+    db.count_predictions_in_window.return_value = 1  # bypass pre-flight skip
 
     sched = RetrainScheduler(
         db_dsn="postgres://x", artifacts_dir="/tmp/x", runtime_config=rc,
@@ -96,3 +97,85 @@ async def test_train_meta_phase_preloads_spy_with_35_day_buffer():
     assert delta >= timedelta(days=train_window + 30), (
         f"SPY pre-load buffer too small: {delta} < {train_window + 30} days"
     )
+
+
+@pytest.mark.asyncio
+async def test_train_meta_phase_skips_when_predictions_table_empty():
+    """When count_predictions_in_window returns 0, the meta phase must
+    short-circuit before pre-loading SPY or constructing a MetaTrainer.
+    Saves N×M trainer calls that would all silently hit Insufficient data,
+    and surfaces the cause to operators at WARNING level."""
+    rc = AsyncMock()
+    redis = AsyncMock()
+    inference = AsyncMock()
+    db = AsyncMock()
+    db.count_predictions_in_window.return_value = 0  # trigger skip
+
+    sched = RetrainScheduler(
+        db_dsn="postgres://x", artifacts_dir="/tmp/x", runtime_config=rc,
+        inference_engine=inference, redis_client=redis,
+        symbols=["AAPL", "MSFT", "GOOGL"], timeframes=["1m"],
+        horizons_by_tf={"1m": [5]},
+        min_samples=10, db=db,
+    )
+
+    as_of = datetime(2026, 4, 30, 14, 0, tzinfo=timezone.utc)
+    config = {
+        "meta_estimator_types": ["lightgbm", "mlp"],
+        "meta_pair_grid": [[2, 1]],
+        "meta_train_window_days": 60,
+        "meta_max_hold_minutes": 30,
+        "meta_min_train_rows": 100,
+    }
+
+    with patch("services.model_service.scheduler.MetaTrainer") as MockTrainer:
+        out = await sched._train_meta_phase(config=config, as_of=as_of)
+
+    assert out == []
+    db.count_predictions_in_window.assert_awaited_once()
+    db.query_bars.assert_not_awaited()  # skipped before SPY pre-load
+    MockTrainer.assert_not_called()  # skipped before trainer construction
+
+
+@pytest.mark.asyncio
+async def test_train_meta_phase_reports_skipped_when_trainer_returns_none():
+    """When both train_entry and train_exec return None (insufficient data),
+    the scheduler must record status='skipped_insufficient_data', not 'ok'.
+    Otherwise the run_once summary line counts every empty meta job as a
+    success and the operator can't distinguish real ok vs. silent skip."""
+    rc = AsyncMock()
+    redis = AsyncMock()
+    inference = AsyncMock()
+    db = AsyncMock()
+    db.query_bars.return_value = []
+    db.count_predictions_in_window.return_value = 100  # bypass pre-flight
+
+    sched = RetrainScheduler(
+        db_dsn="postgres://x", artifacts_dir="/tmp/x", runtime_config=rc,
+        inference_engine=inference, redis_client=redis,
+        symbols=["AAPL"], timeframes=["1m"], horizons_by_tf={"1m": [5]},
+        min_samples=10, db=db,
+    )
+
+    as_of = datetime(2026, 4, 30, 14, 0, tzinfo=timezone.utc)
+    config = {
+        "meta_estimator_types": ["lightgbm"],
+        "meta_pair_grid": [[2, 1]],
+        "meta_train_window_days": 60,
+        "meta_max_hold_minutes": 30,
+        "meta_min_train_rows": 100,
+    }
+
+    with patch("services.model_service.scheduler.MetaTrainer") as MockTrainer:
+        instance = MagicMock()
+        instance.train_entry = AsyncMock(return_value=None)
+        instance.train_exec = AsyncMock(return_value=None)
+        MockTrainer.return_value = instance
+        out = await sched._train_meta_phase(config=config, as_of=as_of)
+
+    # AAPL × {long, short} × {lightgbm} = 2 entries, all skipped
+    assert len(out) == 2
+    for row in out:
+        assert row["status"] == "skipped_insufficient_data", row
+        assert row["entry_id"] is None
+        assert row["exec_id"] is None

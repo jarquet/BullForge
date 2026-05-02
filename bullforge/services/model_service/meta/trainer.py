@@ -68,6 +68,13 @@ class MetaTrainer:
             f"meta_entry_{dir_label}_{estimator_type}",
         )
         trained_at = datetime.now(timezone.utc)
+        # Deactivate prior meta_entry of the same direction+estimator_type
+        # so successive retrains don't accumulate active rows. Direction is
+        # encoded in the artifact path; estimator_type is a column.
+        await self._db.deactivate_models(
+            symbol, "1m", 0,
+            model_type="meta_entry", estimator_type=estimator_type,
+        )
         meta = ModelMetadata(symbol=symbol, timeframe="1m", horizon_minutes=0,
                              model_type="meta_entry", artifact_path=artifact_path,
                              metrics=metrics, feature_columns=list(X.columns),
@@ -125,6 +132,10 @@ class MetaTrainer:
             f"meta_exec_{dir_label}_{estimator_type}",
         )
         trained_at = datetime.now(timezone.utc)
+        await self._db.deactivate_models(
+            symbol, "1m", 0,
+            model_type="meta_exec", estimator_type=estimator_type,
+        )
         meta = ModelMetadata(symbol=symbol, timeframe="1m", horizon_minutes=0,
                              model_type="meta_exec", artifact_path=artifact_path,
                              metrics=metrics, feature_columns=list(X.columns),

@@ -106,12 +106,32 @@ def compute_atr_pct(
     return float(atr / close.iloc[-1])
 
 
+SlotKey = tuple[str, int, str]  # (timeframe, horizon_minutes, model_type)
+
+
 async def _rolling_stats(
-    db: Database, model_ids: list[int], limit: int = 200,
+    db: Database,
+    *,
+    symbol: str,
+    slot_to_active_id: dict[SlotKey, int],
+    limit: int = 200,
 ) -> dict[int, dict]:
+    """Aggregate prediction outcomes per slot (timeframe, horizon,
+    model_type), keyed by the slot's currently-active model_id.
+
+    Without slot-level aggregation, a freshly-retrained base model has
+    zero outcomes the moment it activates (its predictions haven't been
+    written yet) — so every retrain night would reset the meta features'
+    rolling-accuracy signal to zero. Aggregating across every model_id
+    the symbol has had at this slot preserves the history.
+    """
     out: dict[int, dict] = {}
-    for mid in model_ids:
-        outcomes = await db.query_prediction_outcomes(mid, limit=limit)
+    for slot, active_id in slot_to_active_id.items():
+        timeframe, horizon, model_type = slot
+        outcomes = await db.query_prediction_outcomes_for_slot(
+            symbol=symbol, timeframe=timeframe,
+            horizon_minutes=horizon, model_type=model_type, limit=limit,
+        )
         if outcomes:
             correct = sum(1 for o in outcomes if o["is_correct"])
             acc = correct / len(outcomes)
@@ -119,8 +139,8 @@ async def _rolling_stats(
             cal_err = abs(avg_conf - acc)
         else:
             acc, cal_err = 0.0, 0.0
-        out[mid] = {"accuracy": acc, "calibration_error": cal_err,
-                    "is_disabled": False}
+        out[active_id] = {"accuracy": acc, "calibration_error": cal_err,
+                          "is_disabled": False}
     return out
 
 
@@ -195,8 +215,41 @@ async def build_replay_rows(
     if not base_models:
         return []
 
+    # Build the slot → active model_id map. A "slot" is the logical model
+    # identity that survives retrains: same (timeframe, horizon, model_type)
+    # → same slot, even with a fresh model_id every retrain night.
+    slot_to_active_id: dict[SlotKey, int] = {
+        (m.timeframe, m.horizon_minutes, m.model_type): m.id for m in base_models
+    }
+    # Resolve every prediction's model_id (which may be from a now-inactive
+    # prior version of the same slot) to the slot's current active id, so
+    # the assembler — which still keys by model_id — sees a coherent
+    # picture. Predictions whose slot no longer has an active model are
+    # dropped; predictions in slots with multiple historical model_ids per
+    # timestamp are deduplicated, keeping the most recent.
+    all_models = await db.query_models_for_symbol(symbol, include_inactive=True)
+    mid_to_slot: dict[int, SlotKey] = {
+        m.id: (m.timeframe, m.horizon_minutes, m.model_type) for m in all_models
+    }
+    for ts, preds in list(preds_by_ts.items()):
+        rewritten: list[dict] = []
+        seen_slots: set[SlotKey] = set()
+        for p in preds:
+            slot = mid_to_slot.get(p["model_id"])
+            if slot is None or slot not in slot_to_active_id:
+                continue
+            if slot in seen_slots:
+                continue
+            seen_slots.add(slot)
+            p_new = dict(p)
+            p_new["model_id"] = slot_to_active_id[slot]
+            rewritten.append(p_new)
+        preds_by_ts[ts] = rewritten
+
     model_ids = [m.id for m in base_models]
-    rolling = await _rolling_stats(db, model_ids)
+    rolling = await _rolling_stats(
+        db, symbol=symbol, slot_to_active_id=slot_to_active_id,
+    )
     assembler = MetaFeatureAssembler(model_ids=model_ids)
     rb = regime_builder_factory()
     sim = PairSimulator()
@@ -209,7 +262,7 @@ async def build_replay_rows(
         ts = pd.Timestamp(ts_raw).to_pydatetime()
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
-        if ts not in features or ts not in preds_by_ts:
+        if ts not in features or not preds_by_ts.get(ts):
             continue
         atr_pct = compute_atr_pct(bars, idx=i, period=14)
         if pd.isna(atr_pct) or atr_pct <= 0:

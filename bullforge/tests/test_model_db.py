@@ -123,6 +123,31 @@ async def test_deactivate_models(settings, mock_pool):
     call_args = conn.execute.call_args
     assert "UPDATE model_registry" in call_args[0][0]
     assert "is_active = FALSE" in call_args[0][0]
+    # Without model_type, the SQL must NOT carry a model_type predicate so
+    # the legacy "deactivate everything for this key" semantics is preserved
+    # (used by backtest cleanup paths).
+    assert "model_type = $" not in call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_deactivate_models_with_model_type_scopes_predicate(settings, mock_pool):
+    """Cross-model_type isolation: passing model_type adds a `model_type = $N`
+    clause so the UPDATE does not flip rows of other model_types to inactive.
+    Regression test for the bug where lstm training (running second) wiped
+    out gradient_boost active rows for the same (symbol, timeframe, horizon)."""
+    from shared.db import Database
+
+    pool, conn = mock_pool
+    conn.execute = AsyncMock()
+    db = Database(settings)
+    db.pool = pool
+
+    await db.deactivate_models("SPY", "1m", 5, model_type="lstm")
+
+    conn.execute.assert_called_once()
+    sql, *params = conn.execute.call_args[0]
+    assert "model_type = $" in sql
+    assert "lstm" in params
 
 
 @pytest.mark.asyncio

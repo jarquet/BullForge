@@ -148,6 +148,55 @@ async def test_artifact_filename_includes_direction_and_estimator():
     assert "meta_entry" in saved_name
 
 
+@pytest.mark.asyncio
+async def test_train_entry_deactivates_prior_active_before_insert():
+    """MetaTrainer must call deactivate_models scoped to (model_type='meta_entry',
+    estimator_type=...) before inserting the new artifact, otherwise repeated
+    retrains accumulate active rows. The estimator_type filter ensures
+    training mlp does not deactivate lightgbm's just-trained meta_entry row."""
+    db = _mock_db_for_trainer()
+    rows = _replay_rows()
+    with patch("services.model_service.meta.trainer.build_replay_rows",
+               new=AsyncMock(return_value=rows)):
+        trainer = MetaTrainer(
+            db=db, model_store=_mock_store(),
+            sub_model_pairs={"long": [[2, 1], [3, 1.5], [4, 2]]},
+        )
+        await trainer.train_entry(
+            symbol="AAPL", direction=1,
+            estimator_type="lightgbm", as_of=_ts(0),
+            train_window_days=60, max_hold_minutes=30,
+            min_train_rows=100,
+        )
+    db.deactivate_models.assert_any_call(
+        "AAPL", "1m", 0,
+        model_type="meta_entry", estimator_type="lightgbm",
+    )
+    db.insert_model_metadata.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_train_exec_deactivates_prior_active_before_insert():
+    db = _mock_db_for_trainer()
+    rows = _replay_rows()
+    with patch("services.model_service.meta.trainer.build_replay_rows",
+               new=AsyncMock(return_value=rows)):
+        trainer = MetaTrainer(
+            db=db, model_store=_mock_store(),
+            sub_model_pairs={"long": [[2, 1], [3, 1.5], [4, 2]]},
+        )
+        await trainer.train_exec(
+            symbol="AAPL", direction=1,
+            estimator_type="lightgbm", as_of=_ts(0),
+            train_window_days=60, max_hold_minutes=30,
+            min_train_rows=100,
+        )
+    db.deactivate_models.assert_any_call(
+        "AAPL", "1m", 0,
+        model_type="meta_exec", estimator_type="lightgbm",
+    )
+
+
 def test_evaluate_entry_clamps_nan_to_safe_defaults():
     """When y_test is single-class, sklearn's roc_auc_score raises ValueError
     or returns NaN. Either way, the trainer must emit JSON-safe metrics
