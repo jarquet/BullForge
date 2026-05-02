@@ -2,7 +2,7 @@ import pytest
 import pytest_asyncio
 import asyncpg
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 from shared.config import Settings
 from shared.db import Database
 
