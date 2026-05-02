@@ -106,6 +106,44 @@ async def test_submit_market_order(broker, mock_client):
 
 
 @pytest.mark.asyncio
+async def test_submit_market_order_equity_uses_day_tif(broker, mock_client):
+    """Equities must keep `time_in_force=day` — Alpaca's equity default."""
+    from alpaca.trading.enums import TimeInForce
+
+    mock_order = MagicMock()
+    mock_order.id = "order-eq-1"
+    mock_client.submit_order.return_value = mock_order
+
+    await broker.submit_market_order("SPY", 10, "buy")
+
+    args, _ = mock_client.submit_order.call_args
+    request = args[0]
+    assert request.symbol == "SPY"
+    assert request.time_in_force == TimeInForce.DAY
+
+
+@pytest.mark.asyncio
+async def test_submit_market_order_crypto_uses_gtc_tif(broker, mock_client):
+    """Crypto symbols (BASE/QUOTE) must use `time_in_force=gtc`.
+
+    Alpaca's crypto endpoint rejects `day` with code 42210000; only `gtc`
+    and `ioc` are accepted. Regression test for crypto execution path.
+    """
+    from alpaca.trading.enums import TimeInForce
+
+    mock_order = MagicMock()
+    mock_order.id = "order-btc-1"
+    mock_client.submit_order.return_value = mock_order
+
+    await broker.submit_market_order("BTC/USD", 0.01, "buy")
+
+    args, _ = mock_client.submit_order.call_args
+    request = args[0]
+    assert request.symbol == "BTC/USD"
+    assert request.time_in_force == TimeInForce.GTC
+
+
+@pytest.mark.asyncio
 async def test_get_order(broker, mock_client):
     mock_order = MagicMock()
     mock_order.id = "order-abc-123"
