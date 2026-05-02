@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 import pytest_asyncio
 import pandas as pd
@@ -183,3 +185,79 @@ async def test_compute_features_no_publish_without_redis(mock_settings, mock_db,
     # Should not raise even without redis_client
     await engine.compute_features_for_symbol("SPY", "1m")
     mock_db.insert_feature_rows.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_compute_features_warns_per_column_when_nan_drops_rows(
+    caplog, mock_settings, mock_db,
+):
+    """When a calculator NaNs out a column, the engine must emit a WARNING
+    naming the offending column, its NaN count, and the bar window — so an
+    operator can diagnose a stalled pipeline without re-running with debug
+    logs."""
+    registry = FeatureRegistry()
+
+    def half_nan(df: pd.DataFrame) -> pd.DataFrame:
+        n = len(df)
+        nan_count = n // 2
+        col = pd.Series(
+            [float("nan")] * nan_count + [1.0] * (n - nan_count),
+            index=df.index,
+        )
+        return pd.DataFrame({"unstable_col": col}, index=df.index)
+
+    registry.register("half_nan", half_nan)
+
+    engine = FeatureEngine(
+        settings=mock_settings,
+        db=mock_db,
+        registry=registry,
+        label_horizons={"1m": [5], "1d": [5]},
+    )
+
+    with caplog.at_level(logging.WARNING, logger="services.feature_engine.engine"):
+        await engine.compute_features_for_symbol("SPY", "1m")
+
+    nan_warnings = [
+        r for r in caplog.records
+        if r.levelno == logging.WARNING
+        and r.name == "services.feature_engine.engine"
+    ]
+    assert nan_warnings, "expected at least one WARNING when rows are dropped"
+
+    # The diagnostic warning should mention the symbol, the NaN'ing column,
+    # the count of dropped/NaN rows (60 bars; 30 NaN'd), and the bar count.
+    warning_messages = [r.getMessage() for r in nan_warnings]
+    assert any("SPY" in m for m in warning_messages)
+    assert any("unstable_col" in m for m in warning_messages)
+    assert any("30" in m for m in warning_messages), (
+        f"expected NaN count 30 in warning; got {warning_messages!r}"
+    )
+    assert any("1m" in m for m in warning_messages)
+
+
+@pytest.mark.asyncio
+async def test_compute_features_no_warning_when_all_rows_valid(
+    caplog, mock_settings, mock_db, simple_registry,
+):
+    """The diagnostic warning must NOT fire on the happy path — the existing
+    INFO ``Computed N feature rows`` log already covers it. A noisy WARNING
+    on every successful call would drown out real signal."""
+    engine = FeatureEngine(
+        settings=mock_settings,
+        db=mock_db,
+        registry=simple_registry,
+        label_horizons={"1m": [5], "1d": [5]},
+    )
+
+    with caplog.at_level(logging.WARNING, logger="services.feature_engine.engine"):
+        await engine.compute_features_for_symbol("SPY", "1m")
+
+    nan_warnings = [
+        r for r in caplog.records
+        if r.levelno == logging.WARNING
+        and r.name == "services.feature_engine.engine"
+    ]
+    assert not nan_warnings, (
+        f"expected no WARNING when all rows are valid; got {[r.getMessage() for r in nan_warnings]!r}"
+    )
