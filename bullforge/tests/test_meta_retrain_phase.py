@@ -92,7 +92,16 @@ async def test_train_meta_phase_preloads_spy_with_35_day_buffer():
     args = db.query_bars.await_args.args
     since = kwargs.get("since") or (args[2] if len(args) >= 3 else None)
     assert since is not None
-    since_dt = datetime.fromisoformat(since)
+    # asyncpg refuses to coerce str → TIMESTAMPTZ when binding parameters,
+    # so the caller must pass a datetime. Accept either form for back-compat
+    # in case a future caller passes ISO strings.
+    if isinstance(since, str):
+        since_dt = datetime.fromisoformat(since)
+    else:
+        since_dt = since
+    assert isinstance(since_dt, datetime), (
+        f"since must be datetime-like for asyncpg binding; got {type(since)}"
+    )
     delta = as_of - since_dt
     assert delta >= timedelta(days=train_window + 30), (
         f"SPY pre-load buffer too small: {delta} < {train_window + 30} days"

@@ -65,8 +65,10 @@ async def test_load_models(mock_db, mock_model_store):
     await engine.load_models()
 
     assert len(engine._models) == 2
-    assert ("SPY", "1m", 5) in engine._models
-    assert ("SPY", "1m", 10) in engine._models
+    # Key is (symbol, timeframe, horizon_minutes, model_type) so two
+    # model_types at the same (symbol, timeframe, horizon) coexist.
+    assert ("SPY", "1m", 5, "gradient_boost") in engine._models
+    assert ("SPY", "1m", 10, "gradient_boost") in engine._models
     assert mock_model_store.load.call_count == 2
 
 
@@ -79,6 +81,37 @@ async def test_load_models_empty(mock_model_store):
     await engine.load_models()
 
     assert len(engine._models) == 0
+
+
+@pytest.mark.asyncio
+async def test_load_models_keeps_both_model_types_for_same_slot(mock_model_store):
+    """Regression: two active models that share (symbol, timeframe, horizon)
+    but differ in model_type (e.g., gradient_boost AND lstm both active for
+    SPY 1m 5m after a retrain) must both load. The earlier 3-tuple key
+    silently dropped one of them — operator-visible symptom was 'Loaded N
+    models for inference' showing half the registered active count."""
+    gb = _make_model_metadata("SPY", 5)  # default model_type=gradient_boost
+    lstm = ModelMetadata(
+        id=2, symbol="SPY", timeframe="1m", horizon_minutes=5,
+        model_type="lstm", artifact_path="/path/lstm.pt",
+        metrics={"accuracy": 0.6},
+        feature_columns=["sma_20", "rsi_14", "return_1"],
+        trained_at=datetime(2026, 4, 11, 14, 0, 0, tzinfo=timezone.utc),
+        train_samples=800, test_samples=200,
+    )
+
+    mock_db = AsyncMock()
+    mock_db.query_all_active_models = AsyncMock(return_value=[gb, lstm])
+
+    engine = InferenceEngine(db=mock_db, model_store=mock_model_store)
+    await engine.load_models()
+
+    assert len(engine._models) == 2, (
+        "Both model_types must coexist for the same (symbol, tf, horizon); "
+        "if this is 1, the key collision regression has returned."
+    )
+    assert ("SPY", "1m", 5, "gradient_boost") in engine._models
+    assert ("SPY", "1m", 5, "lstm") in engine._models
 
 
 @pytest.mark.asyncio

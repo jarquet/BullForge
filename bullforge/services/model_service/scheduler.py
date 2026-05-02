@@ -225,7 +225,7 @@ class RetrainScheduler:
         # producing NaN regime values.
         spy_recs = await self._db.query_bars(
             "SPY", "1m",
-            since=(as_of - timedelta(days=train_window + 35)).isoformat(),
+            since=as_of - timedelta(days=train_window + 35),
             limit=400000,
         )
         # query_bars returns list[Bar]; build a lightweight DataFrame for RegimeBuilder
