@@ -164,6 +164,34 @@ def on_model_retrained_factory(*, inference):
     return on_model_retrained
 
 
+def on_market_tick_factory(*, regime_builder):
+    """Build the market:ticks handler that keeps the live RegimeBuilder
+    fresh.
+
+    model_service loads SPY once at startup. Without this subscription,
+    after meta_regime_max_staleness_hours (default 48h) every regime
+    feature in the meta inference path silently zeros out — corrupting
+    meta_features.feature_vector rows for everything past day 2 of the
+    deploy. SPY is already on market:ticks (it's in
+    trading_symbols_equity), so we just intercept its events and append
+    the (timestamp, close) row to the in-memory dataframe.
+
+    Defensive try/except around the whole body so a malformed message
+    can never kill the subscriber, mirroring on_model_retrained_factory.
+    """
+    async def on_market_tick(message: str) -> None:
+        try:
+            data = json.loads(message)
+            if data.get("symbol") != "SPY":
+                return
+            ts = datetime.fromisoformat(data["timestamp"])
+            close = float(data["close"])
+            regime_builder.append_bar(ts, close)
+        except Exception:
+            logger.exception("Failed to handle market:ticks SPY event")
+    return on_market_tick
+
+
 async def main() -> None:
     settings = Settings()
     db = Database(settings)
@@ -297,6 +325,12 @@ async def main() -> None:
     await redis_client.subscribe("model:retrained", on_model_retrained)
     logger.info(
         "Subscribed to model:retrained for in-memory model state refresh"
+    )
+
+    on_market_tick = on_market_tick_factory(regime_builder=regime_builder)
+    await redis_client.subscribe("market:ticks", on_market_tick)
+    logger.info(
+        "Subscribed to market:ticks to keep RegimeBuilder fresh from SPY bars"
     )
 
     # Start the meta label-backfiller as a background task.

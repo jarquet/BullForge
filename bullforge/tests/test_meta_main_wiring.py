@@ -5,6 +5,7 @@ import pytest
 
 from services.model_service.main import (
     on_feature_update_factory, on_model_retrained_factory,
+    on_market_tick_factory,
 )
 
 
@@ -295,6 +296,71 @@ async def test_atr_pct_missing_close_propagates_nan():
     symbol_state = inference.predict_meta.await_args.kwargs["symbol_state"]
     # NaN — not 0.0, not the legacy sma_20 fallback.
     assert math.isnan(symbol_state["atr_price_ratio"])
+
+
+@pytest.mark.asyncio
+async def test_on_market_tick_appends_spy_bar_to_regime_builder():
+    """SPY market:ticks events must route into RegimeBuilder.append_bar
+    so the regime context stays fresh past meta_regime_max_staleness_hours.
+    Without this subscription, model_service's RegimeBuilder freezes at
+    startup state and silently zeros every regime feature after 48h."""
+    rb = MagicMock()
+    rb.append_bar = MagicMock()
+    handler = on_market_tick_factory(regime_builder=rb)
+    ts = datetime(2026, 4, 30, 18, 30, tzinfo=timezone.utc)
+    await handler(json.dumps({
+        "symbol": "SPY",
+        "timestamp": ts.isoformat(),
+        "open": 400.0, "high": 401.0, "low": 399.5,
+        "close": 400.5, "volume": 12345.0,
+    }))
+    # Handler signature is fixed-positional: append_bar(ts, close).
+    rb.append_bar.assert_called_once_with(ts, 400.5)
+
+
+@pytest.mark.asyncio
+async def test_on_market_tick_ignores_non_spy_symbols():
+    """Only SPY drives the regime builder. AAPL ticks must no-op."""
+    rb = MagicMock()
+    rb.append_bar = MagicMock()
+    handler = on_market_tick_factory(regime_builder=rb)
+    await handler(json.dumps({
+        "symbol": "AAPL",
+        "timestamp": _ts().isoformat(),
+        "open": 100.0, "high": 100.5, "low": 99.5,
+        "close": 100.2, "volume": 1000.0,
+    }))
+    rb.append_bar.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_on_market_tick_swallows_malformed_message():
+    """Mirror the on_model_retrained defensiveness — a malformed payload
+    must never bring down the redis subscriber."""
+    rb = MagicMock()
+    rb.append_bar = MagicMock()
+    handler = on_market_tick_factory(regime_builder=rb)
+
+    # Garbage JSON: parse fails before append_bar is ever reached.
+    await handler("not json at all")
+    rb.append_bar.assert_not_called()
+    rb.append_bar.reset_mock()
+
+    # Missing required fields: validation rejects before append_bar.
+    await handler(json.dumps({"symbol": "SPY"}))
+    rb.append_bar.assert_not_called()
+    rb.append_bar.reset_mock()
+
+    # append_bar that itself raises must also be swallowed. Here the call
+    # IS attempted (payload is valid), so assert call happened — not that
+    # it didn't.
+    rb.append_bar.side_effect = RuntimeError("boom")
+    await handler(json.dumps({
+        "symbol": "SPY",
+        "timestamp": _ts().isoformat(),
+        "close": 400.0,
+    }))
+    assert rb.append_bar.call_count >= 1
 
 
 @pytest.mark.asyncio
