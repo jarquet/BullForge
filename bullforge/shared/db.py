@@ -457,6 +457,29 @@ class Database:
             return None, None
         return row["lo"], row["hi"]
 
+    async def query_latest_close(
+        self, symbol: str, at: datetime,
+    ) -> Optional[float]:
+        """Return the close of the most recent bars_1m row at-or-before ``at``,
+        or None if no such row exists.
+
+        Used by the meta-shadow inference path to scale ATR% by the real
+        close (atr_pct = atr_14 / close) instead of the sma_20 stand-in
+        previously carried on the feature row. Restricted to the 1-minute
+        table because meta-shadow only fires on 1m feature events.
+        """
+        async with self.pool.acquire() as conn:
+            close = await conn.fetchval(
+                """
+                SELECT close FROM bars_1m
+                WHERE symbol = $1 AND timestamp <= $2
+                ORDER BY timestamp DESC
+                LIMIT 1
+                """,
+                symbol, at,
+            )
+        return float(close) if close is not None else None
+
     async def insert_feature_row(self, row: FeatureRow) -> None:
         async with self.pool.acquire() as conn:
             await conn.execute(
