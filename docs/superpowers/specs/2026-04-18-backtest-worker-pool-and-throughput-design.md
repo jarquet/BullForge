@@ -28,7 +28,7 @@ Concurrent backtest safety shipped yesterday (commits `4ae4bfe..b3e92aa`); this 
 
 ### 1. Schema — `backtest_jobs.worker_pool`
 
-New migration `019_backtest_jobs_worker_pool.sql`:
+New migration `019b_backtest_jobs_worker_pool.sql`:
 
 ```sql
 ALTER TABLE backtest_jobs
@@ -238,7 +238,7 @@ Rollback: `docker compose down backtest-worker-cpu backtest-worker-gpu`, restore
 
 | File | Purpose |
 |---|---|
-| `bullforge/migrations/019_backtest_jobs_worker_pool.sql` | New column + index |
+| `bullforge/migrations/019b_backtest_jobs_worker_pool.sql` | New column + index |
 | `bullforge/services/backtest_service/worker_pool.py` | Pool classifier |
 | `bullforge/services/backtest_service/jobs_db.py` | `insert_job(worker_pool=None)`, `claim_next(worker_pool=...)` |
 | `bullforge/services/backtest_service/worker.py` | Read `BACKTEST_WORKER_POOL` env; pass to `claim_next` |

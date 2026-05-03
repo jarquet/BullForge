@@ -214,12 +214,71 @@ class Database:
             await self.pool.close()
             self.pool = None
 
-    async def _run_migrations(self, conn: asyncpg.Connection) -> None:
-        migrations_dir = Path(__file__).parent.parent / "migrations"
+    async def _run_migrations(
+        self,
+        conn: asyncpg.Connection,
+        *,
+        migrations_dir: Optional[Path] = None,
+    ) -> None:
+        # The default path is the only one used in production. Tests pass an
+        # alternate path to exercise the ledger logic against synthetic
+        # migrations (see tests/test_db.py::test_ledger_skips_already_applied).
+        if migrations_dir is None:
+            migrations_dir = Path(__file__).parent.parent / "migrations"
         sql_files = sorted(migrations_dir.glob("*.sql"))
+
+        # Self-bootstrap the ledger. CREATE TABLE IF NOT EXISTS is idempotent,
+        # so this runs every connect and no-ops once the table exists.
+        # Living inline (rather than as a numbered migration file) avoids the
+        # chicken-and-egg of "the ledger guards every file but who guards the
+        # ledger creator?".
+        await conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "filename TEXT PRIMARY KEY, "
+            "applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()"
+            ")"
+        )
+
+        applied = {
+            r["filename"]
+            for r in await conn.fetch("SELECT filename FROM schema_migrations")
+        }
+
+        # Cutover detection: an empty ledger on a DB whose schema is already
+        # populated implies this is the first connect after B1 ships against
+        # a healthy production database. Bulk-insert every current filename
+        # as already-applied so the 22 idempotent migrations don't all
+        # re-run once on the cutover deploy. `bars_1m` is the canary because
+        # 001_create_bars.sql creates it and every populated DB has it.
+        if not applied:
+            schema_populated = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema='public' AND table_name='bars_1m')"
+            )
+            if schema_populated:
+                for sql_file in sql_files:
+                    await conn.execute(
+                        "INSERT INTO schema_migrations (filename) VALUES ($1) "
+                        "ON CONFLICT DO NOTHING",
+                        sql_file.name,
+                    )
+                return
+
         for sql_file in sql_files:
+            if sql_file.name in applied:
+                continue
             sql = sql_file.read_text()
-            await conn.execute(sql)
+            # Run the migration and the ledger insert in one transaction so
+            # a connection drop between them can't leave the migration
+            # applied but unrecorded (which would cause a re-run on the next
+            # connect — safe given idempotency, but undesirable noise).
+            async with conn.transaction():
+                await conn.execute(sql)
+                await conn.execute(
+                    "INSERT INTO schema_migrations (filename) VALUES ($1) "
+                    "ON CONFLICT DO NOTHING",
+                    sql_file.name,
+                )
 
     async def _sync_sandbox_schema(self, conn: asyncpg.Connection) -> None:
         """

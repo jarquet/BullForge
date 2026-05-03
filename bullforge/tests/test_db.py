@@ -2,9 +2,18 @@ import pytest
 import pytest_asyncio
 import asyncpg
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
+import shared.db
 from shared.config import Settings
 from shared.db import Database
+
+
+_REAL_MIGRATIONS_DIR = Path(shared.db.__file__).parent.parent / "migrations"
+
+
+def _real_migration_filenames() -> set[str]:
+    return {p.name for p in _REAL_MIGRATIONS_DIR.glob("*.sql")}
 
 
 @pytest_asyncio.fixture
@@ -54,6 +63,114 @@ async def test_run_migrations(db):
             "WHERE table_name = 'calendar_events'"
         )
         assert result == 1
+
+
+@pytest.mark.asyncio
+async def test_ledger_records_all_migrations(db):
+    """After connect, schema_migrations contains every .sql filename
+    currently in bullforge/migrations/."""
+    async with db.pool.acquire() as conn:
+        rows = await conn.fetch("SELECT filename FROM schema_migrations")
+        ledger = {r["filename"] for r in rows}
+    assert ledger == _real_migration_filenames()
+
+
+@pytest.mark.asyncio
+async def test_ledger_skips_already_applied(db, tmp_path):
+    """A non-idempotent sentinel migration runs once across two
+    _run_migrations calls. If the ledger correctly records and skips,
+    the inserted row count stays at 1; if the migration re-runs, it
+    becomes 2."""
+    sentinel_table = "ledger_test_sentinel"
+    (tmp_path / "00a_ledger_test_table.sql").write_text(
+        f"CREATE TABLE IF NOT EXISTS {sentinel_table} "
+        "(id SERIAL PRIMARY KEY, marker TEXT);"
+    )
+    (tmp_path / "00b_ledger_test_insert.sql").write_text(
+        f"INSERT INTO {sentinel_table} (marker) VALUES ('one');"
+    )
+
+    async with db.pool.acquire() as conn:
+        # Pre-clean so re-runs of the test suite start clean.
+        await conn.execute(f"DROP TABLE IF EXISTS {sentinel_table}")
+        await conn.execute(
+            "DELETE FROM schema_migrations "
+            "WHERE filename LIKE '00%_ledger_test_%'"
+        )
+
+        await db._run_migrations(conn, migrations_dir=tmp_path)
+        count_after_first = await conn.fetchval(
+            f"SELECT COUNT(*) FROM {sentinel_table}"
+        )
+
+        await db._run_migrations(conn, migrations_dir=tmp_path)
+        count_after_second = await conn.fetchval(
+            f"SELECT COUNT(*) FROM {sentinel_table}"
+        )
+
+        # Cleanup before assertions so teardown happens even on failure.
+        await conn.execute(f"DROP TABLE {sentinel_table}")
+        await conn.execute(
+            "DELETE FROM schema_migrations "
+            "WHERE filename LIKE '00%_ledger_test_%'"
+        )
+
+    assert count_after_first == 1
+    assert count_after_second == 1, (
+        "sentinel migration re-ran on the second _run_migrations call "
+        f"(row count went from {count_after_first} to {count_after_second})"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cutover_bulk_prepopulate():
+    """Production-cutover scenario: a populated DB whose schema_migrations
+    table doesn't exist yet (because B1 hasn't shipped). On reconnect,
+    cutover-detect should bulk-insert every current filename so subsequent
+    connects find a populated ledger.
+
+    A sentinel row is inserted into bars_1m before the ledger is dropped.
+    The row should survive the reconnect — the cutover path must not
+    truncate, recreate, or otherwise clobber existing application data."""
+    from shared.models import Bar
+
+    settings = Settings()
+    db1 = Database(settings)
+    await db1.connect()
+
+    sentinel = Bar(
+        symbol="CUTOVER_SENTINEL",
+        timestamp=datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+        open=100.0, high=100.0, low=100.0, close=100.0,
+        volume=1, timeframe="1m",
+    )
+    await db1.insert_bar(sentinel)
+
+    async with db1.pool.acquire() as conn:
+        # Drop the ledger to simulate the pre-B1 state on a populated DB.
+        await conn.execute("DROP TABLE schema_migrations")
+    await db1.disconnect()
+
+    db2 = Database(settings)
+    await db2.connect()
+
+    async with db2.pool.acquire() as conn:
+        ledger = {r["filename"] for r in await conn.fetch(
+            "SELECT filename FROM schema_migrations"
+        )}
+        sentinel_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM bars_1m WHERE symbol='CUTOVER_SENTINEL'"
+        )
+        # Cleanup so the fixture teardown for subsequent tests starts clean.
+        await conn.execute("DELETE FROM bars_1m WHERE symbol='CUTOVER_SENTINEL'")
+
+    await db2.disconnect()
+
+    assert ledger == _real_migration_filenames()
+    assert sentinel_count == 1, (
+        "bars_1m sentinel row was lost during cutover-reconnect — implies "
+        "a destructive operation (DROP/TRUNCATE/DELETE) ran on the table"
+    )
 
 
 @pytest.mark.asyncio
