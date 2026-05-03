@@ -8,6 +8,7 @@ from typing import Optional, Tuple
 import pandas as pd
 
 from shared.db import Database
+from services.feature_engine.exclusion import is_evaluation_window_in_exclusion
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +35,36 @@ class DatasetBuilder:
         *,
         as_of: datetime,
         limit: int = 10000,
+        open_buffer_min: Optional[int] = None,
+        close_buffer_min: Optional[int] = None,
     ) -> Optional[Tuple[pd.DataFrame, pd.Series]]:
         rows = await self._db.query_training_data(
             symbol, timeframe, horizon_minutes, as_of=as_of, limit=limit,
         )
+
+        # Drop training rows whose forward-return target lands in the equity
+        # exclusion zone — the live RiskManager would refuse to act on those
+        # outcomes, so models shouldn't be fit on them. Both buffer kwargs
+        # must be ints for the filter to apply; either being None disables
+        # it (preserves backward compat for tests / startup paths that don't
+        # supply a runtime config). Crypto symbols pass through unfiltered
+        # because is_trading_allowed bypasses them.
+        if open_buffer_min is not None and close_buffer_min is not None:
+            kept = [
+                r for r in rows
+                if not is_evaluation_window_in_exclusion(
+                    symbol, r["timestamp"], horizon_minutes,
+                    open_buffer_min=open_buffer_min,
+                    close_buffer_min=close_buffer_min,
+                )
+            ]
+            if len(kept) < len(rows):
+                logger.info(
+                    "Exclusion zone dropped %d/%d rows for %s %s %dm",
+                    len(rows) - len(kept), len(rows),
+                    symbol, timeframe, horizon_minutes,
+                )
+            rows = kept
 
         threshold = self._threshold(timeframe)
         if len(rows) < threshold:

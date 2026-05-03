@@ -54,8 +54,18 @@ class Trainer:
             model_type, symbol, timeframe, horizon_minutes,
         )
 
+        # Read equity-window buffer minutes from runtime_config (the full
+        # RuntimeConfig.get_all() snapshot in production, or the override
+        # dict in backtests). Either key being absent disables the filter,
+        # so the startup path (runtime_config=None) and unit tests that
+        # don't supply a config keep the legacy "no filter" behavior.
+        rc = runtime_config or {}
+        open_buf = rc.get("equity_window_open_buffer_minutes")
+        close_buf = rc.get("equity_window_close_buffer_minutes")
+
         result = await self._dataset_builder.build(
             symbol, timeframe, horizon_minutes, as_of=as_of,
+            open_buffer_min=open_buf, close_buffer_min=close_buf,
         )
         if result is None:
             return None

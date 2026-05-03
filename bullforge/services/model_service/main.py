@@ -259,7 +259,12 @@ async def main() -> None:
             max_wait,
         )
 
-    # Train models on startup (skip if active model already exists)
+    # Train models on startup (skip if active model already exists). Pass
+    # the live RuntimeConfig snapshot so the exclusion-zone filter sees
+    # operator-set buffer minutes — without this the startup path would
+    # train on rows the live RiskManager refuses, until the first nightly
+    # retrain replaces them.
+    rc_snapshot = await runtime_config.get_all()
     for symbol in all_symbols:
         for timeframe in ["1m", "1d"]:
             for horizon in horizons_by_tf[timeframe]:
@@ -273,7 +278,9 @@ async def main() -> None:
                     )
                     continue
                 await trainer.train(
-                    symbol, timeframe, horizon, as_of=startup_as_of, model_type="gradient_boost",
+                    symbol, timeframe, horizon, as_of=startup_as_of,
+                    model_type="gradient_boost",
+                    runtime_config=rc_snapshot,
                 )
 
     # Load all trained models for inference
