@@ -398,7 +398,9 @@
       var fmtCount = function (v) { return redisOk ? String(v) : '—'; };
       tile.innerHTML =
         '<div style="font-size:0.85rem;letter-spacing:0.08em;opacity:0.8;">' +
-        'META SHADOW HEALTH (' + data.window_minutes + 'm)</div>' +
+        'META SHADOW HEALTH</div>' +
+        '<div style="font-size:0.8rem;opacity:0.7;margin-top:0.1rem;">' +
+        'Last ' + data.window_minutes + 'm</div>' +
         '<div style="font-size:1.6rem;margin:0.25rem 0;font-weight:600;">' +
         statusLabel + ' · ' + ratePct + '</div>' +
         '<table style="width:100%;margin-top:0.75rem;font-size:0.95rem;">' +
