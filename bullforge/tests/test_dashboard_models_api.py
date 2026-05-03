@@ -481,3 +481,96 @@ async def test_meta_shadow_health_operator_tuned_threshold(
     assert body2["threshold"] == 0.05
     assert body2["skip_plus_drop_rate"] == pytest.approx(0.06)
     assert body2["is_red"] is True
+
+
+# --- Feature importance fallback: equity exclusion buffers --------------------
+#
+# `_handle_feature_importance` falls back to permutation importance for
+# classifiers without `feature_importances_`. Inside that fallback it rebuilds
+# the training dataset via DatasetBuilder, which (post-A2, 2026-05-03) accepts
+# `open_buffer_min` / `close_buffer_min` to filter out rows whose forward-return
+# target lands in the equity exclusion zone. The dashboard fallback must thread
+# these through from RuntimeConfig so it sees the same population the live
+# trainer would see today.
+
+
+def _make_model_registry_row(model_type: str = "hist_gradient_boost"):
+    """Mimic asyncpg's Record for the model_registry SELECT in
+    _handle_feature_importance."""
+    from datetime import datetime, timezone
+    return {
+        "artifact_path": "/tmp/does-not-matter/model.pkl",
+        "feature_columns": '["f1","f2","f3"]',
+        "model_type": model_type,
+        "symbol": "AAPL",
+        "timeframe": "1m",
+        "horizon_minutes": 5,
+        "trained_at": datetime(2026, 4, 30, 14, 0, 0, tzinfo=timezone.utc),
+    }
+
+
+def _wire_model_row_on(db, row):
+    """Attach a `db.pool.acquire()` -> conn.fetchrow context-manager mock to
+    the AsyncMock from the existing `mock_db_models` fixture."""
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value=row)
+    conn_cm = AsyncMock()
+    conn_cm.__aenter__ = AsyncMock(return_value=conn)
+    conn_cm.__aexit__ = AsyncMock(return_value=False)
+    db.pool = MagicMock()
+    db.pool.acquire = MagicMock(return_value=conn_cm)
+
+
+@pytest.mark.asyncio
+async def test_feature_importance_fallback_passes_runtime_buffers_to_builder(
+    aiohttp_client, models_app_with_redis, mock_db_models,
+):
+    """The permutation-importance fallback must read both equity-window
+    buffer keys from RuntimeConfig and thread them into DatasetBuilder.build,
+    so the rebuilt training set respects the same exclusion-zone filter
+    Trainer.train uses today.
+    """
+    from unittest.mock import patch
+    from services.model_service.dataset import DatasetBuilder
+
+    # Wire a model row whose model_type lacks feature_importances_ so the
+    # handler hits the permutation branch.
+    _wire_model_row_on(mock_db_models, _make_model_registry_row("hist_gradient_boost"))
+
+    # RuntimeConfig surfaces distinct values so a key swap (open<->close) fails
+    # the assertion rather than slipping through.
+    async def _rc_get(key):
+        return {
+            "equity_window_open_buffer_minutes": 60,
+            "equity_window_close_buffer_minutes": 45,
+        }[key]
+
+    runtime_config = MagicMock()
+    runtime_config.get = AsyncMock(side_effect=_rc_get)
+    models_app_with_redis["runtime_config"] = runtime_config
+
+    # Fake pipeline: no `feature_importances_` attribute → hits permutation branch.
+    fake_pipeline = MagicMock(spec=[])  # spec=[] → no attrs by default
+    # The handler inspects pipeline.steps[-1][1] via hasattr(pipeline, "steps").
+    # With spec=[] hasattr returns False, so `classifier` == pipeline itself,
+    # which also lacks feature_importances_. That routes us to the fallback.
+
+    captured = {}
+
+    async def spy_build(self, *args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return None  # short-circuit to the available=False return path
+
+    from services.model_service.model_store import ModelStore
+
+    with patch.object(ModelStore, "load", return_value=fake_pipeline), \
+         patch.object(DatasetBuilder, "build", spy_build):
+        client = await aiohttp_client(models_app_with_redis)
+        resp = await client.get("/api/models/42/feature_importance")
+
+    # Even though build returned None (handler responds with available=False),
+    # the kwargs must have reached it.
+    assert resp.status == 200
+    assert captured["kwargs"].get("open_buffer_min") == 60
+    assert captured["kwargs"].get("close_buffer_min") == 45
