@@ -174,3 +174,92 @@ async def test_risk_manager_honors_backtest_overrides_end_to_end():
     )
     assert approved is False
     assert "weak" in reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_backtest_engine_passes_buffer_minutes_to_trainer():
+    """Backtest folds must thread RuntimeConfig through to Trainer.train so
+    the equity exclusion zone filter runs at training time, matching the
+    sim broker's at-action gate. Without this the backtest trains on rows
+    whose targets land in the buffered window and then refuses to act on
+    them at eval time — exactly the train/eval mismatch the filter exists
+    to remove."""
+    from datetime import timedelta
+    from unittest.mock import MagicMock, patch
+
+    from services.backtest_service.engine import BacktestEngine
+    from services.model_service.dataset import DatasetBuilder
+    from shared.models import BacktestScope
+    from services.backtest_service.splitter import Fold
+
+    # _rc with the buffer keys; mock get_all so the engine's snapshot works.
+    rc = _rc()
+    snapshot_payload = {
+        "execution_min_confidence": 0.6,
+        "execution_min_agreement": 2,
+        "execution_direction_band": 0.3,
+        "execution_min_signal_strength": 0.5,
+        "execution_max_position_pct": 0.10,
+        "execution_max_positions": 5,
+        "execution_max_exposure": 0.5,
+        "equity_window_open_buffer_minutes": 60,
+        "equity_window_close_buffer_minutes": 45,
+    }
+
+    async def get_all():
+        return snapshot_payload
+
+    rc.get_all = get_all
+
+    # Spy on DatasetBuilder.build to capture the buffer kwargs that reach it.
+    captured_kwargs = {}
+
+    original_build = DatasetBuilder.build
+
+    async def spy_build(self, *args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return None  # short-circuit — we only care about the kwargs.
+
+    cfg = BacktestConfig(
+        name="t",
+        symbols=["SPY"],
+        timeframe="1m",
+        horizons=[5],
+        range_start=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        range_end=datetime(2025, 1, 2, tzinfo=timezone.utc),
+        train_days=1, test_days=1, embargo_minutes=5, mode="rolling",
+    )
+    fold = Fold(
+        index=0,
+        train_start=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        train_end=datetime(2025, 1, 1, 12, tzinfo=timezone.utc),
+        test_start=datetime(2025, 1, 1, 12, tzinfo=timezone.utc) + timedelta(minutes=5),
+        test_end=datetime(2025, 1, 2, tzinfo=timezone.utc),
+    )
+
+    db = MagicMock()
+    db.query_bars_between = AsyncMock(return_value=[])
+    model_store = MagicMock()
+    results_db = MagicMock()
+    results_db.insert_fold = AsyncMock(return_value=99)
+
+    engine = BacktestEngine(
+        db=db, runtime_config=rc, model_store=model_store, results_db=results_db,
+    )
+
+    with patch.object(DatasetBuilder, "build", spy_build):
+        # _run_fold short-circuits when training returns None (no models),
+        # but we only need to reach the trainer.train call — bail early after.
+        try:
+            await engine._run_fold(run_id=42, cfg=cfg, fold=fold)
+        except Exception:
+            # Downstream fold steps depend on having trained models; without
+            # them the test path may raise. We've already captured what we
+            # care about by then.
+            pass
+
+    assert captured_kwargs.get("open_buffer_min") == 60, (
+        "Backtest engine did not thread equity_window_open_buffer_minutes "
+        "from RuntimeConfig snapshot to Trainer → DatasetBuilder.build"
+    )
+    assert captured_kwargs.get("close_buffer_min") == 45

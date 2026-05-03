@@ -72,7 +72,7 @@ async def build(
 
 Both `None` → no filter applied. Both ints → filter rows via `is_evaluation_window_in_exclusion(symbol, row["timestamp"], horizon_minutes, open_buffer_min=…, close_buffer_min=…)` *before* the NaN-mask step. Insufficient-data check after filter, same threshold as today.
 
-The `Optional[None]` default preserves backward compat with the existing `tests/test_trainer.py` and `tests/test_dataset_builder.py` cases that don't pass buffers (filter is a no-op).
+The `Optional[None]` default preserves backward compat with the existing `tests/test_trainer.py` and `tests/test_dataset.py` cases that don't pass buffers (filter is a no-op).
 
 ### Trainer.train
 
@@ -110,7 +110,7 @@ This aligns the startup behavior with the nightly retrain.
 | Caller | runtime_config | open_buffer | close_buffer | Filter applied? |
 |---|---|---|---|---|
 | `tests/test_trainer.py` (mocks) | None | — | — | No |
-| `tests/test_dataset_builder.py` (mocks) | None | — | — | No |
+| `tests/test_dataset.py` (mocks) | None | — | — | No |
 | `main.py` startup (after fix) | RC snapshot | int (default 60) | int (default 60) | Yes |
 | `scheduler.py` nightly retrain | RC snapshot | int | int | Yes |
 | `worker.py` ProcessPool | RC snapshot | int | int | Yes |
@@ -129,9 +129,9 @@ Hermetic, no DB. Mirrors `tests/test_trading_window.py`'s style.
 - `test_equity_1d_target_midweek_survives`: feature_timestamp = Monday 14:00 ET, horizon = 1440 → target Tuesday 14:00 ET → not excluded.
 - `test_crypto_never_excluded`: feature_timestamp = any, symbol = "BTC/USD" → not excluded.
 - `test_boundary_target_at_open_plus_buffer_inclusive`: target == 10:30 ET exactly with buffer = 60 → not excluded (`<=` semantics in `trading_window.py:45`).
-- `test_boundary_target_at_close_minus_buffer_minus_1s_excluded`: target == 15:00 ET - 1s with buffer = 60 → excluded (`<` semantics).
+- `test_boundary_target_at_close_minus_buffer_excluded`: target == 15:00 ET (exactly `close - close_buffer_min`) with buffer = 60 → excluded (`<` semantics — `et < close_dt` is False at equality).
 
-### DatasetBuilder tests — extend `tests/test_dataset_builder.py`
+### DatasetBuilder tests — extend `tests/test_dataset.py`
 
 - `test_dataset_builder_filters_exclusion_zone`: mock `query_training_data` returning rows where half have `(timestamp + horizon)` in the exclusion zone; call `build` with buffer minutes set; assert filtered count matches the half outside the zone.
 - `test_dataset_builder_no_filter_when_buffers_none`: mock same rows; call `build` without buffer kwargs; assert all rows survive (backward compat).
@@ -149,8 +149,14 @@ Hermetic, no DB. Mirrors `tests/test_trading_window.py`'s style.
 - `bullforge/services/model_service/trainer.py` — read buffers from `runtime_config` dict and pass through.
 - `bullforge/services/model_service/main.py` — snapshot RC and pass through.
 - `bullforge/tests/test_exclusion.py` — new helper tests.
-- `bullforge/tests/test_dataset_builder.py` — new filter tests.
+- `bullforge/tests/test_dataset.py` — new filter tests.
 - `bullforge/tests/test_trainer.py` — assert buffer plumbing.
+
+## Implementation notes (post-spec)
+
+- The spec's boundary text initially said "target == close - buffer_minutes - 1s is dropped"; the actual `trading_window.py:45` semantics are `[open <= et < close)`, so the right boundary check is at `et == close_dt` (excluded), not 1 second before. The implementation matches the actual code; the test is `test_boundary_target_at_close_minus_buffer_excluded`.
+- `services/backtest_service/engine.py::BacktestEngine._run_fold` was missing the `runtime_config=` kwarg on `trainer.train(...)` — caught in code review. Fixed in the same branch by snapshotting `await self._rc.get_all()` once per fold and passing it through. Test: `tests/test_backtest_engine_overrides.py::test_backtest_engine_passes_buffer_minutes_to_trainer`.
+- The spec's behavior matrix noted `tests/test_dataset_builder.py`; the actual file is `tests/test_dataset.py`. Updated.
 
 ## Out of scope
 
