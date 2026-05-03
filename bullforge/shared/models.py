@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Optional
 
@@ -24,7 +24,7 @@ class Bar:
     timeframe: str  # "1m", "1d", etc.
 
     def __post_init__(self):
-        if self.timestamp.tzinfo is None or self.timestamp.tzinfo != timezone.utc:
+        if self.timestamp.tzinfo is None or self.timestamp.utcoffset() != timedelta(0):
             raise ValueError(
                 f"Bar timestamp must be UTC, got tzinfo={self.timestamp.tzinfo}"
             )
@@ -46,7 +46,7 @@ class FeatureRow:
     features: dict[str, float]  # {"sma_20": 420.5, "rsi_14": 55.3, ...}
 
     def __post_init__(self):
-        if self.timestamp.tzinfo is None or self.timestamp.tzinfo != timezone.utc:
+        if self.timestamp.tzinfo is None or self.timestamp.utcoffset() != timedelta(0):
             raise ValueError(
                 f"FeatureRow timestamp must be UTC, got tzinfo={self.timestamp.tzinfo}"
             )
@@ -64,7 +64,7 @@ class Label:
     direction: int  # -1 = down, 0 = flat, 1 = up
 
     def __post_init__(self):
-        if self.timestamp.tzinfo is None or self.timestamp.tzinfo != timezone.utc:
+        if self.timestamp.tzinfo is None or self.timestamp.utcoffset() != timedelta(0):
             raise ValueError(
                 f"Label timestamp must be UTC, got tzinfo={self.timestamp.tzinfo}"
             )
@@ -95,7 +95,7 @@ class ModelMetadata:
     id: Optional[int] = None
 
     def __post_init__(self):
-        if self.trained_at.tzinfo is None or self.trained_at.tzinfo != timezone.utc:
+        if self.trained_at.tzinfo is None or self.trained_at.utcoffset() != timedelta(0):
             raise ValueError(
                 f"ModelMetadata trained_at must be UTC, got tzinfo={self.trained_at.tzinfo}"
             )
@@ -121,7 +121,7 @@ class Prediction:
     confidence: float  # probability of predicted class, 0.0–1.0
 
     def __post_init__(self):
-        if self.timestamp.tzinfo is None or self.timestamp.tzinfo != timezone.utc:
+        if self.timestamp.tzinfo is None or self.timestamp.utcoffset() != timedelta(0):
             raise ValueError(
                 f"Prediction timestamp must be UTC, got tzinfo={self.timestamp.tzinfo}"
             )
@@ -155,7 +155,7 @@ class TradingSignal:
     contributing_predictions: int
 
     def __post_init__(self):
-        if self.timestamp.tzinfo is None or self.timestamp.tzinfo != timezone.utc:
+        if self.timestamp.tzinfo is None or self.timestamp.utcoffset() != timedelta(0):
             raise ValueError(
                 f"TradingSignal timestamp must be UTC, got tzinfo={self.timestamp.tzinfo}"
             )
@@ -193,7 +193,7 @@ class Order:
     id: Optional[int] = None
 
     def __post_init__(self):
-        if self.submitted_at.tzinfo is None or self.submitted_at.tzinfo != timezone.utc:
+        if self.submitted_at.tzinfo is None or self.submitted_at.utcoffset() != timedelta(0):
             raise ValueError(
                 f"submitted_at must be UTC, got tzinfo={self.submitted_at.tzinfo}"
             )
@@ -220,7 +220,7 @@ class Order:
                 f"status must be one of {VALID_ORDER_STATUSES}, got {self.status!r}"
             )
         if self.filled_at is not None and (
-            self.filled_at.tzinfo is None or self.filled_at.tzinfo != timezone.utc
+            self.filled_at.tzinfo is None or self.filled_at.utcoffset() != timedelta(0)
         ):
             raise ValueError(
                 f"filled_at must be UTC when provided, got tzinfo={self.filled_at.tzinfo}"
@@ -235,7 +235,7 @@ class Order:
             )
         if self.last_reconciled_at is not None and (
             self.last_reconciled_at.tzinfo is None
-            or self.last_reconciled_at.tzinfo != timezone.utc
+            or self.last_reconciled_at.utcoffset() != timedelta(0)
         ):
             raise ValueError(
                 f"last_reconciled_at must be UTC when provided, got tzinfo={self.last_reconciled_at.tzinfo}"
@@ -257,7 +257,7 @@ class MetaFeatureRow:
     realized_ev: Optional[float] = None
 
     def __post_init__(self):
-        if self.timestamp.tzinfo is None or self.timestamp.tzinfo != timezone.utc:
+        if self.timestamp.tzinfo is None or self.timestamp.utcoffset() != timedelta(0):
             raise ValueError(
                 f"MetaFeatureRow timestamp must be UTC, got tzinfo={self.timestamp.tzinfo}"
             )
@@ -288,7 +288,7 @@ class MetaSignalShadow:
     id: Optional[int] = None
 
     def __post_init__(self):
-        if self.timestamp.tzinfo is None or self.timestamp.tzinfo != timezone.utc:
+        if self.timestamp.tzinfo is None or self.timestamp.utcoffset() != timedelta(0):
             raise ValueError(
                 f"MetaSignalShadow timestamp must be UTC, got tzinfo={self.timestamp.tzinfo}"
             )
@@ -322,7 +322,7 @@ class Trade:
     id: Optional[int] = None
 
     def __post_init__(self):
-        if self.entry_time.tzinfo is None or self.entry_time.tzinfo != timezone.utc:
+        if self.entry_time.tzinfo is None or self.entry_time.utcoffset() != timedelta(0):
             raise ValueError(
                 f"entry_time must be UTC, got tzinfo={self.entry_time.tzinfo}"
             )
@@ -335,7 +335,7 @@ class Trade:
                 f"quantity must be positive, got {self.quantity}"
             )
         if self.exit_time is not None and (
-            self.exit_time.tzinfo is None or self.exit_time.tzinfo != timezone.utc
+            self.exit_time.tzinfo is None or self.exit_time.utcoffset() != timedelta(0)
         ):
             raise ValueError(
                 f"exit_time must be UTC when provided, got tzinfo={self.exit_time.tzinfo}"
@@ -350,7 +350,7 @@ class ModelStatus:
     updated_at: datetime
 
     def __post_init__(self):
-        if self.updated_at.tzinfo is None or self.updated_at.tzinfo != timezone.utc:
+        if self.updated_at.tzinfo is None or self.updated_at.utcoffset() != timedelta(0):
             raise ValueError(
                 f"updated_at must be UTC, got tzinfo={self.updated_at.tzinfo}"
             )

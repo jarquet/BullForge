@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from services.backtest_service.fill_model import FillModel, FillRequest
@@ -27,7 +27,7 @@ class SimulatedBroker:
         self._clock: Optional[datetime] = None
 
     def set_clock(self, ts: datetime) -> None:
-        if ts.tzinfo is None or ts.tzinfo != timezone.utc:
+        if ts.tzinfo is None or ts.utcoffset() != timedelta(0):
             raise ValueError("clock must be UTC")
         self._clock = ts
 

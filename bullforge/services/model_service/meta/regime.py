@@ -50,7 +50,7 @@ class RegimeBuilder:
         update that has to re-derive the rolling 30-day vol-regime
         median from a sliding window.
         """
-        if timestamp.tzinfo is None or timestamp.tzinfo != timezone.utc:
+        if timestamp.tzinfo is None or timestamp.utcoffset() != timedelta(0):
             raise ValueError(
                 f"timestamp must be UTC, got tzinfo={timestamp.tzinfo}"
             )

@@ -95,6 +95,28 @@ class TestAppendBar:
         with pytest.raises(ValueError):
             rb.append_bar(non_utc, close=400.0)
 
+    def test_append_bar_accepts_zoneinfo_utc(self):
+        """ZoneInfo("UTC") has a zero UTC offset and must be accepted."""
+        from zoneinfo import ZoneInfo
+        rb = RegimeBuilder(
+            spy_bars=pd.DataFrame(columns=["close"]),
+            max_staleness_hours=48,
+        )
+        ts = datetime(2026, 4, 30, 14, 0, tzinfo=ZoneInfo("UTC"))
+        rb.append_bar(ts, close=400.0)  # must not raise
+        assert len(rb._df) == 1
+
+    def test_append_bar_accepts_zero_offset_timezone(self):
+        """timezone(timedelta(0)) has a zero UTC offset and must be accepted."""
+        from datetime import timezone as tz
+        rb = RegimeBuilder(
+            spy_bars=pd.DataFrame(columns=["close"]),
+            max_staleness_hours=48,
+        )
+        ts = datetime(2026, 4, 30, 14, 0, tzinfo=tz(timedelta(0)))
+        rb.append_bar(ts, close=400.0)  # must not raise
+        assert len(rb._df) == 1
+
     def test_append_bar_idempotent_on_duplicate_timestamp(self):
         """A re-published market:ticks event must not corrupt the index
         with duplicates. We accept either dedup-by-timestamp OR
