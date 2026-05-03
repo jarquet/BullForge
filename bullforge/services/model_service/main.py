@@ -209,7 +209,12 @@ async def main() -> None:
         min_samples=settings.model_min_samples,
         min_samples_1d=settings.model_min_samples_1d,
     )
-    inference_engine = InferenceEngine(db=db, model_store=model_store)
+    # redis_client passed for the meta-shadow sliding-window counters
+    # (`bullforge:metrics:meta_inferences:*`,
+    # `bullforge:metrics:meta_publisher_finite_drops:*`). Observability only.
+    inference_engine = InferenceEngine(
+        db=db, model_store=model_store, redis_client=redis_client,
+    )
     runtime_config = RuntimeConfig(redis_client)
 
     horizons_by_tf = {

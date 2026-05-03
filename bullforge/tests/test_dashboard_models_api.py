@@ -133,3 +133,213 @@ async def test_history_rejects_malformed_from(aiohttp_client, models_app):
     client = await aiohttp_client(models_app)
     resp = await client.get("/api/models/42/history?from=garbage")
     assert resp.status == 400
+
+
+# --- Meta shadow health endpoint ---------------------------------------------
+#
+# Endpoint sums three Redis sliding-window counters (15 minute-buckets each)
+# and reports skip + drop rates over the inference denominator. Tile turns red
+# when (skip + drop) / inference > 1%.
+
+def _make_redis_with_buckets(skips, drops, inferences):
+    """Mock RedisClient whose .client.mget returns canned per-key lists.
+
+    Each `*_buckets` arg is a list of length 15 (one entry per minute),
+    matching the 15 keys the handler asks for. Use None to simulate a
+    missing/expired bucket.
+    """
+    expected = {"skip": skips, "drop": drops, "inf": inferences}
+
+    async def _mget(*keys):
+        # Distinguish series by key prefix.
+        if not keys:
+            return []
+        prefix = keys[0].rsplit(":", 1)[0]
+        if "meta_shadow_skips" in prefix:
+            series = expected["skip"]
+        elif "meta_publisher_finite_drops" in prefix:
+            series = expected["drop"]
+        elif "meta_inferences" in prefix:
+            series = expected["inf"]
+        else:
+            return [None] * len(keys)
+        # Pad/truncate to the actual key count.
+        return list(series)[: len(keys)]
+
+    redis = MagicMock()
+    redis.client = MagicMock()
+    redis.client.mget = AsyncMock(side_effect=_mget)
+    return redis
+
+
+@pytest.fixture
+def models_app_with_redis(mock_db_models):
+    app = web.Application()
+    app["db"] = mock_db_models
+    register_models_routes(app)
+    return app
+
+
+@pytest.mark.asyncio
+async def test_meta_shadow_health_healthy(aiohttp_client, models_app_with_redis):
+    # 200 inferences, 0 skips, 0 drops → rate 0.0 → not red.
+    redis = _make_redis_with_buckets(
+        skips=[None] * 15,
+        drops=[None] * 15,
+        inferences=["20"] * 10 + [None] * 5,  # 200 over 10 buckets
+    )
+    models_app_with_redis["redis_client"] = redis
+    client = await aiohttp_client(models_app_with_redis)
+    resp = await client.get("/api/models/meta_shadow_health")
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["window_minutes"] == 15
+    assert body["skip_count"] == 0
+    assert body["drop_count"] == 0
+    assert body["inference_count"] == 200
+    assert body["skip_plus_drop_rate"] == 0.0
+    assert body["threshold"] == 0.01
+    assert body["is_red"] is False
+    # Successful mget round-trip: tile should render real counts.
+    assert body["redis_ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_meta_shadow_health_red_when_rate_above_threshold(
+    aiohttp_client, models_app_with_redis,
+):
+    # 100 inferences, 1 skip, 1 drop → rate 0.02 → red (above 1%).
+    redis = _make_redis_with_buckets(
+        skips=["1"] + [None] * 14,
+        drops=["1"] + [None] * 14,
+        inferences=["10"] * 10 + [None] * 5,
+    )
+    models_app_with_redis["redis_client"] = redis
+    client = await aiohttp_client(models_app_with_redis)
+    resp = await client.get("/api/models/meta_shadow_health")
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["skip_count"] == 1
+    assert body["drop_count"] == 1
+    assert body["inference_count"] == 100
+    assert body["skip_plus_drop_rate"] == pytest.approx(0.02)
+    assert body["is_red"] is True
+
+
+@pytest.mark.asyncio
+async def test_meta_shadow_health_zero_denominator_safe(
+    aiohttp_client, models_app_with_redis,
+):
+    """When the inference denominator is 0 (e.g., service just started), we
+    must not divide by zero — rate should be 0.0 and tile not red."""
+    redis = _make_redis_with_buckets(
+        skips=[None] * 15, drops=[None] * 15, inferences=[None] * 15,
+    )
+    models_app_with_redis["redis_client"] = redis
+    client = await aiohttp_client(models_app_with_redis)
+    resp = await client.get("/api/models/meta_shadow_health")
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["inference_count"] == 0
+    assert body["skip_plus_drop_rate"] == 0.0
+    assert body["is_red"] is False
+
+
+@pytest.mark.asyncio
+async def test_meta_shadow_health_just_below_threshold_not_red(
+    aiohttp_client, models_app_with_redis,
+):
+    # Boundary: rate exactly == threshold (1%) is NOT red. The handler uses
+    # strict > comparison so a steady-state 1% baseline does not trigger.
+    redis = _make_redis_with_buckets(
+        skips=["1"] + [None] * 14,
+        drops=[None] * 15,
+        inferences=["100"] + [None] * 14,  # 1/100 = 0.01 exactly
+    )
+    models_app_with_redis["redis_client"] = redis
+    client = await aiohttp_client(models_app_with_redis)
+    resp = await client.get("/api/models/meta_shadow_health")
+    body = await resp.json()
+    assert body["skip_plus_drop_rate"] == pytest.approx(0.01)
+    assert body["is_red"] is False
+
+
+@pytest.mark.asyncio
+async def test_meta_shadow_health_queries_15_buckets(
+    aiohttp_client, models_app_with_redis,
+):
+    """Verify the bucket math: 15 minute-bucket keys per series, 3 mget calls
+    total (one per series). Locks the window contract used by the tile."""
+    captured: dict[str, list[str]] = {}
+
+    async def _mget(*keys):
+        prefix = keys[0].rsplit(":", 1)[0]
+        captured.setdefault(prefix, []).extend(keys)
+        return [None] * len(keys)
+
+    redis = MagicMock()
+    redis.client = MagicMock()
+    redis.client.mget = AsyncMock(side_effect=_mget)
+    models_app_with_redis["redis_client"] = redis
+
+    client = await aiohttp_client(models_app_with_redis)
+    resp = await client.get("/api/models/meta_shadow_health")
+    assert resp.status == 200
+    # Three series, each queried as one mget over 15 keys.
+    assert len(captured) == 3
+    for prefix, keys in captured.items():
+        assert len(keys) == 15, (prefix, keys)
+
+
+@pytest.mark.asyncio
+async def test_meta_shadow_health_redis_client_none_returns_redis_ok_false(
+    aiohttp_client, models_app_with_redis,
+):
+    """When the dashboard came up before Redis was wired (redis_client is
+    None), the endpoint must return zero counts AND `redis_ok: false` so
+    the SPA can render a distinct "Redis unavailable" state instead of a
+    misleading healthy zero baseline."""
+    # Note: we deliberately do NOT set models_app_with_redis["redis_client"].
+    client = await aiohttp_client(models_app_with_redis)
+    resp = await client.get("/api/models/meta_shadow_health")
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["redis_ok"] is False
+    assert body["skip_count"] == 0
+    assert body["drop_count"] == 0
+    assert body["inference_count"] == 0
+    assert body["skip_plus_drop_rate"] == 0.0
+    assert body["is_red"] is False
+
+
+@pytest.mark.asyncio
+async def test_meta_shadow_health_mget_raises_returns_redis_ok_false(
+    aiohttp_client, models_app_with_redis, caplog,
+):
+    """When mget raises (connection refused, timeout, or any other
+    Redis-side failure) the endpoint must catch the exception, log it, and
+    return zero counts + `redis_ok: false` rather than 500ing the dashboard."""
+    redis = MagicMock()
+    redis.client = MagicMock()
+    redis.client.mget = AsyncMock(
+        side_effect=ConnectionError("redis: connection refused"),
+    )
+    models_app_with_redis["redis_client"] = redis
+
+    client = await aiohttp_client(models_app_with_redis)
+    import logging as _logging
+    with caplog.at_level(_logging.ERROR):
+        resp = await client.get("/api/models/meta_shadow_health")
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["redis_ok"] is False
+    assert body["skip_count"] == 0
+    assert body["drop_count"] == 0
+    assert body["inference_count"] == 0
+    assert body["skip_plus_drop_rate"] == 0.0
+    assert body["is_red"] is False
+    # Verify the exception was logged (caught + logged, not silently swallowed).
+    assert any(
+        "meta_shadow_health" in r.message and "redis" in r.message.lower()
+        for r in caplog.records
+    )

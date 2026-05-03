@@ -146,7 +146,10 @@ async def main() -> None:
     logger.info("Subscribed to models:status")
 
     from services.execution_service.meta_shadow_writer import MetaShadowWriter
-    meta_writer = MetaShadowWriter(db=db)
+    # redis_client passed for the sliding-window empty-vector skip counter
+    # (bullforge:metrics:meta_shadow_skips:<minute_bucket>) — observability
+    # only, never gates persistence.
+    meta_writer = MetaShadowWriter(db=db, redis_client=redis_client)
     await redis_client.subscribe("model:meta_signals", meta_writer.handle_message)
     logger.info("Subscribed to model:meta_signals (shadow writer)")
 

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
 from shared.db import Database
 from shared.models import BacktestScope, ModelMetadata, Prediction
+from shared.redis import RedisClient
 from services.model_service.meta.feature_assembler import MetaFeatureAssembler
 from services.model_service.model_store import ModelStore
 
@@ -15,6 +17,18 @@ logger = logging.getLogger(__name__)
 
 
 _DIR_TO_INT = {"long": 1, "short": -1}
+
+# Sliding-window counter prefixes for the dashboard "Meta shadow health" tile.
+# One bucket per minute (UTC epoch minute = int(time.time() // 60)), each with
+# a 30-minute TTL. The dashboard sums the most recent 15 buckets — see
+# services/dashboard_service/models_api.py `_handle_meta_shadow_health`.
+#
+# We use epoch-minutes (int) rather than a strftime("%Y%m%d%H%M") string for
+# two reasons: cheaper key arithmetic in the dashboard's window math, and
+# monotonic ordering without timezone parsing.
+META_INFERENCES_KEY_PREFIX = "bullforge:metrics:meta_inferences"
+META_PUBLISHER_FINITE_DROPS_KEY_PREFIX = "bullforge:metrics:meta_publisher_finite_drops"
+_BUCKET_TTL_SECONDS = 1800  # 30 minutes
 
 
 def _parse_meta_artifact(path: str) -> Optional[Tuple[str, str, str]]:
@@ -100,10 +114,16 @@ class InferenceEngine:
         model_store: ModelStore,
         *,
         scope: Optional[BacktestScope] = None,
+        redis_client: Optional[RedisClient] = None,
     ):
         self._db = db
         self._model_store = model_store
         self._scope = scope
+        # Optional: only the live model_service path passes a redis_client,
+        # so meta-shadow counters reflect production traffic. The backtest
+        # engine constructs InferenceEngine without one to avoid
+        # contaminating live metrics with per-fold inferences.
+        self._redis = redis_client
         # Key is (symbol, timeframe, horizon_minutes, model_type). The
         # model_type element is required because multiple model_types can
         # share the same (symbol, timeframe, horizon) — e.g., a freshly
@@ -246,6 +266,11 @@ class InferenceEngine:
         """
         if not getattr(self, "_meta_models", None):
             return [], {}
+        # Bump the inference counter once per real attempt (past the no-meta
+        # short-circuit). This is the denominator for the dashboard "Meta
+        # shadow health" tile — drops/skips alone are meaningless without
+        # knowing how many inferences ran in the same window.
+        await self._increment_counter(META_INFERENCES_KEY_PREFIX)
         from time import time as _now
         ms = getattr(self, "_meta_state", None) or _MetaState(
             pair_grid=getattr(self, "_pair_grid", [[2, 1], [3, 1.5], [4, 2]]),
@@ -321,6 +346,10 @@ class InferenceEngine:
                 "directions=%s: %s",
                 symbol, timestamp, directions, sorted(dropped_keys),
             )
+            # One increment per call-with-drops — pairs with the per-call
+            # warn log. Counting per-key would skew the rate denominator,
+            # since a single bad regime input can poison many derived keys.
+            await self._increment_counter(META_PUBLISHER_FINITE_DROPS_KEY_PREFIX)
         feature_vec = coerced
         X = pd.DataFrame([feature_vec])
 
@@ -352,3 +381,23 @@ class InferenceEngine:
                 "stop_pct": stop_pct,
             })
         return signals, feature_vec
+
+    async def _increment_counter(self, prefix: str) -> None:
+        """Bump a sliding-window counter for the current minute bucket.
+
+        Observability-only — failures are logged but never propagate to
+        callers (a transient Redis hiccup must not silence inference).
+        Backtest engines pass redis_client=None on purpose; this helper
+        becomes a no-op for them.
+        """
+        if self._redis is None or self._redis.client is None:
+            return
+        try:
+            bucket = int(time.time() // 60)
+            key = f"{prefix}:{bucket}"
+            await self._redis.client.incr(key)
+            await self._redis.client.expire(key, _BUCKET_TTL_SECONDS)
+        except Exception:
+            logger.exception(
+                "InferenceEngine: failed to increment counter %s", prefix,
+            )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime
 
 from aiohttp import web
@@ -10,14 +11,119 @@ from shared.time_window import parse_time_window
 
 logger = logging.getLogger(__name__)
 
+# Sliding-window meta-shadow counters: writers/inference engines bump per-minute
+# bucket keys with a 30-minute TTL. The dashboard sums the most recent 15
+# buckets to produce the "Meta shadow health" tile.
+#
+# Producers:
+#   - `bullforge:metrics:meta_inferences:*`            — model_service/inference.py
+#   - `bullforge:metrics:meta_publisher_finite_drops:*`— model_service/inference.py
+#   - `bullforge:metrics:meta_shadow_skips:*`          — execution_service/meta_shadow_writer.py
+_META_INFERENCES_PREFIX = "bullforge:metrics:meta_inferences"
+_META_PUBLISHER_FINITE_DROPS_PREFIX = "bullforge:metrics:meta_publisher_finite_drops"
+_META_SHADOW_SKIPS_PREFIX = "bullforge:metrics:meta_shadow_skips"
+_HEALTH_WINDOW_MINUTES = 15
+_HEALTH_RED_THRESHOLD = 0.01  # >1% combined skip+drop rate flips the tile red.
+
 
 def register_models_routes(app: web.Application) -> None:
+    app.router.add_get("/api/models/meta_shadow_health", _handle_meta_shadow_health)
     app.router.add_get("/api/models/{id}/history", _handle_history)
     app.router.add_get("/api/models/{id}/calibration", _handle_calibration)
     app.router.add_get("/api/models/{id}/simulated_pnl", _handle_simulated_pnl)
     app.router.add_get("/api/models/{id}/feature_importance", _handle_feature_importance)
     app.router.add_get("/api/models/{id}/regime_breakdown", _handle_regime_breakdown)
     app.router.add_get("/api/models/{id}/signal_history", _handle_signal_history)
+
+
+async def _handle_meta_shadow_health(request: web.Request) -> web.Response:
+    """Return sliding-window skip/drop/inference counts for the meta-shadow
+    pipeline plus a derived rate and red-threshold flag.
+
+    Bucket math: producers key counters by `int(time.time() // 60)` (UTC
+    epoch minute). Current bucket = `now_min`. Window = the 15 buckets
+    `[now_min - 14, now_min]` inclusive, i.e., the last 15 minutes including
+    the current partial minute. We MGET each series in one round-trip and
+    sum non-None entries.
+
+    Strict-> comparison on the threshold: a steady-state baseline at exactly
+    1% must NOT flip red. The tile is for *regression* detection, not
+    enforcement of a hard SLO.
+    """
+    redis_client = request.app.get("redis_client")
+    now_min = int(time.time() // 60)
+    bucket_keys = [now_min - i for i in range(_HEALTH_WINDOW_MINUTES)]
+
+    skip_keys = [f"{_META_SHADOW_SKIPS_PREFIX}:{b}" for b in bucket_keys]
+    drop_keys = [f"{_META_PUBLISHER_FINITE_DROPS_PREFIX}:{b}" for b in bucket_keys]
+    inf_keys = [f"{_META_INFERENCES_PREFIX}:{b}" for b in bucket_keys]
+
+    if redis_client is None or getattr(redis_client, "client", None) is None:
+        # Dashboard came up before Redis was wired (or in a constrained
+        # test env). Return a safe zero payload rather than 500, plus
+        # `redis_ok: false` so the SPA can render a distinct "Redis
+        # unavailable" state instead of misleading zero counts.
+        payload = {
+            "window_minutes": _HEALTH_WINDOW_MINUTES,
+            "skip_count": 0, "drop_count": 0, "inference_count": 0,
+            "skip_plus_drop_rate": 0.0,
+            "threshold": _HEALTH_RED_THRESHOLD,
+            "is_red": False,
+            "redis_ok": False,
+        }
+        return web.json_response(payload)
+
+    try:
+        skip_vals = await redis_client.client.mget(*skip_keys)
+        drop_vals = await redis_client.client.mget(*drop_keys)
+        inf_vals = await redis_client.client.mget(*inf_keys)
+    except Exception:
+        # Connection refused, timeout, or any other Redis-side failure.
+        # The tile is observability-only — log and return zeros + redis_ok=False
+        # so the SPA can grey out the tile rather than reporting a misleading
+        # all-zero "healthy" state.
+        logger.exception(
+            "meta_shadow_health: redis mget failed; returning redis_ok=false",
+        )
+        return web.json_response({
+            "window_minutes": _HEALTH_WINDOW_MINUTES,
+            "skip_count": 0, "drop_count": 0, "inference_count": 0,
+            "skip_plus_drop_rate": 0.0,
+            "threshold": _HEALTH_RED_THRESHOLD,
+            "is_red": False,
+            "redis_ok": False,
+        })
+
+    def _sum(vals) -> int:
+        total = 0
+        for v in vals or []:
+            if v is None:
+                continue
+            try:
+                total += int(v)
+            except (TypeError, ValueError):
+                continue
+        return total
+
+    skip_count = _sum(skip_vals)
+    drop_count = _sum(drop_vals)
+    inference_count = _sum(inf_vals)
+
+    if inference_count > 0:
+        rate = (skip_count + drop_count) / inference_count
+    else:
+        rate = 0.0
+
+    return web.json_response({
+        "window_minutes": _HEALTH_WINDOW_MINUTES,
+        "skip_count": skip_count,
+        "drop_count": drop_count,
+        "inference_count": inference_count,
+        "skip_plus_drop_rate": rate,
+        "threshold": _HEALTH_RED_THRESHOLD,
+        "is_red": rate > _HEALTH_RED_THRESHOLD,
+        "redis_ok": True,
+    })
 
 
 def _parse_model_id(request: web.Request) -> int:
