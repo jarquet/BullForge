@@ -145,12 +145,19 @@ class BacktestEngine:
         scope = BacktestScope(backtest_run_id=run_id, fold_index=fold.index)
 
         # 1) Train one model per (symbol, horizon) using only train-window data.
+        # Snapshot the live RuntimeConfig once per fold so the equity exclusion
+        # zone filter inside DatasetBuilder sees the operator-set buffer
+        # minutes — without this, backtests would train on rows whose targets
+        # land in the buffered window while the sim broker / RiskManager
+        # refuses to act on those same windows at evaluation time.
+        rc_snapshot = await self._rc.get_all()
         trainer = Trainer(self._db, self._model_store, scope=scope)
         for symbol in cfg.symbols:
             for horizon in cfg.horizons:
                 meta = await trainer.train(
                     symbol, cfg.timeframe, horizon,
                     as_of=fold.train_end,
+                    runtime_config=rc_snapshot,
                 )
                 if meta is None:
                     logger.warning(

@@ -160,3 +160,72 @@ async def test_trainer_live_mode_has_no_scope():
     store = MagicMock()
     trainer = Trainer(db, store)
     assert trainer._scope is None
+
+
+@pytest.mark.asyncio
+async def test_trainer_passes_buffer_minutes_to_dataset_builder():
+    """When runtime_config carries the equity buffer keys, Trainer.train
+    forwards them as open_buffer_min / close_buffer_min to the
+    DatasetBuilder so the exclusion-zone filter actually fires."""
+    db = MagicMock()
+    store = MagicMock()
+    trainer = Trainer(db, store)
+    trainer._dataset_builder = MagicMock()
+    trainer._dataset_builder.build = AsyncMock(return_value=None)
+
+    await trainer.train(
+        "SPY", "1m", 5,
+        as_of=datetime(2026, 4, 13, tzinfo=timezone.utc),
+        runtime_config={
+            "equity_window_open_buffer_minutes": 60,
+            "equity_window_close_buffer_minutes": 45,
+        },
+    )
+
+    trainer._dataset_builder.build.assert_called_once()
+    call_kwargs = trainer._dataset_builder.build.call_args.kwargs
+    assert call_kwargs["open_buffer_min"] == 60
+    assert call_kwargs["close_buffer_min"] == 45
+
+
+@pytest.mark.asyncio
+async def test_trainer_passes_none_buffers_when_no_runtime_config():
+    """Without a runtime_config, the buffer kwargs are passed as None and
+    the filter stays off — preserves backward compat for the startup path
+    and for tests that don't supply a runtime_config."""
+    db = MagicMock()
+    store = MagicMock()
+    trainer = Trainer(db, store)
+    trainer._dataset_builder = MagicMock()
+    trainer._dataset_builder.build = AsyncMock(return_value=None)
+
+    await trainer.train(
+        "SPY", "1m", 5,
+        as_of=datetime(2026, 4, 13, tzinfo=timezone.utc),
+    )
+
+    trainer._dataset_builder.build.assert_called_once()
+    call_kwargs = trainer._dataset_builder.build.call_args.kwargs
+    assert call_kwargs["open_buffer_min"] is None
+    assert call_kwargs["close_buffer_min"] is None
+
+
+@pytest.mark.asyncio
+async def test_trainer_passes_none_buffers_when_runtime_config_lacks_keys():
+    """A runtime_config dict without the buffer keys still results in None
+    buffers (no filter) rather than a KeyError."""
+    db = MagicMock()
+    store = MagicMock()
+    trainer = Trainer(db, store)
+    trainer._dataset_builder = MagicMock()
+    trainer._dataset_builder.build = AsyncMock(return_value=None)
+
+    await trainer.train(
+        "SPY", "1m", 5,
+        as_of=datetime(2026, 4, 13, tzinfo=timezone.utc),
+        runtime_config={"some_other_key": 123},
+    )
+
+    call_kwargs = trainer._dataset_builder.build.call_args.kwargs
+    assert call_kwargs["open_buffer_min"] is None
+    assert call_kwargs["close_buffer_min"] is None

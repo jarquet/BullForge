@@ -96,6 +96,115 @@ async def test_dataset_builder_handles_json_string_features():
     assert X["sma_20"].iloc[0] == 420.0
 
 
+def _make_rows_at_timestamps(timestamps, *, direction: int = 1) -> list[dict]:
+    return [
+        {
+            "timestamp": ts,
+            "features": json.dumps({"sma_20": 420.0, "rsi_14": 50.0}),
+            "direction": direction,
+            "forward_return": 0.001,
+        }
+        for ts in timestamps
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dataset_builder_filters_exclusion_zone():
+    """When buffer minutes are set, rows whose target timestamp lands in the
+    equity exclusion zone are dropped before threshold + NaN cleanup."""
+    # Monday 2026-04-13. EDT = UTC-4. NYSE 09:30 ET = 13:30 UTC.
+    base = datetime(2026, 4, 13, 13, 30, 0, tzinfo=timezone.utc)
+    # 120 rows, +0..+119 minutes → 13:30 to 15:29 UTC.
+    # Horizon = 10m, so target = ts + 10m. Open buffer = 60m → window opens
+    # at 14:30 UTC. Excluded if target < 14:30 UTC ⟺ ts < 14:20 UTC ⟺
+    # ts is in the first 50 minutes (rows 0..49). Rows 50..119 (70 rows)
+    # have target >= 14:30 UTC and survive. Max target is 15:39 UTC, well
+    # before the close-buffer end at 19:00 UTC, so close-buffer is irrelevant.
+    timestamps = [base + timedelta(minutes=i) for i in range(120)]
+    rows = _make_rows_at_timestamps(timestamps)
+
+    mock_db = AsyncMock()
+    mock_db.query_training_data = AsyncMock(return_value=rows)
+
+    builder = DatasetBuilder(mock_db, min_samples=50)
+    result = await builder.build(
+        "SPY", "1m", 10,
+        as_of=datetime(2026, 4, 14, tzinfo=timezone.utc),
+        open_buffer_min=60, close_buffer_min=60,
+    )
+
+    assert result is not None
+    X, y = result
+    assert len(X) == 70
+    assert len(y) == 70
+
+
+@pytest.mark.asyncio
+async def test_dataset_builder_no_filter_when_buffers_none():
+    """No filter applied when buffer kwargs are absent (backward compat for
+    existing tests / mocked Trainer paths that don't provide a runtime
+    config)."""
+    rows = _make_training_rows(100)
+    mock_db = AsyncMock()
+    mock_db.query_training_data = AsyncMock(return_value=rows)
+
+    builder = DatasetBuilder(mock_db, min_samples=50)
+    result = await builder.build(
+        "SPY", "1m", 5,
+        as_of=datetime(2026, 4, 13, tzinfo=timezone.utc),
+    )
+
+    assert result is not None
+    X, _ = result
+    assert len(X) == 100
+
+
+@pytest.mark.asyncio
+async def test_dataset_builder_crypto_no_filter_even_with_buffers():
+    """Crypto symbols bypass the equity exclusion zone — every row survives
+    even on a Saturday with buffers set."""
+    # Saturday 2026-04-11 — equity would be 100% excluded by the weekend rule.
+    base = datetime(2026, 4, 11, 3, 0, 0, tzinfo=timezone.utc)
+    timestamps = [base + timedelta(minutes=i) for i in range(60)]
+    rows = _make_rows_at_timestamps(timestamps)
+
+    mock_db = AsyncMock()
+    mock_db.query_training_data = AsyncMock(return_value=rows)
+
+    builder = DatasetBuilder(mock_db, min_samples=50)
+    result = await builder.build(
+        "BTC/USD", "1m", 10,
+        as_of=datetime(2026, 4, 14, tzinfo=timezone.utc),
+        open_buffer_min=60, close_buffer_min=60,
+    )
+
+    assert result is not None
+    X, _ = result
+    assert len(X) == 60
+
+
+@pytest.mark.asyncio
+async def test_dataset_builder_filter_returns_none_when_below_threshold():
+    """If filtering drops below min_samples, build returns None."""
+    base = datetime(2026, 4, 13, 13, 30, 0, tzinfo=timezone.utc)
+    # 50 rows in the open buffer (rows 0..49 from the prior arithmetic).
+    timestamps = [base + timedelta(minutes=i) for i in range(50)]
+    rows = _make_rows_at_timestamps(timestamps)
+
+    mock_db = AsyncMock()
+    mock_db.query_training_data = AsyncMock(return_value=rows)
+
+    builder = DatasetBuilder(mock_db, min_samples=50)
+    result = await builder.build(
+        "SPY", "1m", 10,
+        as_of=datetime(2026, 4, 14, tzinfo=timezone.utc),
+        open_buffer_min=60, close_buffer_min=60,
+    )
+
+    # All 50 filtered out → 0 < threshold → None.
+    assert result is None
+
+
 def test_time_based_split():
     np.random.seed(42)
     X = pd.DataFrame({
