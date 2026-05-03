@@ -277,10 +277,27 @@ async def _handle_feature_importance(request: web.Request) -> web.Response:
         from services.model_service.dataset import DatasetBuilder, time_based_split
         from sklearn.inspection import permutation_importance
 
+        # Live buffer values from RuntimeConfig — same exclusion-zone filter
+        # Trainer.train applies today. None/None disables the filter, which is
+        # the correct degraded behavior if Redis is unreachable (matches the
+        # handler's pre-A2 contract).
+        rc = request.app["runtime_config"]
+        try:
+            open_buf = await rc.get("equity_window_open_buffer_minutes")
+            close_buf = await rc.get("equity_window_close_buffer_minutes")
+        except Exception:
+            logger.exception(
+                "feature_importance: runtime_config.get failed; "
+                "skipping exclusion filter for fallback rebuild",
+            )
+            open_buf = None
+            close_buf = None
+
         builder = DatasetBuilder(db)
         built = await builder.build(
             row["symbol"], row["timeframe"], int(row["horizon_minutes"]),
             as_of=row["trained_at"],
+            open_buffer_min=open_buf, close_buffer_min=close_buf,
         )
         if built is None:
             return web.json_response({
