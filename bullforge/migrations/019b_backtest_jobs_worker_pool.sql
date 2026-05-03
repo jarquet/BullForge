@@ -1,4 +1,4 @@
--- 019_backtest_jobs_worker_pool.sql
+-- 019b_backtest_jobs_worker_pool.sql
 --
 -- Adds a `worker_pool` column to backtest_jobs so CPU-native jobs go to
 -- backtest-worker-cpu containers and GPU-needing jobs (LSTM/MLP/meta)

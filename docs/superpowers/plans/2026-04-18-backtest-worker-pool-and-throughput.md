@@ -21,7 +21,7 @@ The execution skill creates `.worktrees/worker-pool` branched from master as `fe
 ## Task 1: Migration + `cpu_or_gpu` classifier
 
 **Files:**
-- Create: `bullforge/migrations/019_backtest_jobs_worker_pool.sql`
+- Create: `bullforge/migrations/019b_backtest_jobs_worker_pool.sql`
 - Create: `bullforge/services/backtest_service/worker_pool.py`
 - Create: `bullforge/tests/test_worker_pool.py`
 
@@ -96,10 +96,10 @@ Expected: 13 passed.
 
 - [ ] **Step 5: Write the migration**
 
-Create `bullforge/migrations/019_backtest_jobs_worker_pool.sql` with:
+Create `bullforge/migrations/019b_backtest_jobs_worker_pool.sql` with:
 
 ```sql
--- 019_backtest_jobs_worker_pool.sql
+-- 019b_backtest_jobs_worker_pool.sql
 --
 -- Adds a `worker_pool` column to backtest_jobs so CPU-native jobs go to
 -- backtest-worker-cpu containers and GPU-needing jobs (LSTM/MLP/meta)
@@ -116,7 +116,7 @@ CREATE INDEX IF NOT EXISTS idx_backtest_jobs_pool_status_created
 - [ ] **Step 6: Commit**
 
 ```bash
-git add bullforge/migrations/019_backtest_jobs_worker_pool.sql \
+git add bullforge/migrations/019b_backtest_jobs_worker_pool.sql \
         bullforge/services/backtest_service/worker_pool.py \
         bullforge/tests/test_worker_pool.py
 git commit -m "feat(backtest): add worker_pool column + cpu_or_gpu classifier"
