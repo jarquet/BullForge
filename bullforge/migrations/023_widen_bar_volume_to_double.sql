@@ -3,9 +3,12 @@
 -- Equity volumes are integer-valued and cast losslessly.
 --
 -- ALTER COLUMN ... TYPE on a TimescaleDB hypertable rewrites every chunk
--- under an ACCESS EXCLUSIVE lock, blocking data_pipeline writes for the
--- duration. Sub-minute at current data scale; if applied to a much larger
--- table in the future, schedule during a quiet window.
+-- under an ACCESS EXCLUSIVE lock. The lock blocks: (a) concurrent INSERT
+-- ... ON CONFLICT writes from data_pipeline.stream._process_bar, (b) any
+-- chunk compression catch-up jobs, and (c) reads from the feature_engine
+-- and backtest paths for the duration. Sub-minute at current data scale;
+-- if applied to a much larger table in the future, schedule during a
+-- quiet window.
 --
 -- `_run_migrations` (shared/db.py) re-executes every numbered file on every
 -- live Database.connect(), so guard each ALTER on the column's current type
