@@ -574,3 +574,47 @@ async def test_feature_importance_fallback_passes_runtime_buffers_to_builder(
     assert resp.status == 200
     assert captured["kwargs"].get("open_buffer_min") == 60
     assert captured["kwargs"].get("close_buffer_min") == 45
+
+
+@pytest.mark.asyncio
+async def test_feature_importance_fallback_runtime_config_raises_falls_back_to_none(
+    aiohttp_client, models_app_with_redis, mock_db_models, caplog,
+):
+    """If runtime_config.get raises (real Redis outage, mirrored from the
+    meta-shadow handler's pattern), the fallback must NOT 500. It logs the
+    failure and passes None/None to DatasetBuilder.build, which disables the
+    exclusion filter (graceful degrade to the pre-A2 dashboard behavior).
+    """
+    import logging as _logging
+    from unittest.mock import patch
+    from services.model_service.dataset import DatasetBuilder
+    from services.model_service.model_store import ModelStore
+
+    _wire_model_row_on(mock_db_models, _make_model_registry_row("hist_gradient_boost"))
+
+    runtime_config = MagicMock()
+    runtime_config.get = AsyncMock(side_effect=ConnectionError("redis down"))
+    models_app_with_redis["runtime_config"] = runtime_config
+
+    fake_pipeline = MagicMock(spec=[])  # spec=[] => no attrs, lacks feature_importances_
+
+    captured = {}
+
+    async def spy_build(self, *args, **kwargs):
+        captured["kwargs"] = kwargs
+        return None
+
+    with patch.object(ModelStore, "load", return_value=fake_pipeline), \
+         patch.object(DatasetBuilder, "build", spy_build), \
+         caplog.at_level(_logging.ERROR):
+        client = await aiohttp_client(models_app_with_redis)
+        resp = await client.get("/api/models/42/feature_importance")
+
+    assert resp.status == 200
+    assert captured["kwargs"].get("open_buffer_min") is None
+    assert captured["kwargs"].get("close_buffer_min") is None
+    # The runtime_config failure is surfaced in logs (not silently swallowed).
+    assert any(
+        "feature_importance" in r.message and "runtime_config" in r.message
+        for r in caplog.records
+    )
