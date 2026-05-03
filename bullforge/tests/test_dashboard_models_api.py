@@ -391,6 +391,57 @@ async def test_meta_shadow_health_default_threshold(
 
 
 @pytest.mark.asyncio
+async def test_meta_shadow_health_runtime_config_raises_falls_back_to_schema_default(
+    aiohttp_client, models_app_with_redis, caplog,
+):
+    """When runtime_config.get raises (it shares Redis with the metrics mget,
+    so a real Redis outage breaks both), the handler must catch the
+    exception, log it, fall back to the schema default (0.01) for the
+    threshold, and still serve the tile rather than 500ing the dashboard.
+
+    Realistic scenario: same Redis outage also breaks mget, so the response
+    should be the redis_ok=False payload with the schema-default threshold.
+    """
+    # runtime_config.get raises — same root cause we expect mget to hit.
+    runtime_config = MagicMock()
+    runtime_config.get = AsyncMock(
+        side_effect=ConnectionError("redis: connection refused"),
+    )
+    models_app_with_redis["runtime_config"] = runtime_config
+
+    # mget also raises (same Redis outage).
+    redis = MagicMock()
+    redis.client = MagicMock()
+    redis.client.mget = AsyncMock(
+        side_effect=ConnectionError("redis: connection refused"),
+    )
+    models_app_with_redis["redis_client"] = redis
+
+    client = await aiohttp_client(models_app_with_redis)
+    import logging as _logging
+    with caplog.at_level(_logging.ERROR):
+        resp = await client.get("/api/models/meta_shadow_health")
+    # Must NOT 500 — the tile is observability-only and falls back gracefully.
+    assert resp.status == 200
+    body = await resp.json()
+    # Schema default surfaces by reference (not a hardcoded literal in the
+    # handler). If someone bumps the schema default, this test moves with it.
+    assert body["threshold"] == 0.01
+    # Sensible response shape for the redis-error path.
+    assert body["redis_ok"] is False
+    assert body["skip_count"] == 0
+    assert body["drop_count"] == 0
+    assert body["inference_count"] == 0
+    assert body["skip_plus_drop_rate"] == 0.0
+    assert body["is_red"] is False
+    # Verify the runtime_config failure was logged (not silently swallowed).
+    assert any(
+        "meta_shadow_health" in r.message and "runtime_config" in r.message
+        for r in caplog.records
+    )
+
+
+@pytest.mark.asyncio
 async def test_meta_shadow_health_operator_tuned_threshold(
     aiohttp_client, models_app_with_redis,
 ):

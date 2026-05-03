@@ -7,6 +7,7 @@ from datetime import datetime
 from aiohttp import web
 
 from shared.db import Database
+from shared.runtime_config import CONFIG_SCHEMA
 from shared.time_window import parse_time_window
 
 logger = logging.getLogger(__name__)
@@ -56,7 +57,17 @@ async def _handle_meta_shadow_health(request: web.Request) -> web.Response:
     # (early-return, mget-failure, success) surface the current effective
     # value to the SPA.
     runtime_config = request.app["runtime_config"]
-    red_threshold = await runtime_config.get("meta_shadow_red_threshold")
+    try:
+        red_threshold = await runtime_config.get("meta_shadow_red_threshold")
+    except Exception:
+        # If runtime_config can't reach Redis (the same backend we read
+        # counters from) we still want to render the tile with sane numbers
+        # rather than 500ing the dashboard. Fall back to the schema default;
+        # the mget block below will independently report `redis_ok: false`.
+        logger.exception(
+            "meta_shadow_health: runtime_config.get failed; using schema default",
+        )
+        red_threshold = float(CONFIG_SCHEMA["meta_shadow_red_threshold"]["default"])
     now_min = int(time.time() // 60)
     bucket_keys = [now_min - i for i in range(_HEALTH_WINDOW_MINUTES)]
 

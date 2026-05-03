@@ -205,9 +205,9 @@ CONFIG_SCHEMA: dict[str, dict[str, Any]] = {
             "which the dashboard's Meta shadow health tile flips red. "
             "Comparison is strict-> so a steady-state rate exactly at the "
             "threshold does NOT trigger — the tile is for regression "
-            "detection, not enforcement of a hard SLO. Default 0.01 (1%)."
+            "detection, not enforcement of a hard SLO."
         ),
-        "reference": "https://en.wikipedia.org/wiki/Service-level_objective",
+        "reference": "https://en.wikipedia.org/wiki/Anomaly_detection",
     },
     "meta_cold_start_min_rows": {
         "default": 2000, "type": "int", "min": 100, "max": 100000,
