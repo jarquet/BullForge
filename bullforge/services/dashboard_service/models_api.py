@@ -286,7 +286,7 @@ async def _handle_feature_importance(request: web.Request) -> web.Response:
         # Live buffer values from RuntimeConfig — same exclusion-zone filter
         # Trainer.train applies today. None/None disables the filter, which is
         # the correct degraded behavior if Redis is unreachable (matches the
-        # handler's pre-A2 contract).
+        # handler's pre-exclusion-zone contract).
         rc = request.app["runtime_config"]
         try:
             open_buf = await rc.get("equity_window_open_buffer_minutes")
