@@ -6,10 +6,26 @@
 -- under an ACCESS EXCLUSIVE lock, blocking data_pipeline writes for the
 -- duration. Sub-minute at current data scale; if applied to a much larger
 -- table in the future, schedule during a quiet window.
-ALTER TABLE bars_1m
-    ALTER COLUMN volume TYPE DOUBLE PRECISION
-    USING volume::double precision;
+--
+-- `_run_migrations` (shared/db.py) re-executes every numbered file on every
+-- live Database.connect(), so guard each ALTER on the column's current type
+-- to avoid paying AccessExclusiveLock on every service restart.
+DO $$
+BEGIN
+    IF (SELECT data_type FROM information_schema.columns
+        WHERE table_name = 'bars_1m' AND column_name = 'volume') = 'bigint' THEN
+        ALTER TABLE bars_1m
+            ALTER COLUMN volume TYPE DOUBLE PRECISION
+            USING volume::double precision;
+    END IF;
+END $$;
 
-ALTER TABLE bars_daily
-    ALTER COLUMN volume TYPE DOUBLE PRECISION
-    USING volume::double precision;
+DO $$
+BEGIN
+    IF (SELECT data_type FROM information_schema.columns
+        WHERE table_name = 'bars_daily' AND column_name = 'volume') = 'bigint' THEN
+        ALTER TABLE bars_daily
+            ALTER COLUMN volume TYPE DOUBLE PRECISION
+            USING volume::double precision;
+    END IF;
+END $$;
