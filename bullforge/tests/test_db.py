@@ -127,10 +127,24 @@ async def test_cutover_bulk_prepopulate():
     """Production-cutover scenario: a populated DB whose schema_migrations
     table doesn't exist yet (because B1 hasn't shipped). On reconnect,
     cutover-detect should bulk-insert every current filename so subsequent
-    connects find a populated ledger and skip the per-file re-run path."""
+    connects find a populated ledger.
+
+    A sentinel row is inserted into bars_1m before the ledger is dropped.
+    The row should survive the reconnect — the cutover path must not
+    truncate, recreate, or otherwise clobber existing application data."""
+    from shared.models import Bar
+
     settings = Settings()
     db1 = Database(settings)
     await db1.connect()
+
+    sentinel = Bar(
+        symbol="CUTOVER_SENTINEL",
+        timestamp=datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+        open=100.0, high=100.0, low=100.0, close=100.0,
+        volume=1, timeframe="1m",
+    )
+    await db1.insert_bar(sentinel)
 
     async with db1.pool.acquire() as conn:
         # Drop the ledger to simulate the pre-B1 state on a populated DB.
@@ -144,10 +158,19 @@ async def test_cutover_bulk_prepopulate():
         ledger = {r["filename"] for r in await conn.fetch(
             "SELECT filename FROM schema_migrations"
         )}
+        sentinel_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM bars_1m WHERE symbol='CUTOVER_SENTINEL'"
+        )
+        # Cleanup so the fixture teardown for subsequent tests starts clean.
+        await conn.execute("DELETE FROM bars_1m WHERE symbol='CUTOVER_SENTINEL'")
 
     await db2.disconnect()
 
     assert ledger == _real_migration_filenames()
+    assert sentinel_count == 1, (
+        "bars_1m sentinel row was lost during cutover-reconnect — implies "
+        "a destructive operation (DROP/TRUNCATE/DELETE) ran on the table"
+    )
 
 
 @pytest.mark.asyncio

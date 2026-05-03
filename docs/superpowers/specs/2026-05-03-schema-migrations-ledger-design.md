@@ -121,3 +121,13 @@ In `tests/test_db.py`:
 - A per-migration checksum (detect if a file's contents changed after it was applied). Possible follow-up; not needed today.
 - Documenting / enforcing the "every migration must be self-idempotent" convention. The ledger makes idempotency optional going forward; existing migrations stay idempotent for the cutover path.
 - CI lint for unguarded `ALTER COLUMN ... TYPE`. Complementary to this work; tracked separately.
+
+## Implementation notes (post-spec)
+
+Three deltas from the test design above were applied during implementation:
+
+1. **Test #2 mechanism strengthened.** Instead of comparing `applied_at` timestamps across two connects, the test (`test_ledger_skips_already_applied`) writes a non-idempotent sentinel migration (`INSERT INTO ledger_test_sentinel(...)`) into a temp `migrations_dir` and asserts the row count stays at 1 across two `_run_migrations` calls. If the ledger fails to skip, the row count goes 1→2 — a stronger and more direct proof than timestamp comparison.
+
+2. **`_run_migrations` gained a private `migrations_dir=None` keyword argument.** Production callers don't pass it; tests pass a `tmp_path` to point at synthetic migrations.
+
+3. **Per-file (execute SQL + INSERT ledger row) wrapped in `async with conn.transaction():`.** Closes a small gap where a connection drop between the two could leave the migration applied but unrecorded. Idempotency made this safe before; the transaction makes it correct regardless. None of the existing migrations contain DDL incompatible with explicit transactions (no `CREATE INDEX CONCURRENTLY`, no `VACUUM`, no `REINDEX`).

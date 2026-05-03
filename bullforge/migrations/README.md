@@ -18,7 +18,12 @@ If you must rename, prefer keeping the migration body idempotent (`CREATE TABLE 
 
 When B1 (the ledger) ships, the cutover deploy hits a populated production DB whose `schema_migrations` table doesn't exist yet. `_run_migrations` detects this — empty ledger AND `bars_1m` already exists — and bulk-inserts every current filename as already-applied without re-running anything. Subsequent connects find a populated ledger and use the steady-state path.
 
-The cutover heuristic uses `bars_1m` as a canary because `001_create_bars.sql` creates it. The heuristic does NOT verify that every migration's effects are present — a partially-migrated DB (e.g., a deploy that crashed midway through) gets bulk-marked as fully applied. To recover from such a state: `DROP TABLE schema_migrations` and reconnect; this re-triggers cutover-detect, which is identical to the operator running `_run_migrations` from scratch on an idempotent migration set.
+The cutover heuristic uses `bars_1m` as a canary because `001_create_bars.sql` creates it. The heuristic does NOT verify that every migration's effects are present — a partially-migrated DB (e.g., a deploy that crashed midway through) gets bulk-marked as fully applied, and the missing migrations are silently skipped on subsequent connects.
+
+**Recovery paths:**
+
+- **Wrongly-empty ledger on a fully-applied DB.** Operator drops the ledger; reconnect re-triggers cutover-detect and re-populates from current filenames. Safe.
+- **Partially-applied DB.** `DROP TABLE schema_migrations` does NOT recover this — reconnect re-triggers cutover-detect, which marks every file as applied (including the missing ones), and the broken state persists. Recovery requires the operator to first run the missing migrations manually (e.g., via `psql`), then drop and rebuild the ledger. Idempotency of every migration body makes the manual re-run safe even for files that are already partially applied.
 
 ## Idempotency convention
 

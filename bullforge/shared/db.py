@@ -268,12 +268,17 @@ class Database:
             if sql_file.name in applied:
                 continue
             sql = sql_file.read_text()
-            await conn.execute(sql)
-            await conn.execute(
-                "INSERT INTO schema_migrations (filename) VALUES ($1) "
-                "ON CONFLICT DO NOTHING",
-                sql_file.name,
-            )
+            # Run the migration and the ledger insert in one transaction so
+            # a connection drop between them can't leave the migration
+            # applied but unrecorded (which would cause a re-run on the next
+            # connect — safe given idempotency, but undesirable noise).
+            async with conn.transaction():
+                await conn.execute(sql)
+                await conn.execute(
+                    "INSERT INTO schema_migrations (filename) VALUES ($1) "
+                    "ON CONFLICT DO NOTHING",
+                    sql_file.name,
+                )
 
     async def _sync_sandbox_schema(self, conn: asyncpg.Connection) -> None:
         """
