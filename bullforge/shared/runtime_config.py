@@ -197,6 +197,18 @@ CONFIG_SCHEMA: dict[str, dict[str, Any]] = {
         "description": "Suppress direction flips on the same symbol within N bars. Prevents flip-flopping when base predictions are noisy.",
         "reference": "https://en.wikipedia.org/wiki/Hysteresis",
     },
+    "meta_shadow_red_threshold": {
+        "default": 0.01, "type": "float", "min": 0.0, "max": 1.0,
+        "label": "Meta Shadow Health Red Threshold",
+        "description": (
+            "Combined skip+drop rate over the trailing 15-minute window above "
+            "which the dashboard's Meta shadow health tile flips red. "
+            "Comparison is strict-> so a steady-state rate exactly at the "
+            "threshold does NOT trigger — the tile is for regression "
+            "detection, not enforcement of a hard SLO."
+        ),
+        "reference": "https://en.wikipedia.org/wiki/Anomaly_detection",
+    },
     "meta_cold_start_min_rows": {
         "default": 2000, "type": "int", "min": 100, "max": 100000,
         "label": "Meta Cold-Start Min Rows",
