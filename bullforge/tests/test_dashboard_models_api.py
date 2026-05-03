@@ -618,3 +618,61 @@ async def test_feature_importance_fallback_runtime_config_raises_falls_back_to_n
         "feature_importance" in r.message and "runtime_config" in r.message
         for r in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_feature_importance_success_response_carries_buffer_values(
+    aiohttp_client, models_app_with_redis, mock_db_models,
+):
+    """The success-path JSON must surface the buffer values used for the
+    fallback rebuild so the SPA can label whether importance was computed
+    against a filtered or unfiltered population.
+    """
+    from unittest.mock import patch
+    import numpy as np
+    import pandas as pd
+    from services.model_service.dataset import DatasetBuilder
+    from sklearn.dummy import DummyClassifier
+    from sklearn.pipeline import Pipeline
+
+    _wire_model_row_on(mock_db_models, _make_model_registry_row("hist_gradient_boost"))
+
+    async def _rc_get(key):
+        return {
+            "equity_window_open_buffer_minutes": 30,
+            "equity_window_close_buffer_minutes": 20,
+        }[key]
+
+    runtime_config = MagicMock()
+    runtime_config.get = AsyncMock(side_effect=_rc_get)
+    models_app_with_redis["runtime_config"] = runtime_config
+
+    # A trivially-fitted DummyClassifier wrapped in a sklearn Pipeline so the
+    # ModelStore.load + permutation_importance call chain works without a real
+    # artifact on disk. The pipeline lacks feature_importances_, so the handler
+    # hits the fallback. We patch ModelStore.load to return our pipeline and
+    # patch DatasetBuilder.build to return a tiny X/y so permutation runs fast.
+    X = pd.DataFrame({
+        "f1": np.linspace(0, 1, 20),
+        "f2": np.linspace(1, 0, 20),
+        "f3": np.random.RandomState(0).rand(20),
+    })
+    y = pd.Series([0, 1] * 10)
+    pipe = Pipeline([("clf", DummyClassifier(strategy="stratified", random_state=0))])
+    pipe.fit(X, y)
+
+    async def spy_build(self, *args, **kwargs):
+        return X, y
+
+    from services.model_service.model_store import ModelStore
+
+    with patch.object(DatasetBuilder, "build", spy_build), \
+         patch.object(ModelStore, "load", return_value=pipe):
+        client = await aiohttp_client(models_app_with_redis)
+        resp = await client.get("/api/models/42/feature_importance")
+
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["available"] is True
+    assert body["open_buffer_min"] == 30
+    assert body["close_buffer_min"] == 20

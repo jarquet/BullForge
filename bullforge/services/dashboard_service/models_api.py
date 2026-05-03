@@ -266,6 +266,12 @@ async def _handle_feature_importance(request: web.Request) -> web.Response:
         row["feature_columns"], str,
     ) else row["feature_columns"]
 
+    # Buffer values are only assigned in the permutation-importance fallback
+    # branch. Pre-init to None so the success-path JSON shape is consistent
+    # whether or not the fallback ran.
+    open_buf = None
+    close_buf = None
+
     if hasattr(classifier, "feature_importances_"):
         # Fast path for tree ensembles that publish impurity-based importances
         # (GradientBoostingClassifier, LightGBM, RandomForest, etc.).
@@ -334,6 +340,10 @@ async def _handle_feature_importance(request: web.Request) -> web.Response:
             {"name": name, "importance": float(imp)}
             for name, imp in pairs[:20]
         ],
+        # None on the fast path (importance came from feature_importances_);
+        # int on the permutation fallback path.
+        "open_buffer_min": open_buf,
+        "close_buffer_min": close_buf,
     })
 
 
