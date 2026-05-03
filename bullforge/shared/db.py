@@ -419,6 +419,7 @@ class Database:
             # parameter, so accept either form and normalize to datetime.
             if isinstance(since, str):
                 since = datetime.fromisoformat(since)
+                _require_utc(since, "since")
             query += " AND timestamp >= $2"
             args.append(since)
         query += " ORDER BY timestamp DESC LIMIT $" + str(len(args) + 1)
