@@ -2,7 +2,7 @@ import pytest
 import pytest_asyncio
 import asyncpg
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from shared.config import Settings
 from shared.db import Database
 
@@ -218,6 +218,9 @@ NAIVE_DT_CASES = [
 
     # Optional-datetime helpers — pass naive in the optional slot.
     ("query_bars", dict(symbol="SPY", timeframe="1m", since=NAIVE_DT)),
+    # query_bars also accepts an ISO string; the naive-string path must be
+    # validated after fromisoformat() parses it, not just on the datetime arm.
+    ("query_bars", dict(symbol="SPY", timeframe="1m", since="2026-05-02T12:00:00")),
     ("update_order_status", dict(order_id=1, status="filled", filled_at=NAIVE_DT)),
     ("query_closed_trades", dict(symbol="SPY", since=NAIVE_DT)),
     ("query_equity_curve", dict(starting_equity=1000.0, from_dt=NAIVE_DT)),
@@ -278,3 +281,24 @@ def test_require_utc_rejects_non_utc_tzinfo():
     other_tz = timezone(_td(hours=-5))
     with pytest.raises(ValueError, match="must be UTC"):
         _require_utc(datetime(2026, 5, 2, 12, 0, tzinfo=other_tz), "x")
+
+
+async def test_query_bars_accepts_offset_iso_string():
+    """The +00:00 offset string path passes _require_utc validation —
+    it's only the naive-string path that's rejected. Hermetic: mocked pool."""
+    settings = Settings()
+    db = Database(settings)
+    pool = MagicMock()
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=[])
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool.acquire.return_value = ctx
+    db.pool = pool
+
+    result = await db.query_bars(
+        symbol="SPY", timeframe="1m", since="2026-05-02T12:00:00+00:00",
+    )
+    assert result == []
+    pool.acquire.assert_called()
