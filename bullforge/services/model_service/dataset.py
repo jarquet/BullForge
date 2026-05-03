@@ -8,7 +8,7 @@ from typing import Optional, Tuple
 import pandas as pd
 
 from shared.db import Database
-from services.feature_engine.exclusion import is_evaluation_window_in_exclusion
+from shared.exclusion import is_evaluation_window_in_exclusion
 
 logger = logging.getLogger(__name__)
 

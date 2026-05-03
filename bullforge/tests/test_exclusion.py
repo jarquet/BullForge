@@ -1,4 +1,4 @@
-"""Hermetic tests for services.feature_engine.exclusion.
+"""Hermetic tests for shared.exclusion.
 
 Mirrors the style of tests/test_trading_window.py — UTC inputs, ET-aware
 expectations, no DB. The dates are chosen to match those file's reference
@@ -10,7 +10,7 @@ EDT (UTC-4) is in effect for these April dates, so:
 """
 from datetime import datetime, timezone
 
-from services.feature_engine.exclusion import is_evaluation_window_in_exclusion
+from shared.exclusion import is_evaluation_window_in_exclusion
 
 
 def _dt(year, month, day, hour, minute=0):
