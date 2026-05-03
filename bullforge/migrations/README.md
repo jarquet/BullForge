@@ -42,3 +42,9 @@ Patterns established by 001-023:
 ## Numbering
 
 Files are applied in lexical (`sorted(glob('*.sql'))`) order. Use `NNN_description.sql` (zero-padded to three digits). If two migrations land in the same PR cycle and a number collision happens, suffix one of them with `a`/`b`/etc. (e.g. `019_…` and `019b_…`). The `_` (0x5F) sorts before letters (`a`-`z` are 0x61-0x7A), so the unsuffixed file lex-sorts first.
+
+## Numbering history
+
+The `017_*` slot is intentionally empty. `017_backtest_meta_columns.sql` was authored on 2026-04-17 (commit `eb3b65c`) to backfill the `estimator_type` column onto `backtest.model_registry`, but was deleted ~20 minutes later (commit `5cbc4f1`) when the targeted backfill was replaced by the general `_sync_sandbox_schema` mirror in `shared/db.py`. The slot has no production footprint — the file lived only on a feature branch and never reached master.
+
+**Future migrations should continue from `024+` without reclaiming `017_*`.** Renumbering `018+` would touch every file from `018` onward and force the `schema_migrations` ledger to re-key on cutover for no benefit (the ledger keys on filename, not on slot index). Leave the gap.

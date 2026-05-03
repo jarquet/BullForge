@@ -266,6 +266,12 @@ async def _handle_feature_importance(request: web.Request) -> web.Response:
         row["feature_columns"], str,
     ) else row["feature_columns"]
 
+    # Buffer values are only assigned in the permutation-importance fallback
+    # branch. Pre-init to None so the success-path JSON shape is consistent
+    # whether or not the fallback ran.
+    open_buf = None
+    close_buf = None
+
     if hasattr(classifier, "feature_importances_"):
         # Fast path for tree ensembles that publish impurity-based importances
         # (GradientBoostingClassifier, LightGBM, RandomForest, etc.).
@@ -277,10 +283,27 @@ async def _handle_feature_importance(request: web.Request) -> web.Response:
         from services.model_service.dataset import DatasetBuilder, time_based_split
         from sklearn.inspection import permutation_importance
 
+        # Live buffer values from RuntimeConfig — same exclusion-zone filter
+        # Trainer.train applies today. None/None disables the filter, which is
+        # the correct degraded behavior if Redis is unreachable (matches the
+        # handler's pre-exclusion-zone contract).
+        rc = request.app["runtime_config"]
+        try:
+            open_buf = await rc.get("equity_window_open_buffer_minutes")
+            close_buf = await rc.get("equity_window_close_buffer_minutes")
+        except Exception:
+            logger.exception(
+                "feature_importance: runtime_config.get failed; "
+                "skipping exclusion filter for fallback rebuild",
+            )
+            open_buf = None
+            close_buf = None
+
         builder = DatasetBuilder(db)
         built = await builder.build(
             row["symbol"], row["timeframe"], int(row["horizon_minutes"]),
             as_of=row["trained_at"],
+            open_buffer_min=open_buf, close_buffer_min=close_buf,
         )
         if built is None:
             return web.json_response({
@@ -317,6 +340,10 @@ async def _handle_feature_importance(request: web.Request) -> web.Response:
             {"name": name, "importance": float(imp)}
             for name, imp in pairs[:20]
         ],
+        # None on the fast path (importance came from feature_importances_);
+        # int on the permutation fallback path.
+        "open_buffer_min": open_buf,
+        "close_buffer_min": close_buf,
     })
 
 
