@@ -25,6 +25,12 @@ IDLE_SLEEP_SECONDS = 2.0
 
 
 def _build_config(cfg: dict) -> BacktestConfig:
+    # Volume caps are optional in the job payload; fall back to BacktestConfig
+    # defaults (equity 0.10, crypto 0.25) when omitted.
+    optional_floats = {}
+    for key in ("max_volume_pct", "max_volume_pct_crypto"):
+        if cfg.get(key) is not None:
+            optional_floats[key] = float(cfg[key])
     return BacktestConfig(
         name=cfg.get("name", "dashboard-run"),
         custom_name=cfg.get("custom_name"),
@@ -44,6 +50,7 @@ def _build_config(cfg: dict) -> BacktestConfig:
         max_position_pct=cfg.get("max_position_pct"),
         max_positions=cfg.get("max_positions"),
         max_exposure=cfg.get("max_exposure"),
+        **optional_floats,
     )
 
 

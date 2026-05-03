@@ -41,7 +41,13 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--mode", default="rolling", choices=["rolling", "anchored"])
     p.add_argument("--starting-cash", type=float, default=100_000.0)
     p.add_argument("--slippage-bps", type=float, default=5.0)
-    p.add_argument("--max-volume-pct", type=float, default=0.10)
+    p.add_argument("--max-volume-pct", type=float, default=0.10,
+                   help="Equity volume cap as fraction of next bar's volume "
+                        "(0, 1]. Default 0.10.")
+    p.add_argument("--max-volume-pct-crypto", type=float, default=0.25,
+                   help="Crypto volume cap as fraction of next bar's volume "
+                        "(0, 1]. Default 0.25 — see "
+                        "docs/research/crypto-bar-volume-units.md.")
     p.add_argument("--periods-per-year", type=int, default=390 * 252,
                    help="annualization factor; default = 1m equities")
     return p.parse_args()
@@ -87,6 +93,7 @@ async def _main() -> None:
         starting_cash=args.starting_cash,
         slippage_bps=args.slippage_bps,
         max_volume_pct=args.max_volume_pct,
+        max_volume_pct_crypto=args.max_volume_pct_crypto,
         periods_per_year=args.periods_per_year,
     )
     try:

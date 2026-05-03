@@ -24,7 +24,8 @@ lightgbm, alpaca-py) on the NVIDIA PyTorch base image. It runs under the
         --end   2025-04-01T00:00:00 \
         --train-days 60 --test-days 5 --embargo-min 30 \
         --mode rolling \
-        --slippage-bps 5 --max-volume-pct 0.10
+        --slippage-bps 5 \
+        --max-volume-pct 0.10 --max-volume-pct-crypto 0.25
 
 ### Locally (requires full deps installed)
 
@@ -38,7 +39,8 @@ lightgbm, alpaca-py) on the NVIDIA PyTorch base image. It runs under the
         --end   2025-04-01T00:00:00 \
         --train-days 60 --test-days 5 --embargo-min 30 \
         --mode rolling \
-        --slippage-bps 5 --max-volume-pct 0.10
+        --slippage-bps 5 \
+        --max-volume-pct 0.10 --max-volume-pct-crypto 0.25
 
 ## Inspect results
 

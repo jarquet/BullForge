@@ -78,7 +78,7 @@ class SimulatedBroker:
             return order_id
 
         result = self._fill_model.fill(
-            FillRequest(side=side, qty=qty), bar,
+            FillRequest(side=side, qty=qty), bar, symbol=symbol,
         )
         if not result.filled:
             self._orders[order_id] = self._snapshot(

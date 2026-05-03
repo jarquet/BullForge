@@ -74,6 +74,40 @@ def test_backtest_config_override_fields_default_none():
     assert cfg.max_exposure is None
 
 
+def test_backtest_config_volume_caps_have_asset_class_defaults():
+    """Equity cap stays at 0.10; crypto cap defaults to 0.25 — see
+    bullforge/docs/research/crypto-bar-volume-units.md for rationale."""
+    cfg = BacktestConfig(
+        name="t",
+        symbols=["SPY"],
+        timeframe="1m",
+        horizons=[5],
+        range_start=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        range_end=datetime(2025, 1, 2, tzinfo=timezone.utc),
+        train_days=1, test_days=1, embargo_minutes=5, mode="rolling",
+    )
+    assert cfg.max_volume_pct == 0.10
+    assert cfg.max_volume_pct_crypto == 0.25
+
+
+def test_backtest_config_legacy_max_volume_pct_only_still_constructs():
+    """Backwards-compat: pre-existing callers that pass only max_volume_pct
+    (no max_volume_pct_crypto) must still work."""
+    cfg = BacktestConfig(
+        name="t",
+        symbols=["SPY"],
+        timeframe="1m",
+        horizons=[5],
+        range_start=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        range_end=datetime(2025, 1, 2, tzinfo=timezone.utc),
+        train_days=1, test_days=1, embargo_minutes=5, mode="rolling",
+        max_volume_pct=0.05,
+    )
+    assert cfg.max_volume_pct == 0.05
+    # Crypto cap still gets the asset-class-aware default.
+    assert cfg.max_volume_pct_crypto == 0.25
+
+
 @pytest.mark.asyncio
 async def test_signal_aggregator_honors_backtest_overrides_end_to_end():
     """Mimics how engine._run_fold builds overrides from cfg."""

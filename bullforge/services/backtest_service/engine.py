@@ -8,6 +8,7 @@ from typing import Awaitable, Callable, Optional
 from shared.db import Database
 from shared.models import BacktestScope
 from shared.runtime_config import RuntimeConfig
+from shared.symbol_utils import is_crypto
 
 from services.backtest_service.equity_tracker import EquityTracker
 from services.backtest_service.fill_model import FillModel
@@ -49,7 +50,14 @@ class BacktestConfig:
     custom_name: str | None = None
     starting_cash: float = 100_000.0
     slippage_bps: float = 5.0
+    # Equity volume cap. Crypto uses ``max_volume_pct_crypto`` instead.
     max_volume_pct: float = 0.10
+    # Crypto pairs (slash-in-symbol convention) get a looser cap by default:
+    # crypto bars are single-venue and thinner than equities, but the cap is
+    # in the same base-asset units as order qty so the dimensional check
+    # still holds. See bullforge/docs/research/crypto-bar-volume-units.md
+    # for the unit analysis and rationale for the 0.25 default.
+    max_volume_pct_crypto: float = 0.25
     periods_per_year: int = 390 * 252  # 1m equities default
     min_confidence: Optional[float] = None
     min_agreement: Optional[int] = None
@@ -91,6 +99,7 @@ class BacktestEngine:
                 "starting_cash": cfg.starting_cash,
                 "slippage_bps": cfg.slippage_bps,
                 "max_volume_pct": cfg.max_volume_pct,
+                "max_volume_pct_crypto": cfg.max_volume_pct_crypto,
             },
         )
         if on_run_created is not None:
@@ -157,6 +166,7 @@ class BacktestEngine:
         fill_model = FillModel(
             slippage_bps=cfg.slippage_bps,
             max_volume_pct=cfg.max_volume_pct,
+            max_volume_pct_crypto=cfg.max_volume_pct_crypto,
         )
         broker = SimulatedBroker(
             starting_cash=cfg.starting_cash, fill_model=fill_model,
@@ -233,7 +243,16 @@ class BacktestEngine:
             ]
             signal = await aggregator.aggregate(symbol, ts, pred_dicts)
             if signal is not None and nxt is not None:
-                cap = float(nxt["volume"]) * cfg.max_volume_pct
+                # Asset-class-aware cap: crypto uses the looser
+                # max_volume_pct_crypto. Mirror the same selection FillModel
+                # uses internally so the engine-layer pre-gate and the
+                # broker-layer fill check agree.
+                cap_pct = (
+                    cfg.max_volume_pct_crypto
+                    if is_crypto(symbol)
+                    else cfg.max_volume_pct
+                )
+                cap = float(nxt["volume"]) * cap_pct
                 if cap <= 0:
                     last_account = await broker.get_account()
                     last_ts = ts

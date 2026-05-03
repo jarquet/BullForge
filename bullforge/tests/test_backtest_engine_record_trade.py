@@ -40,7 +40,7 @@ def _order(alpaca_id: str, side: str, qty: float) -> Order:
 @pytest.mark.asyncio
 async def test_record_trade_skips_rejected_entry():
     # Volume cap set so any entry qty > 0.001 is rejected.
-    fm = FillModel(slippage_bps=0.0, max_volume_pct=0.001)
+    fm = FillModel(slippage_bps=0.0, max_volume_pct=1.0, max_volume_pct_crypto=0.001)
     broker = SimulatedBroker(starting_cash=100_000.0, fill_model=fm)
     broker.set_clock(datetime(2026, 4, 20, 4, 0, tzinfo=UTC))
     broker.set_next_bar("BTC/USD", _bar(50_000.0, 50_100.0, 49_900.0, 50_050.0, 1.0))
@@ -86,7 +86,7 @@ async def test_record_trade_skips_rejected_exit_and_preserves_open_trade():
     completed: list = []
 
     # Now tighten the volume cap so the close is rejected.
-    broker._fill_model = FillModel(slippage_bps=0.0, max_volume_pct=0.001)
+    broker._fill_model = FillModel(slippage_bps=0.0, max_volume_pct=1.0, max_volume_pct_crypto=0.001)
     broker.set_next_bar("BTC/USD", _bar(51_000.0, 51_100.0, 50_900.0, 51_050.0, 0.01))
     close_id = await broker.close_position("BTC/USD")
     assert (await broker.get_order(close_id))["status"] == "rejected"
