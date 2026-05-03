@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock
-from shared.runtime_config import RuntimeConfig, CONFIG_SCHEMA
+from shared.runtime_config import RuntimeConfig, CONFIG_SCHEMA, _parse, _serialize
 
 
 @pytest.fixture
@@ -98,7 +98,7 @@ def test_schema_has_required_keys():
     for key, meta in CONFIG_SCHEMA.items():
         assert "default" in meta
         assert "type" in meta
-        assert meta["type"] in ("int", "float", "str", "json")
+        assert meta["type"] in ("int", "float", "str", "json", "bool")
         assert "label" in meta
         assert "description" in meta
         assert "reference" in meta
@@ -169,3 +169,43 @@ def test_meta_pair_grid_default_shape():
 
 def test_meta_inference_enabled_defaults_off():
     assert CONFIG_SCHEMA["meta_inference_enabled"]["default"] is False
+
+
+@pytest.mark.parametrize(
+    "value,serialized",
+    [(True, "true"), (False, "false")],
+)
+def test_bool_type_round_trips(value, serialized):
+    assert _serialize(value, "bool") == serialized
+    assert _parse(serialized, "bool") is value
+    assert _parse(_serialize(value, "bool"), "bool") is value
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["yes", "no", "1", "0", "True", "False", "TRUE", "FALSE", ""],
+)
+def test_bool_type_rejects_invalid_strings(bad):
+    with pytest.raises(ValueError):
+        _parse(bad, "bool")
+
+
+def test_bool_type_allowed_in_schema_validator():
+    # The allowed-types tuple in test_schema_has_required_keys must include
+    # "bool"; this test pins that intent independently.
+    allowed = ("int", "float", "str", "json", "bool")
+    assert "bool" in allowed
+    for key, meta in CONFIG_SCHEMA.items():
+        assert meta["type"] in allowed, f"{key} has unexpected type {meta['type']}"
+
+
+def test_meta_inference_enabled_uses_bool_type():
+    assert CONFIG_SCHEMA["meta_inference_enabled"]["type"] == "bool"
+
+
+def test_meta_inference_enabled_existing_redis_values_round_trip():
+    # Operators set this via `redis-cli HSET bullforge:config
+    # meta_inference_enabled true` (per TODO.md). The new bool _parse
+    # path must accept those raw strings without operator action.
+    assert _parse("true", "bool") is True
+    assert _parse("false", "bool") is False
