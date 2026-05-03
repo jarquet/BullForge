@@ -4,12 +4,15 @@
 // Public API:
 //   var lb = Leaderboard.create({
 //     mountEl: host,
-//     columns: [{key, label, sortable, render(value, row)}],
+//     columns: [{key, label, sortable, title, render(value, row)}],
 //     rows: [...],
 //     getRowHref: function (row) { return '#models/' + row.id; },
 //     initialSort: {key: 'accuracy', order: 'desc'},
 //   });
 //   lb.update(newRows);
+// `title` is optional; when set, it becomes the `title=` attribute on the
+// `<th>` cell (native browser tooltip on hover) for column-header
+// disambiguation.
 (function (global) {
   function _compare(a, b, key, order) {
     var av = a[key], bv = b[key];
@@ -50,7 +53,8 @@
         if (sort && sort.key === c.key) arrow = sort.order === 'desc' ? ' ▼' : ' ▲';
         var cls = c.sortable ? ' class="sortable"' : '';
         var attr = c.sortable ? ' data-sort-key="' + _escape(c.key) + '"' : '';
-        return '<th' + cls + attr + '>' + _escape(c.label) + arrow + '</th>';
+        var titleAttr = c.title ? ' title="' + _escape(c.title) + '"' : '';
+        return '<th' + cls + attr + titleAttr + '>' + _escape(c.label) + arrow + '</th>';
       }).join('') + '</tr></thead>';
 
       var tbody = '<tbody>' + sortedRows.map(function (row) {

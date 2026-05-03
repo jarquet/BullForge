@@ -2,6 +2,13 @@
   const root = () => document.getElementById('backtests-root');
   let pollTimer = null;
 
+  // Tooltip text for the "Rejected" column on the per-fold tables.
+  // Used by both the Leaderboard-based renderer and the legacy renderFolds
+  // table — keep these in sync via this single constant.
+  const REJECTED_TOOLTIP =
+    'Volume-cap rejections (FillModel cap or no-volume next bar). ' +
+    'Risk and notional-floor rejections logged separately, not counted here.';
+
   async function fetchJSON(url, opts) {
     const res = await fetch(url, opts);
     if (!res.ok) {
@@ -783,6 +790,7 @@
         {key: 'hit_rate', label: 'Hit Rate', sortable: true,
          render: function (v) { return (v * 100).toFixed(1) + '%'; }},
         {key: 'rejected_orders_count', label: 'Rejected', sortable: true,
+         title: REJECTED_TOOLTIP,
          render: function (v) {
            // Highlight non-zero rejection counts so a fold where the volume
            // cap silently dropped most signals stands out at a glance.
@@ -1018,7 +1026,7 @@
     document.getElementById('bt-folds').innerHTML = `
       <thead><tr><th>#</th><th>Train</th><th>Test</th>
         <th>P&amp;L</th><th>Sharpe</th><th>Max DD</th><th>#Trades</th>
-        <th>Rejected</th></tr></thead>
+        <th title="${REJECTED_TOOLTIP}">Rejected</th></tr></thead>
       <tbody>${folds.map(f => {
         const rej = f.rejected_orders_count || 0;
         const rejHtml = rej > 0
