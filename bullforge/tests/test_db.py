@@ -80,6 +80,30 @@ async def test_insert_and_query_bar(db):
 
 
 @pytest.mark.asyncio
+async def test_insert_and_query_bar_fractional_volume(db):
+    """Round-trip a fractional-volume crypto bar through the schema.
+    Regression for BIGINT column: 0.7 round-tripped as 0 before the widening."""
+    from datetime import datetime, timezone
+    from shared.models import Bar
+
+    bar = Bar(
+        symbol="BTC/USD",
+        timestamp=datetime(2026, 4, 10, 15, 30, 0, tzinfo=timezone.utc),
+        open=70000.0,
+        high=70100.0,
+        low=69950.0,
+        close=70050.0,
+        volume=0.7,
+        timeframe="1m",
+    )
+    await db.insert_bar(bar)
+
+    rows = await db.query_bars("BTC/USD", "1m", limit=1)
+    assert len(rows) == 1
+    assert rows[0].volume == 0.7
+
+
+@pytest.mark.asyncio
 async def test_query_bars_accepts_datetime_since(db):
     """asyncpg refuses to coerce str → TIMESTAMPTZ when binding parameters,
     so query_bars must accept a datetime for `since`. Regression: the meta

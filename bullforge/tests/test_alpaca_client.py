@@ -53,3 +53,23 @@ def test_parse_bar_converts_naive_timestamp_to_utc(mock_settings):
 
     bar = client.parse_bar("SPY", mock_alpaca_bar, timeframe="1m")
     assert bar.timestamp.tzinfo == timezone.utc
+
+
+def test_parse_bar_preserves_fractional_volume(mock_settings):
+    """Crypto bars carry fractional base-asset volume (e.g. 0.7 BTC).
+    parse_bar must not truncate to int — that drops sub-1.0 BTC bars
+    to volume=0 and feeds a falsely-zero volume into the fill cap and
+    volume features."""
+    client = AlpacaClient(mock_settings)
+
+    mock_alpaca_bar = MagicMock()
+    mock_alpaca_bar.timestamp = datetime(2026, 4, 10, 15, 30, 0, tzinfo=timezone.utc)
+    mock_alpaca_bar.open = 70000.0
+    mock_alpaca_bar.high = 70100.0
+    mock_alpaca_bar.low = 69950.0
+    mock_alpaca_bar.close = 70050.0
+    mock_alpaca_bar.volume = 0.7
+
+    bar = client.parse_bar("BTC/USD", mock_alpaca_bar, timeframe="1m")
+    assert bar.volume == 0.7
+    assert isinstance(bar.volume, float)

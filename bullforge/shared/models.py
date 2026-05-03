@@ -20,7 +20,7 @@ class Bar:
     high: float
     low: float
     close: float
-    volume: int
+    volume: float  # base-asset units; fractional for crypto (e.g. 0.7 BTC)
     timeframe: str  # "1m", "1d", etc.
 
     def __post_init__(self):

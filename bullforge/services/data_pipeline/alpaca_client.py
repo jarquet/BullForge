@@ -40,7 +40,7 @@ class AlpacaClient:
             high=float(alpaca_bar.high),
             low=float(alpaca_bar.low),
             close=float(alpaca_bar.close),
-            volume=int(alpaca_bar.volume),
+            volume=float(alpaca_bar.volume),
             timeframe=timeframe,
         )
 
