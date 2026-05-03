@@ -45,10 +45,16 @@ class RegimeBuilder:
         regime_at's searchsorted lookup relies on.
 
         Re-enriches the full dataframe rather than incrementally
-        patching the tail. At ~200K rows the pandas vectorized cost is
-        cheap (~tens of ms) and "correct over clever" beats a partial
-        update that has to re-derive the rolling 30-day vol-regime
-        median from a sliding window.
+        patching the tail. Measured at ~168ms median for 200K rows on
+        the bench (`scripts/bench_regime_enrich.py`) — tens to low-
+        hundreds of ms, dominated by the 30-day rolling-median window.
+        Affordable at once-per-minute SPY tick rates, but the asyncio
+        loop is single-threaded so any latency creep should be checked
+        in monitoring before adding more work here. "Correct over
+        clever" beats a partial update that has to re-derive the
+        rolling 30-day vol-regime median from a sliding window; if the
+        cost ever surfaces as a real problem, swap to an incremental
+        rewrite (see TODO.md).
         """
         if timestamp.tzinfo is None or timestamp.utcoffset() != timedelta(0):
             raise ValueError(
