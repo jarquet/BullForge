@@ -782,6 +782,14 @@
         {key: 'trades', label: '#Trades', sortable: true},
         {key: 'hit_rate', label: 'Hit Rate', sortable: true,
          render: function (v) { return (v * 100).toFixed(1) + '%'; }},
+        {key: 'rejected_orders_count', label: 'Rejected', sortable: true,
+         render: function (v) {
+           // Highlight non-zero rejection counts so a fold where the volume
+           // cap silently dropped most signals stands out at a glance.
+           var n = v || 0;
+           var cls = n > 0 ? 'negative' : '';
+           return '<span class="' + cls + '">' + n + '</span>';
+         }},
       ],
       rows: folds,
       initialSort: {key: 'fold_index', order: 'asc'},
@@ -1009,15 +1017,23 @@
   function renderFolds(folds) {
     document.getElementById('bt-folds').innerHTML = `
       <thead><tr><th>#</th><th>Train</th><th>Test</th>
-        <th>P&amp;L</th><th>Sharpe</th><th>Max DD</th><th>#Trades</th></tr></thead>
-      <tbody>${folds.map(f => `<tr>
+        <th>P&amp;L</th><th>Sharpe</th><th>Max DD</th><th>#Trades</th>
+        <th>Rejected</th></tr></thead>
+      <tbody>${folds.map(f => {
+        const rej = f.rejected_orders_count || 0;
+        const rejHtml = rej > 0
+          ? `<span class="bt-neg">${rej}</span>`
+          : `${rej}`;
+        return `<tr>
         <td>${f.fold_index}</td>
         <td>${f.train_start?.slice(0,10)} – ${f.train_end?.slice(0,10)}</td>
         <td>${f.test_start?.slice(0,10)} – ${f.test_end?.slice(0,10)}</td>
         <td>${fmtPnL(f.metrics.total_pnl)}</td>
         <td>${f.metrics.sharpe.toFixed(2)}</td>
         <td><span class="bt-neg">${fmtPct(f.metrics.max_dd)}</span></td>
-        <td>${f.metrics.n_trades}</td></tr>`).join('')}</tbody>`;
+        <td>${f.metrics.n_trades}</td>
+        <td>${rejHtml}</td></tr>`;
+      }).join('')}</tbody>`;
   }
   function renderConfig(d) {
     document.getElementById('bt-config').textContent =

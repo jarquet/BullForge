@@ -484,10 +484,14 @@ async def _folds(request: web.Request) -> web.Response:
     results = request.app["results_db"]
 
     async with results.db.pool.acquire() as conn:
+        # Older rows pre-migration 022 may not have rejected_orders_count;
+        # COALESCE handles the gap defensively even though the column has a
+        # NOT NULL DEFAULT 0.
         rows = await conn.fetch(
             """
             SELECT id, fold_index, train_start, train_end,
-                   test_start, test_end, metrics_json
+                   test_start, test_end, metrics_json,
+                   COALESCE(rejected_orders_count, 0) AS rejected_orders_count
             FROM backtest_folds
             WHERE run_id = $1
             ORDER BY fold_index ASC
@@ -514,6 +518,7 @@ async def _folds(request: web.Request) -> web.Response:
             "max_drawdown": float(m.get("max_drawdown") or 0),
             "trades": int(m.get("trades") or 0),
             "hit_rate": float(m.get("hit_rate") or 0),
+            "rejected_orders_count": int(r["rejected_orders_count"] or 0),
         })
     return web.json_response(payload)
 
