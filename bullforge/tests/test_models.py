@@ -36,6 +36,22 @@ def test_bar_rejects_naive_timestamp():
         )
 
 
+def test_bar_accepts_zoneinfo_utc():
+    """ZoneInfo("UTC") has a zero UTC offset and must be accepted."""
+    from zoneinfo import ZoneInfo
+    bar = Bar(
+        symbol="SPY",
+        timestamp=datetime(2026, 4, 10, 15, 30, 0, tzinfo=ZoneInfo("UTC")),
+        open=420.10,
+        high=420.50,
+        low=419.80,
+        close=420.30,
+        volume=15000,
+        timeframe="1m",
+    )
+    assert bar.symbol == "SPY"
+
+
 def test_calendar_event_creation():
     event = CalendarEvent(
         event_type=CalendarEventType.EARNINGS,

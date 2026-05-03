@@ -283,6 +283,24 @@ def test_require_utc_rejects_non_utc_tzinfo():
         _require_utc(datetime(2026, 5, 2, 12, 0, tzinfo=other_tz), "x")
 
 
+def test_require_utc_accepts_zoneinfo_utc():
+    """ZoneInfo("UTC") is semantically UTC even though it isn't `timezone.utc`."""
+    from zoneinfo import ZoneInfo
+    from shared.db import _require_utc
+    dt = datetime(2026, 5, 2, 12, 0, tzinfo=ZoneInfo("UTC"))
+    out = _require_utc(dt, "x")
+    assert out is dt
+
+
+def test_require_utc_accepts_zero_offset_timezone():
+    """Any tzinfo whose UTC offset is zero is accepted (timezone(timedelta(0)))."""
+    from datetime import timedelta as _td
+    from shared.db import _require_utc
+    dt = datetime(2026, 5, 2, 12, 0, tzinfo=timezone(_td(0)))
+    out = _require_utc(dt, "x")
+    assert out is dt
+
+
 async def test_query_bars_accepts_offset_iso_string():
     """The +00:00 offset string path passes _require_utc validation —
     it's only the naive-string path that's rejected. Hermetic: mocked pool."""

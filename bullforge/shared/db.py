@@ -60,7 +60,7 @@ def _require_utc(dt: datetime, name: str = "datetime") -> datetime:
     a naive datetime gets a loud failure instead of plausible-but-wrong
     results from asyncpg's session-default timezone semantics.
     """
-    if dt.tzinfo is None or dt.tzinfo != timezone.utc:
+    if dt.tzinfo is None or dt.utcoffset() != timedelta(0):
         raise ValueError(f"{name} must be UTC, got tzinfo={dt.tzinfo}")
     return dt
 

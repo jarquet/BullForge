@@ -35,6 +35,18 @@ def test_feature_row_rejects_empty_features():
         )
 
 
+def test_feature_row_accepts_zoneinfo_utc():
+    """ZoneInfo("UTC") has a zero UTC offset and must be accepted."""
+    from zoneinfo import ZoneInfo
+    row = FeatureRow(
+        symbol="SPY",
+        timestamp=datetime(2026, 4, 10, 15, 30, 0, tzinfo=ZoneInfo("UTC")),
+        timeframe="1m",
+        features={"sma_20": 420.5},
+    )
+    assert row.symbol == "SPY"
+
+
 def test_label_creation():
     label = Label(
         symbol="SPY",
@@ -85,3 +97,17 @@ def test_label_rejects_non_positive_horizon():
             forward_return=0.0025,
             direction=1,
         )
+
+
+def test_label_accepts_zoneinfo_utc():
+    """ZoneInfo("UTC") has a zero UTC offset and must be accepted."""
+    from zoneinfo import ZoneInfo
+    label = Label(
+        symbol="SPY",
+        timestamp=datetime(2026, 4, 10, 15, 30, 0, tzinfo=ZoneInfo("UTC")),
+        timeframe="1m",
+        horizon_minutes=30,
+        forward_return=0.0025,
+        direction=1,
+    )
+    assert label.symbol == "SPY"
