@@ -44,8 +44,8 @@ $PSQL -c "
 
 section "MODELS"
 $PSQL -c "
-  SELECT id, symbol, model_type, is_active, created_at
-  FROM model_registry ORDER BY created_at DESC LIMIT 10;
+  SELECT id, symbol, model_type, is_active, trained_at
+  FROM model_registry ORDER BY trained_at DESC LIMIT 10;
 " 2>/dev/null | column -t -s'|' || echo "  (no data)"
 
 section "PREDICTIONS"
