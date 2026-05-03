@@ -151,12 +151,30 @@ class BacktestResultsDB:
 
     async def update_fold_metrics(
         self, *, fold_id: int, metrics: dict,
+        rejected_orders_count: Optional[int] = None,
     ) -> None:
+        # `rejected_orders_count` defaults to None (not 0) so callers that
+        # only want to update `metrics_json` don't accidentally clobber the
+        # column to zero. Pass an int explicitly to write the column.
         async with self._db.pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE backtest_folds SET metrics_json = $1 WHERE id = $2",
-                json.dumps(metrics), fold_id,
-            )
+            if rejected_orders_count is None:
+                await conn.execute(
+                    """
+                    UPDATE backtest_folds
+                    SET metrics_json = $1
+                    WHERE id = $2
+                    """,
+                    json.dumps(metrics), fold_id,
+                )
+            else:
+                await conn.execute(
+                    """
+                    UPDATE backtest_folds
+                    SET metrics_json = $1, rejected_orders_count = $2
+                    WHERE id = $3
+                    """,
+                    json.dumps(metrics), int(rejected_orders_count), fold_id,
+                )
 
     async def finish_run(self, *, run_id: int, status: str) -> None:
         async with self._db.pool.acquire() as conn:
@@ -333,7 +351,7 @@ class BacktestResultsDB:
                 """
                 SELECT f.id, f.fold_index,
                        f.train_start, f.train_end, f.test_start, f.test_end,
-                       f.metrics_json,
+                       f.metrics_json, f.rejected_orders_count,
                        COALESCE(t.n_trades, 0)  AS n_trades,
                        COALESCE(t.total_pnl, 0) AS total_pnl,
                        COALESCE(e.max_dd, 0)    AS max_dd,
@@ -368,6 +386,7 @@ class BacktestResultsDB:
                 "train_end": r["train_end"],
                 "test_start": r["test_start"],
                 "test_end": r["test_end"],
+                "rejected_orders_count": int(r["rejected_orders_count"] or 0),
                 "metrics": {
                     "n_trades": r["n_trades"],
                     "total_pnl": float(r["total_pnl"]),

@@ -214,6 +214,14 @@ class BacktestEngine:
         # ts (PK is (run_id, fold_id, timestamp)).
         last_ts: Optional[datetime] = None
         last_account: Optional[dict] = None
+        # Per-fold count of signals dropped at the engine pre-gate because the
+        # next bar's volume cap was non-positive. Combined with
+        # `broker.rejected_count` (FillModel/no-next-bar rejections inside
+        # SimulatedBroker.submit_market_order) for the persisted total. We do
+        # NOT count risk-manager rejections or sub-$1-notional cap-too-tight
+        # cases — those are operator-tuning artifacts, not the
+        # volume-cap-silently-killed-the-run signal this metric exists to flag.
+        engine_rejected_count = 0
         for i, (ts, symbol, bar) in enumerate(all_bars):
             if check_cancelled is not None and i % 100 == 0 and await check_cancelled():
                 raise BacktestCancelled()
@@ -254,6 +262,7 @@ class BacktestEngine:
                 )
                 cap = float(nxt["volume"]) * cap_pct
                 if cap <= 0:
+                    engine_rejected_count += 1
                     last_account = await broker.get_account()
                     last_ts = ts
                     continue
@@ -291,6 +300,10 @@ class BacktestEngine:
 
         rets = equity.returns()
         equity_curve = [pt.equity for pt in equity.points()]
+        rejected_orders_count = engine_rejected_count + broker.rejected_count
+        # The rejection count lives ONLY on the dedicated
+        # `backtest_folds.rejected_orders_count` column (passed via the kwarg
+        # below). Deliberately not duplicated into `metrics_json`.
         metrics = {
             "sharpe": sharpe_ratio(rets, periods_per_year=cfg.periods_per_year),
             "sortino": sortino_ratio(rets, periods_per_year=cfg.periods_per_year),
@@ -302,7 +315,10 @@ class BacktestEngine:
             ),
             **{f"trade_{k}": v for k, v in summarize_trades(completed_trades).items()},
         }
-        await self._results.update_fold_metrics(fold_id=fold_id, metrics=metrics)
+        await self._results.update_fold_metrics(
+            fold_id=fold_id, metrics=metrics,
+            rejected_orders_count=rejected_orders_count,
+        )
 
     async def _record_trade(
         self, symbol, order, signal, ts,

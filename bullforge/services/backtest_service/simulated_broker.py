@@ -25,6 +25,10 @@ class SimulatedBroker:
         self._orders: dict[str, dict] = {}
         self._next_bars: dict[str, dict] = {}
         self._clock: Optional[datetime] = None
+        # Cumulative count of orders that ended up in `rejected` status.
+        # Read by BacktestEngine to surface the per-fold rejected metric on
+        # backtest_folds.rejected_orders_count.
+        self.rejected_count: int = 0
 
     def set_clock(self, ts: datetime) -> None:
         if ts.tzinfo is None or ts.utcoffset() != timedelta(0):
@@ -75,6 +79,7 @@ class SimulatedBroker:
             self._orders[order_id] = self._snapshot(
                 order_id, symbol, side, qty, "rejected", None, None,
             )
+            self.rejected_count += 1
             return order_id
 
         result = self._fill_model.fill(
@@ -84,6 +89,7 @@ class SimulatedBroker:
             self._orders[order_id] = self._snapshot(
                 order_id, symbol, side, qty, "rejected", None, None,
             )
+            self.rejected_count += 1
             return order_id
 
         self._apply_fill(symbol, side, result.qty, result.price)

@@ -153,7 +153,8 @@ async def test_folds_route(aiohttp_client, app):
         {"id": 1, "fold_index": 0,
          "train_start": None, "train_end": None,
          "test_start": None, "test_end": None,
-         "metrics_json": None},
+         "metrics_json": None,
+         "rejected_orders_count": 0},
     ])
     client = await aiohttp_client(app)
     resp = await client.get("/api/backtests/1/folds")
@@ -163,6 +164,7 @@ async def test_folds_route(aiohttp_client, app):
     # New shape: metrics are embedded directly in each row
     assert "pnl" in data[0]
     assert "sharpe" in data[0]
+    assert data[0]["rejected_orders_count"] == 0
 
 
 @pytest.mark.asyncio
@@ -426,7 +428,8 @@ async def test_folds_endpoint_embeds_metrics(aiohttp_client, backtests_app):
         {"id": 1, "fold_index": 0,
          "train_start": None, "train_end": None,
          "test_start": None, "test_end": None,
-         "metrics_json": '{"pnl": 500.0, "sharpe": 1.1, "max_drawdown": -0.05, "trades": 10, "hit_rate": 0.6}'},
+         "metrics_json": '{"pnl": 500.0, "sharpe": 1.1, "max_drawdown": -0.05, "trades": 10, "hit_rate": 0.6}',
+         "rejected_orders_count": 3},
     ])
     client = await aiohttp_client(backtests_app)
     resp = await client.get("/api/backtests/1/folds")
@@ -434,8 +437,10 @@ async def test_folds_endpoint_embeds_metrics(aiohttp_client, backtests_app):
     body = await resp.json()
     # Each fold row has extracted metrics.
     for row in body:
-        for key in ("pnl", "sharpe", "max_drawdown", "trades", "hit_rate"):
+        for key in ("pnl", "sharpe", "max_drawdown", "trades", "hit_rate",
+                    "rejected_orders_count"):
             assert key in row
+    assert body[0]["rejected_orders_count"] == 3
 
 
 @pytest.mark.asyncio
