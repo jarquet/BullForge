@@ -6,8 +6,22 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from services.model_service.inference import InferenceEngine, _parse_meta_artifact
+from services.model_service.inference import (
+    InferenceEngine,
+    _parse_meta_artifact,
+    META_INFERENCES_KEY_PREFIX,
+    META_PUBLISHER_FINITE_DROPS_KEY_PREFIX,
+)
 from shared.models import ModelMetadata
+
+
+def _make_redis_with_counter():
+    """Build a mock RedisClient whose .client.incr/.expire are AsyncMocks."""
+    redis_client = MagicMock()
+    redis_client.client = MagicMock()
+    redis_client.client.incr = AsyncMock(return_value=1)
+    redis_client.client.expire = AsyncMock(return_value=True)
+    return redis_client
 
 
 def test_parse_meta_artifact_simple_estimator():
@@ -325,3 +339,140 @@ async def test_predict_meta_skips_when_atr_zero():
         timestamp=datetime.now(timezone.utc),
     )
     assert out == ([], {})
+
+
+@pytest.mark.asyncio
+async def test_predict_meta_increments_inference_counter_each_call():
+    """Each non-trivial predict_meta call (i.e., past the no-meta-models guard)
+    increments the inference counter once. The counter is the denominator
+    for the dashboard's 'Meta shadow health' tile."""
+    db = AsyncMock()
+    db.query_all_active_models.return_value = [
+        _md(11, "meta_entry", "lightgbm", dir_label="long"),
+        _md(12, "meta_exec", "lightgbm", dir_label="long"),
+    ]
+    db.query_prediction_outcomes_for_slot.return_value = []
+
+    fake_entry = MagicMock()
+    fake_entry.predict_proba = MagicMock(return_value=np.array([[0.4, 0.6]]))
+    fake_exec = MagicMock()
+    fake_exec.predict = MagicMock(
+        return_value=(np.array([0.07]), np.array([1])))
+
+    def _load(path):
+        return fake_entry if "11" in path else fake_exec
+    store = MagicMock(); store.load.side_effect = _load
+
+    redis_client = _make_redis_with_counter()
+    eng = InferenceEngine(db=db, model_store=store, redis_client=redis_client)
+    await eng.load_meta_models()
+
+    await eng.predict_meta(
+        symbol="AAPL", timeframe="1m",
+        base_predictions=[{"model_id": 1, "direction": 1, "confidence": 0.7}],
+        regime={"spy_trend_1m": 0.0, "spy_trend_1h": 0.0, "spy_trend_1d": 0.0,
+                "spy_momentum": 0.0, "vol_regime": 1.0},
+        symbol_state={"realized_vol": 0.02, "atr_price_ratio": 0.005,
+                       "dist_sma_50": 0.0, "dist_sma_200bar": 0.0,
+                       "dist_sma_200day": 0.0},
+        timestamp=datetime.now(timezone.utc),
+    )
+    # Exactly one inference counter increment (no drops on this call → no
+    # drop counter increment).
+    inference_calls = [
+        c for c in redis_client.client.incr.await_args_list
+        if c.args[0].startswith(META_INFERENCES_KEY_PREFIX)
+    ]
+    drop_calls = [
+        c for c in redis_client.client.incr.await_args_list
+        if c.args[0].startswith(META_PUBLISHER_FINITE_DROPS_KEY_PREFIX)
+    ]
+    assert len(inference_calls) == 1
+    assert len(drop_calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_predict_meta_increments_drop_counter_when_non_finite():
+    """When predict_meta filters non-finite features it logs once and must
+    increment the publisher-side drop counter once (not once per dropped
+    key) — pairs with the inference counter to compute drop rate."""
+    db = AsyncMock()
+    db.query_all_active_models.return_value = [
+        _md(11, "meta_entry", "lightgbm", dir_label="long"),
+        _md(12, "meta_exec", "lightgbm", dir_label="long"),
+    ]
+    db.query_prediction_outcomes_for_slot.return_value = []
+
+    fake_entry = MagicMock()
+    fake_entry.predict_proba = MagicMock(return_value=np.array([[0.4, 0.6]]))
+    fake_exec = MagicMock()
+    fake_exec.predict = MagicMock(
+        return_value=(np.array([0.07]), np.array([1])))
+
+    def _load(path):
+        return fake_entry if "11" in path else fake_exec
+    store = MagicMock(); store.load.side_effect = _load
+
+    redis_client = _make_redis_with_counter()
+    eng = InferenceEngine(db=db, model_store=store, redis_client=redis_client)
+    await eng.load_meta_models()
+
+    await eng.predict_meta(
+        symbol="AAPL", timeframe="1m",
+        base_predictions=[{"model_id": 1, "direction": 1, "confidence": 0.7}],
+        regime={"spy_trend_1m": float("nan"), "spy_trend_1h": 0.0,
+                "spy_trend_1d": 0.0, "spy_momentum": 0.0, "vol_regime": 1.0},
+        symbol_state={"realized_vol": float("inf"), "atr_price_ratio": 0.005,
+                       "dist_sma_50": float("-inf"),
+                       "dist_sma_200bar": 0.0, "dist_sma_200day": 0.0},
+        timestamp=datetime.now(timezone.utc),
+    )
+    inference_calls = [
+        c for c in redis_client.client.incr.await_args_list
+        if c.args[0].startswith(META_INFERENCES_KEY_PREFIX)
+    ]
+    drop_calls = [
+        c for c in redis_client.client.incr.await_args_list
+        if c.args[0].startswith(META_PUBLISHER_FINITE_DROPS_KEY_PREFIX)
+    ]
+    assert len(inference_calls) == 1
+    # Exactly one drop-counter increment per call-with-drops, regardless of
+    # how many keys were dropped (3 in this case: regime + 2 sym keys).
+    assert len(drop_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_predict_meta_redis_none_does_not_crash():
+    """Backtest path constructs InferenceEngine without a redis_client (so
+    fold-local inferences don't pollute the live counters). The code path
+    must be a no-op for counters, not a crash."""
+    db = AsyncMock()
+    db.query_all_active_models.return_value = [
+        _md(11, "meta_entry", "lightgbm", dir_label="long"),
+        _md(12, "meta_exec", "lightgbm", dir_label="long"),
+    ]
+    db.query_prediction_outcomes_for_slot.return_value = []
+
+    fake_entry = MagicMock()
+    fake_entry.predict_proba = MagicMock(return_value=np.array([[0.4, 0.6]]))
+    fake_exec = MagicMock()
+    fake_exec.predict = MagicMock(
+        return_value=(np.array([0.07]), np.array([1])))
+
+    def _load(path):
+        return fake_entry if "11" in path else fake_exec
+    store = MagicMock(); store.load.side_effect = _load
+
+    eng = InferenceEngine(db=db, model_store=store, redis_client=None)
+    await eng.load_meta_models()
+    out = await eng.predict_meta(
+        symbol="AAPL", timeframe="1m",
+        base_predictions=[{"model_id": 1, "direction": 1, "confidence": 0.7}],
+        regime={"spy_trend_1m": 0.0, "spy_trend_1h": 0.0, "spy_trend_1d": 0.0,
+                "spy_momentum": 0.0, "vol_regime": 1.0},
+        symbol_state={"realized_vol": 0.02, "atr_price_ratio": 0.005,
+                       "dist_sma_50": 0.0, "dist_sma_200bar": 0.0,
+                       "dist_sma_200day": 0.0},
+        timestamp=datetime.now(timezone.utc),
+    )
+    assert len(out[0]) == 1

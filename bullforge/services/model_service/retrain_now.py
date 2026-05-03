@@ -35,7 +35,12 @@ async def main() -> None:
     await redis_client.connect()
 
     model_store = ModelStore(settings.model_artifacts_dir)
-    inference_engine = InferenceEngine(db=db, model_store=model_store)
+    # retrain_now does not run inference; pass None to avoid contaminating
+    # live counters in case predict_meta is ever wired in here. The redis_client
+    # above is still needed for runtime_config + scheduler pubsub publishes.
+    inference_engine = InferenceEngine(
+        db=db, model_store=model_store, redis_client=None,
+    )
     runtime_config = RuntimeConfig(redis_client)
 
     horizons_by_tf = {

@@ -350,6 +350,68 @@
       select.onchange = load;
       await load();
     },
+    meta_health: async function () {
+      // Sliding-window health tile for the meta-shadow path. Surfaces the
+      // skip rate (writer-side) + drop rate (publisher-side) over the last
+      // 15 minutes of inferences. Tile turns red when the combined rate
+      // exceeds 1% — a publisher-vs-writer regression that would otherwise
+      // only be visible by row-count comparison between meta_signals_shadow
+      // and meta_features.
+      panel().innerHTML =
+        '<div class="meta-health-panel">' +
+        '<p class="subtitle">Sliding 15-minute window of meta-shadow ' +
+        'pipeline counters. Skips = writer dropped an empty feature_vector. ' +
+        'Drops = publisher filtered non-finite features. Tile turns red ' +
+        'when (skips + drops) / inferences exceeds 1%.</p>' +
+        '<div id="meta-health-tile" class="health-tile">' +
+        '<div class="health-tile-status">Loading…</div>' +
+        '</div>' +
+        '</div>';
+
+      var data = await fetchJSON('/api/models/meta_shadow_health');
+      var tile = $('meta-health-tile');
+      // redis_ok=false means we either had no redis_client wired or mget
+      // raised. Either way the count fields are meaningless zeros — render
+      // a distinct grey "Redis unavailable" state with em-dashes instead of
+      // numbers so the operator can't mistake it for a healthy zero baseline.
+      var redisOk = data.redis_ok !== false;  // default true for older payloads
+      var ratePct = redisOk
+        ? (data.skip_plus_drop_rate * 100).toFixed(2) + '%'
+        : '—';
+      var statusLabel = !redisOk
+        ? 'REDIS UNAVAILABLE'
+        : (data.is_red ? 'UNHEALTHY' : 'OK');
+      // Inline styles keep the tile self-contained so adding it doesn't
+      // require a CSS update; the .health-tile-red / .health-tile-unavailable
+      // classes are also applied for any future stylesheet that wants to override.
+      var bg = !redisOk ? '#555' : (data.is_red ? '#8b0000' : '#1f4d2b');
+      var fg = '#fff';
+      var extraClass = !redisOk
+        ? ' health-tile-unavailable'
+        : (data.is_red ? ' health-tile-red' : '');
+      tile.className = 'health-tile' + extraClass;
+      tile.style.background = bg;
+      tile.style.color = fg;
+      tile.style.padding = '1.25rem';
+      tile.style.borderRadius = '6px';
+      tile.style.maxWidth = '480px';
+      var fmtCount = function (v) { return redisOk ? String(v) : '—'; };
+      tile.innerHTML =
+        '<div style="font-size:0.85rem;letter-spacing:0.08em;opacity:0.8;">' +
+        'META SHADOW HEALTH (' + data.window_minutes + 'm)</div>' +
+        '<div style="font-size:1.6rem;margin:0.25rem 0;font-weight:600;">' +
+        statusLabel + ' · ' + ratePct + '</div>' +
+        '<table style="width:100%;margin-top:0.75rem;font-size:0.95rem;">' +
+        '<tr><td>Inferences</td><td style="text-align:right;">' +
+        fmtCount(data.inference_count) + '</td></tr>' +
+        '<tr><td>Publisher drops</td><td style="text-align:right;">' +
+        fmtCount(data.drop_count) + '</td></tr>' +
+        '<tr><td>Writer skips</td><td style="text-align:right;">' +
+        fmtCount(data.skip_count) + '</td></tr>' +
+        '<tr><td>Threshold</td><td style="text-align:right;">' +
+        (data.threshold * 100).toFixed(1) + '%</td></tr>' +
+        '</table>';
+    },
   };
 
   async function renderDrillDown(modelId) {

@@ -35,3 +35,15 @@ All channels flow through the shared `RedisClient` in [bullforge/shared/redis.py
 | `position_closed` | `ReconcilerCore._handle_fill` | Delivered | `{type, tier: 0, trade_id, symbol, side, quantity, entry_time, entry_price, exit_time, exit_price, pnl, pnl_pct, hold_duration_seconds, account: {equity, last_equity, day_pnl, day_pnl_pct, day_trades, day_wins, day_losses, day_win_rate, day_realized_pnl}}` |
 
 Suppression is configured at the bot level: `TELEGRAM_SUPPRESSED_ALERT_TYPES` in [bullforge/services/monitoring_service/telegram_bot.py](../../bullforge/services/monitoring_service/telegram_bot.py). Suppressed alerts still flow on Redis for other consumers.
+
+## Counter keys
+
+Sliding-window observability counters that don't go through pub/sub. Each writer `INCR`s a per-minute bucket key and sets a 30-minute `EXPIRE` on it; the dashboard sums the most recent 15 buckets.
+
+| Key prefix | Bucket suffix | Producer | Consumer | Purpose |
+|---|---|---|---|---|
+| `bullforge:metrics:meta_inferences` | `:<int(time.time() // 60)>` | `services/model_service/inference.py::predict_meta` | `services/dashboard_service/models_api.py::_handle_meta_shadow_health` | Denominator for the meta-shadow health tile — count of `predict_meta` invocations past the no-meta-models guard. |
+| `bullforge:metrics:meta_publisher_finite_drops` | `:<int(time.time() // 60)>` | `services/model_service/inference.py::predict_meta` (one per call with non-finite features) | same as above | Numerator term: publisher dropped non-finite feature(s) before publishing `model:meta_signals`. |
+| `bullforge:metrics:meta_shadow_skips` | `:<int(time.time() // 60)>` | `services/execution_service/meta_shadow_writer.py` (one per (signal, direction) pair where `feature_vector` is empty) | same as above | Numerator term: writer skipped a `meta_features` insert because the published vector was empty. |
+
+Tile turns red when `(skips + drops) / inferences > 0.01` over the 15m window. Backtest engines construct `InferenceEngine` without a redis_client so per-fold inference does not pollute the live counters.
