@@ -23,7 +23,8 @@ _META_INFERENCES_PREFIX = "bullforge:metrics:meta_inferences"
 _META_PUBLISHER_FINITE_DROPS_PREFIX = "bullforge:metrics:meta_publisher_finite_drops"
 _META_SHADOW_SKIPS_PREFIX = "bullforge:metrics:meta_shadow_skips"
 _HEALTH_WINDOW_MINUTES = 15
-_HEALTH_RED_THRESHOLD = 0.01  # >1% combined skip+drop rate flips the tile red.
+# Red-threshold (combined skip+drop rate above which the tile flips red) is
+# tunable at runtime via `meta_shadow_red_threshold` in `bullforge:config`.
 
 
 def register_models_routes(app: web.Application) -> None:
@@ -51,6 +52,11 @@ async def _handle_meta_shadow_health(request: web.Request) -> web.Response:
     enforcement of a hard SLO.
     """
     redis_client = request.app.get("redis_client")
+    # Read the red-threshold up front so all three response paths
+    # (early-return, mget-failure, success) surface the current effective
+    # value to the SPA.
+    runtime_config = request.app["runtime_config"]
+    red_threshold = await runtime_config.get("meta_shadow_red_threshold")
     now_min = int(time.time() // 60)
     bucket_keys = [now_min - i for i in range(_HEALTH_WINDOW_MINUTES)]
 
@@ -67,7 +73,7 @@ async def _handle_meta_shadow_health(request: web.Request) -> web.Response:
             "window_minutes": _HEALTH_WINDOW_MINUTES,
             "skip_count": 0, "drop_count": 0, "inference_count": 0,
             "skip_plus_drop_rate": 0.0,
-            "threshold": _HEALTH_RED_THRESHOLD,
+            "threshold": red_threshold,
             "is_red": False,
             "redis_ok": False,
         }
@@ -89,7 +95,7 @@ async def _handle_meta_shadow_health(request: web.Request) -> web.Response:
             "window_minutes": _HEALTH_WINDOW_MINUTES,
             "skip_count": 0, "drop_count": 0, "inference_count": 0,
             "skip_plus_drop_rate": 0.0,
-            "threshold": _HEALTH_RED_THRESHOLD,
+            "threshold": red_threshold,
             "is_red": False,
             "redis_ok": False,
         })
@@ -120,8 +126,8 @@ async def _handle_meta_shadow_health(request: web.Request) -> web.Response:
         "drop_count": drop_count,
         "inference_count": inference_count,
         "skip_plus_drop_rate": rate,
-        "threshold": _HEALTH_RED_THRESHOLD,
-        "is_red": rate > _HEALTH_RED_THRESHOLD,
+        "threshold": red_threshold,
+        "is_red": rate > red_threshold,
         "redis_ok": True,
     })
 

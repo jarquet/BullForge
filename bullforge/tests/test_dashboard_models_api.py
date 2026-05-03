@@ -176,6 +176,13 @@ def _make_redis_with_buckets(skips, drops, inferences):
 def models_app_with_redis(mock_db_models):
     app = web.Application()
     app["db"] = mock_db_models
+    # The meta_shadow_health handler reads the red-threshold from
+    # runtime_config; default to the schema value (0.01) so existing tests
+    # exercise the same boundary they were written against. Tests that need
+    # a tuned threshold can overwrite app["runtime_config"] in-place.
+    runtime_config = MagicMock()
+    runtime_config.get = AsyncMock(return_value=0.01)
+    app["runtime_config"] = runtime_config
     register_models_routes(app)
     return app
 
@@ -343,3 +350,83 @@ async def test_meta_shadow_health_mget_raises_returns_redis_ok_false(
         "meta_shadow_health" in r.message and "redis" in r.message.lower()
         for r in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_meta_shadow_health_default_threshold(
+    aiohttp_client, models_app_with_redis,
+):
+    """With the schema default (0.01) wired through runtime_config, the
+    boundary semantics match the legacy hardcoded constant: rate exactly at
+    the threshold is NOT red (strict-> comparison), rate above flips red.
+    """
+    # Case 1: rate == threshold (1/100 = 0.01). Boundary case, NOT red.
+    redis = _make_redis_with_buckets(
+        skips=["1"] + [None] * 14,
+        drops=[None] * 15,
+        inferences=["100"] + [None] * 14,
+    )
+    models_app_with_redis["redis_client"] = redis
+    # runtime_config.get already returns 0.01 from the fixture default.
+    client = await aiohttp_client(models_app_with_redis)
+    resp = await client.get("/api/models/meta_shadow_health")
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["threshold"] == 0.01
+    assert body["skip_plus_drop_rate"] == pytest.approx(0.01)
+    assert body["is_red"] is False
+
+    # Case 2: rate just above (2/100 = 0.02). Above threshold => red.
+    redis2 = _make_redis_with_buckets(
+        skips=["2"] + [None] * 14,
+        drops=[None] * 15,
+        inferences=["100"] + [None] * 14,
+    )
+    models_app_with_redis["redis_client"] = redis2
+    resp2 = await client.get("/api/models/meta_shadow_health")
+    body2 = await resp2.json()
+    assert body2["threshold"] == 0.01
+    assert body2["skip_plus_drop_rate"] == pytest.approx(0.02)
+    assert body2["is_red"] is True
+
+
+@pytest.mark.asyncio
+async def test_meta_shadow_health_operator_tuned_threshold(
+    aiohttp_client, models_app_with_redis,
+):
+    """When an operator raises the red threshold via runtime_config, the
+    handler must (a) surface the new value as `threshold` in the response and
+    (b) compute `is_red` against it — proving no hardcoded 0.01 remains.
+    """
+    # Operator-tuned threshold: 5%.
+    runtime_config = MagicMock()
+    runtime_config.get = AsyncMock(return_value=0.05)
+    models_app_with_redis["runtime_config"] = runtime_config
+
+    # Case 1: rate 0.02 — was red under the default 0.01, now NOT red at 0.05.
+    redis = _make_redis_with_buckets(
+        skips=["2"] + [None] * 14,
+        drops=[None] * 15,
+        inferences=["100"] + [None] * 14,
+    )
+    models_app_with_redis["redis_client"] = redis
+    client = await aiohttp_client(models_app_with_redis)
+    resp = await client.get("/api/models/meta_shadow_health")
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["threshold"] == 0.05
+    assert body["skip_plus_drop_rate"] == pytest.approx(0.02)
+    assert body["is_red"] is False
+
+    # Case 2: rate 0.06 — above the tuned 5% threshold, flips red.
+    redis2 = _make_redis_with_buckets(
+        skips=["6"] + [None] * 14,
+        drops=[None] * 15,
+        inferences=["100"] + [None] * 14,
+    )
+    models_app_with_redis["redis_client"] = redis2
+    resp2 = await client.get("/api/models/meta_shadow_health")
+    body2 = await resp2.json()
+    assert body2["threshold"] == 0.05
+    assert body2["skip_plus_drop_rate"] == pytest.approx(0.06)
+    assert body2["is_red"] is True
