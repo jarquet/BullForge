@@ -317,3 +317,64 @@ async def test_load_models_preserves_state_when_db_query_fails(
     assert len(engine._models) == 2, (
         "Previous models must survive a failed reload — last-known-good"
     )
+
+
+@pytest.mark.asyncio
+async def test_load_meta_models_skips_corrupt_artifact_keeps_good_models(
+    tmp_path, caplog,
+):
+    """Mirror the load_models corrupt-artifact fix on the meta-load path.
+    load_meta_models already builds a fresh dict locally and assigns at
+    the end (atomic-swap), but the inner except still only catches
+    FileNotFoundError — so a corrupt meta pickle would propagate, abort
+    the loop, and leave _meta_models with whatever partial state had
+    been built so far. Same defect, smaller blast radius (meta is
+    shadow-only), still worth closing."""
+    import dataclasses
+    import joblib
+
+    from services.model_service.model_store import ModelStore
+
+    good_path = (
+        tmp_path / "meta_entry_long_lightgbm_SPY_1m_0m_20260504T010000Z.joblib"
+    )
+    joblib.dump({"dummy": "good entry"}, good_path)
+    bad_path = (
+        tmp_path / "meta_exec_long_lightgbm_SPY_1m_0m_20260504T010000Z.joblib"
+    )
+    bad_path.write_bytes(b"\x00\x01not a valid meta pickle stream\x00")
+
+    base_entry = ModelMetadata(
+        id=1, symbol="SPY", timeframe="1m", horizon_minutes=0,
+        model_type="meta_entry", artifact_path=str(good_path),
+        metrics={}, feature_columns=["base_1_dir"],
+        trained_at=datetime(2026, 5, 4, 1, 0, 0, tzinfo=timezone.utc),
+        train_samples=800, test_samples=200, estimator_type="lightgbm",
+    )
+    bad_exec = dataclasses.replace(
+        base_entry, id=2, model_type="meta_exec",
+        artifact_path=str(bad_path),
+    )
+
+    mock_db = AsyncMock()
+    mock_db.query_all_active_models = AsyncMock(return_value=[base_entry, bad_exec])
+
+    store = ModelStore(str(tmp_path))
+    engine = InferenceEngine(db=mock_db, model_store=store)
+
+    with caplog.at_level("ERROR"):
+        await engine.load_meta_models()
+
+    assert ("SPY", 1, "lightgbm") in engine._meta_models, (
+        "Good meta_entry must populate the slot keyed by "
+        "(symbol, direction, estimator)"
+    )
+    slot = engine._meta_models[("SPY", 1, "lightgbm")]
+    assert slot["entry"] is not None, "Good meta_entry must have loaded"
+    assert slot["exec"] is None, (
+        "Corrupt meta_exec must have been skipped, not propagated"
+    )
+    assert any(
+        "Failed to load meta artifact" in rec.message
+        for rec in caplog.records
+    ), "Bad meta artifact should produce an ERROR-level log"
