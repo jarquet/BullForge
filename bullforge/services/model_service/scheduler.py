@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -110,7 +111,16 @@ class RetrainScheduler:
         results: list[dict] = []
 
         loop = asyncio.get_running_loop()
-        with ProcessPoolExecutor(max_workers=workers) as pool:
+        # Spawn (not fork) so workers don't inherit the parent's torch /
+        # lightgbm / sklearn / UCX state — fork from a multi-threaded
+        # interpreter is the documented OpenMP-segfault setup, and was
+        # the root cause of the 2026-05-04 retrain incident. Manual
+        # retrain_now survived because that path runs in a fresh
+        # interpreter; the nightly cycle does not have that luxury.
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            mp_context=multiprocessing.get_context("spawn"),
+        ) as pool:
             futures = []
             for symbol, tf, h, mt in cpu_jobs:
                 fut = pool.submit(

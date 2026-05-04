@@ -117,3 +117,62 @@ async def test_run_once_handles_worker_error():
     assert any(r["status"] == "error" for r in summary["results"])
     inference_engine.load_models.assert_awaited_once()
     inference_engine.load_meta_models.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_once_uses_spawn_context_for_process_pool():
+    """Regression for 2026-05-04 incident: forking from model_service
+    (which has imported torch / lightgbm / sklearn / UCX in the parent)
+    is the textbook OpenMP-segfault setup. Spawn workers start from a
+    clean interpreter. Pin the constructor argument so a future refactor
+    can't quietly drop it."""
+    import multiprocessing
+
+    runtime_config = AsyncMock()
+    runtime_config.get = AsyncMock(return_value=1)
+    runtime_config.get_all = AsyncMock(return_value={
+        "retrain_cpu_workers": 1, "lstm_epochs": 1, "lstm_hidden_size": 8,
+        "lstm_sequence_length": 5, "lstm_learning_rate": 0.01,
+        "lstm_batch_size": 16,
+    })
+    runtime_config.set = AsyncMock()
+    inference_engine = AsyncMock()
+    redis_client = AsyncMock()
+
+    sched = RetrainScheduler(
+        db_dsn="postgres://fake", artifacts_dir="/tmp",
+        runtime_config=runtime_config,
+        inference_engine=inference_engine, redis_client=redis_client,
+        symbols=["SPY"], timeframes=["1m"], horizons_by_tf={"1m": [5]},
+        min_samples=10,
+    )
+
+    with patch("services.model_service.scheduler.ProcessPoolExecutor") as pool_cls:
+        pool_instance = MagicMock()
+        pool_cls.return_value.__enter__.return_value = pool_instance
+        future = MagicMock()
+        future.result.return_value = {
+            "symbol": "SPY", "timeframe": "1m", "horizon": 5,
+            "model_type": "gradient_boost", "status": "ok", "model_id": 1,
+        }
+        pool_instance.submit.return_value = future
+
+        with patch.object(sched, "_train_lstm_in_process", new=AsyncMock(
+            return_value={"status": "ok", "symbol": "SPY", "timeframe": "1m",
+                          "horizon": 5, "model_type": "lstm"},
+        )):
+            await sched.run_once()
+
+    assert pool_cls.call_count == 1, (
+        "ProcessPoolExecutor must be invoked exactly once per cycle"
+    )
+    kwargs = pool_cls.call_args.kwargs
+    assert "mp_context" in kwargs, (
+        "ProcessPoolExecutor must be constructed with mp_context= "
+        "to avoid the default fork start method on Linux. See "
+        "docs/superpowers/specs/2026-05-04-model-service-retrain-resilience-design.md"
+    )
+    assert kwargs["mp_context"].get_start_method() == "spawn", (
+        f"Expected spawn start method, got "
+        f"{kwargs['mp_context'].get_start_method()!r}"
+    )

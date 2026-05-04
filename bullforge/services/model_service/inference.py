@@ -136,7 +136,14 @@ class InferenceEngine:
 
     async def load_models(self) -> None:
         active_models = await self._db.query_all_active_models(scope=self._scope)
-        self._models.clear()
+        # Atomic swap: build a fresh dict, assign to self._models only
+        # after the loop. Mirrors load_meta_models below. Without this,
+        # any exception propagating out of the loop (corrupt pickle,
+        # torch.load on bad .pt, etc.) would leave self._models empty —
+        # the 2026-05-04 incident.
+        new: Dict[
+            Tuple[str, str, int, str], Tuple[object, ModelMetadata]
+        ] = {}
 
         for meta in active_models:
             # Meta artifacts (meta_entry / meta_exec) belong to _meta_models,
@@ -149,20 +156,36 @@ class InferenceEngine:
                 continue
             try:
                 model = self._model_store.load(meta.artifact_path)
-                key = (meta.symbol, meta.timeframe, meta.horizon_minutes,
-                       meta.model_type)
-                self._models[key] = (model, meta)
-                logger.info(
-                    "Loaded model: %s %s %dm (%s, id=%d)",
-                    meta.symbol, meta.timeframe, meta.horizon_minutes,
-                    meta.model_type, meta.id,
-                )
             except FileNotFoundError:
                 logger.warning(
                     "Artifact not found for model id=%d: %s",
                     meta.id, meta.artifact_path,
                 )
+                continue
+            except Exception:
+                # Corrupt / truncated / version-skew artifact. Skipping
+                # one is always correct — the alternative (propagating)
+                # clears every other model with it, which is the
+                # 2026-05-04 incident. logger.exception captures the
+                # traceback so operators can identify the bad file.
+                logger.exception(
+                    "Failed to load artifact for model id=%d (%s); skipping",
+                    meta.id, meta.artifact_path,
+                )
+                continue
 
+            key = (
+                meta.symbol, meta.timeframe, meta.horizon_minutes,
+                meta.model_type,
+            )
+            new[key] = (model, meta)
+            logger.info(
+                "Loaded model: %s %s %dm (%s, id=%d)",
+                meta.symbol, meta.timeframe, meta.horizon_minutes,
+                meta.model_type, meta.id,
+            )
+
+        self._models = new
         logger.info("Loaded %d models for inference", len(self._models))
 
     async def predict(
