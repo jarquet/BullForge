@@ -261,6 +261,18 @@ class InferenceEngine:
                 model = self._model_store.load(m.artifact_path)
             except FileNotFoundError:
                 continue
+            except Exception:
+                # Mirrors the broaden-except in load_models — a corrupt
+                # / truncated / version-skew meta artifact must not
+                # propagate and break the whole meta load. Same defect
+                # as Bug #1 in the 2026-05-04 retrain incident, smaller
+                # blast radius (meta is shadow-only and never gates
+                # execution), but still worth closing.
+                logger.exception(
+                    "Failed to load meta artifact for model id=%d (%s); skipping",
+                    m.id, m.artifact_path,
+                )
+                continue
             slot[kind] = (model, m)
             loaded_count += 1
         self._meta_models = new
