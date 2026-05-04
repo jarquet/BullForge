@@ -241,3 +241,79 @@ async def test_inference_engine_live_load_queries_without_scope():
     await engine.load_models()
 
     db.query_all_active_models.assert_awaited_once_with(scope=None)
+
+
+@pytest.mark.asyncio
+async def test_load_models_skips_corrupt_artifact_keeps_good_models(
+    tmp_path, caplog,
+):
+    """Regression for 2026-05-04 incident: a corrupt pickle on disk
+    raises EOFError / UnpicklingError, not FileNotFoundError. The old
+    load_models cleared self._models BEFORE the load loop and only
+    caught FileNotFoundError, so a single corrupt artifact wiped the
+    entire inference dict. The fix: build a new dict locally, broaden
+    the except to log+skip the bad row, swap atomically at the end."""
+    import dataclasses
+    import joblib
+
+    from services.model_service.model_store import ModelStore
+
+    good_path = tmp_path / "gradient_boost_SPY_1m_5m_20260504T010000Z.joblib"
+    # The model object only needs to be pickleable; this test never
+    # calls .predict() on it. A plain dict round-trips cleanly through
+    # joblib whereas MagicMock does not.
+    joblib.dump({"dummy": "good model"}, good_path)
+
+    bad_path = tmp_path / "gradient_boost_SPY_1m_10m_20260504T010000Z.joblib"
+    bad_path.write_bytes(b"\x00\x01not a valid pickle stream\x00")
+
+    base = _make_model_metadata("SPY", 5)
+    good_meta = dataclasses.replace(base, artifact_path=str(good_path))
+    bad_meta = dataclasses.replace(
+        base, id=2, horizon_minutes=10, artifact_path=str(bad_path),
+    )
+
+    mock_db = AsyncMock()
+    mock_db.query_all_active_models = AsyncMock(return_value=[good_meta, bad_meta])
+
+    store = ModelStore(str(tmp_path))
+    engine = InferenceEngine(db=mock_db, model_store=store)
+
+    with caplog.at_level("ERROR"):
+        await engine.load_models()
+
+    assert len(engine._models) == 1, (
+        "Corrupt artifact must not poison the load — only the bad row "
+        "is skipped, the good model remains in the inference dict."
+    )
+    assert ("SPY", "1m", 5, "gradient_boost") in engine._models
+    assert any(
+        "Failed to load artifact" in rec.message
+        for rec in caplog.records
+    ), "Bad artifact should produce an ERROR-level log"
+
+
+@pytest.mark.asyncio
+async def test_load_models_preserves_state_when_db_query_fails(
+    mock_db, mock_model_store,
+):
+    """If load_models raises midway through (e.g., DB outage between
+    reading active_models and assigning the new dict), the previous
+    in-memory model set must remain intact. The old code cleared
+    self._models BEFORE awaiting the DB, so any propagated exception
+    left the engine modelless. The atomic-swap rewrite removes that
+    foot-gun."""
+    engine = InferenceEngine(db=mock_db, model_store=mock_model_store)
+    await engine.load_models()
+    assert len(engine._models) == 2, "Precondition: initial load succeeded"
+
+    mock_db.query_all_active_models = AsyncMock(
+        side_effect=ConnectionError("simulated DB outage"),
+    )
+
+    with pytest.raises(ConnectionError):
+        await engine.load_models()
+
+    assert len(engine._models) == 2, (
+        "Previous models must survive a failed reload — last-known-good"
+    )
