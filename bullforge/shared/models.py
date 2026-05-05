@@ -143,7 +143,7 @@ VALID_ORDER_STATUSES = {
 }
 
 VALID_ORDER_ORIGINS = {"internal", "external"}
-VALID_ORDER_RECONCILE_SOURCES = {"submit", "stream", "poll", "startup"}
+VALID_ORDER_RECONCILE_SOURCES = {"submit", "stream", "poll", "startup", "manual_replay"}
 
 
 @dataclass(frozen=True)
