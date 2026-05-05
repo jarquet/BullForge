@@ -19,18 +19,20 @@ def _snapshot(status="submitted", alpaca_id="alp-1", symbol="SPY", side="buy"):
     }
 
 
-def _order(status="submitted", side="buy", origin="internal", order_id=1, filled_price=None):
+def _order(status="submitted", side="buy", origin="internal", order_id=1, filled_price=None, quantity=1.0, filled_quantity=None):
     filled_at = None
     if status == "filled":
         filled_at = datetime.now(timezone.utc)
         if filled_price is None:
             filled_price = 100.0
+        if filled_quantity is None:
+            filled_quantity = quantity
     return Order(
-        symbol="SPY", side=side, quantity=1.0, order_type="market",
+        symbol="SPY", side=side, quantity=quantity, order_type="market",
         submitted_at=datetime.now(timezone.utc), signal_strength=0.5,
         alpaca_order_id="alp-1", status=status, origin=origin,
         id=order_id, filled_at=filled_at, filled_price=filled_price,
-        filled_quantity=1.0 if status == "filled" else None,
+        filled_quantity=filled_quantity,
     )
 
 
@@ -47,7 +49,6 @@ def mock_db():
     db.upsert_order_from_alpaca = AsyncMock()
     db.insert_trade = AsyncMock(return_value=1)
     db.update_trade_exit = AsyncMock()
-    db.get_open_trade = AsyncMock(return_value=None)
     db.get_open_trades = AsyncMock(return_value=[])
     return db
 
@@ -108,7 +109,6 @@ async def test_fill_on_buy_with_no_open_trade_inserts_entry_trade(
     mock_db.upsert_order_from_alpaca.return_value = _upsert_result(
         old_status="submitted", new_status="filled",
     )
-    mock_db.get_open_trade.return_value = None
     mock_db.get_open_trades.return_value = []
     await core.apply_alpaca_order(_snapshot(status="filled"), source="stream")
     mock_db.insert_trade.assert_awaited_once()
@@ -127,7 +127,6 @@ async def test_fill_on_sell_with_open_long_closes_trade(
         entry_time=datetime(2026, 4, 14, 13, 0, tzinfo=timezone.utc),
         entry_price=100.0, quantity=1.0, entry_order_id=10,
     )
-    mock_db.get_open_trade.return_value = open_trade
     mock_db.get_open_trades.return_value = [open_trade]
     # Override with a sell order at 110.0 to test exit
     mock_db.upsert_order_from_alpaca.return_value = UpsertResult(
@@ -309,11 +308,10 @@ async def test_closing_fill_publishes_position_closed(
         entry_time=datetime(2026, 4, 22, 13, 0, tzinfo=timezone.utc),
         entry_price=100.0, quantity=2.0, entry_order_id=1,
     )
-    mock_db.get_open_trade.return_value = open_trade
     mock_db.get_open_trades.return_value = [open_trade]
     mock_db.query_closed_trades.return_value = []
     mock_db.upsert_order_from_alpaca.return_value = UpsertResult(
-        order=_order(status="filled", side="sell", filled_price=105.0),
+        order=_order(status="filled", side="sell", filled_price=105.0, quantity=2.0),
         old_status="submitted", new_status="filled", inserted=False,
     )
     snap = _snapshot(status="filled", side="sell")
@@ -344,7 +342,6 @@ async def test_opening_fill_does_not_publish_position_closed(
     core = ReconcilerCore(
         db=mock_db, redis_client=mock_redis, broker=mock_broker,
     )
-    mock_db.get_open_trade.return_value = None
     mock_db.get_open_trades.return_value = []
     mock_db.upsert_order_from_alpaca.return_value = _upsert_result(
         old_status="submitted", new_status="filled",
@@ -361,7 +358,6 @@ async def test_closing_fill_without_broker_skips_alert(mock_db, mock_redis):
         entry_time=datetime(2026, 4, 22, 13, 0, tzinfo=timezone.utc),
         entry_price=100.0, quantity=1.0, entry_order_id=1,
     )
-    mock_db.get_open_trade.return_value = open_trade
     mock_db.get_open_trades.return_value = [open_trade]
     mock_db.upsert_order_from_alpaca.return_value = UpsertResult(
         order=_order(status="filled", side="sell", filled_price=101.0),
@@ -408,7 +404,7 @@ async def test_drain_full_close_multiple_longs_emits_per_row_alerts_and_pnls(
     mock_db.get_open_trades.return_value = rows
     mock_db.query_closed_trades.return_value = []
     mock_db.upsert_order_from_alpaca.return_value = UpsertResult(
-        order=_order(status="filled", side="sell", filled_price=61_000.0),
+        order=_order(status="filled", side="sell", filled_price=61_000.0, quantity=0.004),
         old_status="submitted", new_status="filled", inserted=False,
     )
     snap = _snapshot(status="filled", side="sell", symbol="BTC/USD")
