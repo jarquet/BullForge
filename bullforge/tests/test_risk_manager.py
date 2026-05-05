@@ -99,6 +99,33 @@ async def test_check_entry_short_allowed():
 
 
 @pytest.mark.asyncio
+async def test_check_entry_rejects_short_for_crypto():
+    # Alpaca crypto is long-only on both paper and live: a sell with no
+    # inventory bounces with code 40310000 ("insufficient balance").
+    # Catch it at the risk-manager gate so the order never reaches the
+    # broker and the rejection reason is legible in logs.
+    rm = RiskManager(runtime_config=_rc())
+    approved, reason, qty = await rm.check_entry(
+        _signal(direction=-1, symbol="BTC/USD", hour_utc=16),
+        _account(), [], current_price=60000.0,
+    )
+    assert approved is False
+    assert "long-only" in reason.lower() or "crypto" in reason.lower()
+    assert qty == 0
+
+
+@pytest.mark.asyncio
+async def test_check_entry_long_crypto_still_allowed():
+    rm = RiskManager(runtime_config=_rc())
+    approved, _reason, qty = await rm.check_entry(
+        _signal(direction=1, symbol="BTC/USD", hour_utc=16),
+        _account(), [], current_price=60000.0,
+    )
+    assert approved is True
+    assert qty == pytest.approx(100_000.0 * 0.10 / 60000.0)
+
+
+@pytest.mark.asyncio
 async def test_check_entry_existing_position():
     rm = RiskManager(runtime_config=_rc())
     approved, reason, qty = await rm.check_entry(

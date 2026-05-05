@@ -5,6 +5,7 @@ from typing import Optional, Tuple
 
 from shared.models import TradingSignal
 from shared.runtime_config import RuntimeConfig
+from shared.symbol_utils import is_crypto
 from shared.trading_window import is_trading_allowed
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,12 @@ class RiskManager:
 
         if signal.direction == 0:
             return False, "Flat signal, no entry", 0
+
+        # Alpaca crypto is long-only on both paper and live: a sell
+        # without inventory bounces with code 40310000. Reject shorts
+        # here so the order never reaches the broker.
+        if signal.direction == -1 and is_crypto(signal.symbol):
+            return False, "crypto is long-only (Alpaca rejects shorts)", 0
 
         min_strength = await self._param("min_signal_strength")
         if signal.strength < min_strength:
