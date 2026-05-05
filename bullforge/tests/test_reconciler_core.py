@@ -48,6 +48,7 @@ def mock_db():
     db.insert_trade = AsyncMock(return_value=1)
     db.update_trade_exit = AsyncMock()
     db.get_open_trade = AsyncMock(return_value=None)
+    db.get_open_trades = AsyncMock(return_value=[])
     return db
 
 
@@ -108,6 +109,7 @@ async def test_fill_on_buy_with_no_open_trade_inserts_entry_trade(
         old_status="submitted", new_status="filled",
     )
     mock_db.get_open_trade.return_value = None
+    mock_db.get_open_trades.return_value = []
     await core.apply_alpaca_order(_snapshot(status="filled"), source="stream")
     mock_db.insert_trade.assert_awaited_once()
     trade_arg = mock_db.insert_trade.await_args.args[0]
@@ -126,6 +128,7 @@ async def test_fill_on_sell_with_open_long_closes_trade(
         entry_price=100.0, quantity=1.0, entry_order_id=10,
     )
     mock_db.get_open_trade.return_value = open_trade
+    mock_db.get_open_trades.return_value = [open_trade]
     # Override with a sell order at 110.0 to test exit
     mock_db.upsert_order_from_alpaca.return_value = UpsertResult(
         order=_order(status="filled", side="sell", filled_price=110.0),
@@ -307,6 +310,7 @@ async def test_closing_fill_publishes_position_closed(
         entry_price=100.0, quantity=2.0, entry_order_id=1,
     )
     mock_db.get_open_trade.return_value = open_trade
+    mock_db.get_open_trades.return_value = [open_trade]
     mock_db.query_closed_trades.return_value = []
     mock_db.upsert_order_from_alpaca.return_value = UpsertResult(
         order=_order(status="filled", side="sell", filled_price=105.0),
@@ -341,6 +345,7 @@ async def test_opening_fill_does_not_publish_position_closed(
         db=mock_db, redis_client=mock_redis, broker=mock_broker,
     )
     mock_db.get_open_trade.return_value = None
+    mock_db.get_open_trades.return_value = []
     mock_db.upsert_order_from_alpaca.return_value = _upsert_result(
         old_status="submitted", new_status="filled",
     )
@@ -357,6 +362,7 @@ async def test_closing_fill_without_broker_skips_alert(mock_db, mock_redis):
         entry_price=100.0, quantity=1.0, entry_order_id=1,
     )
     mock_db.get_open_trade.return_value = open_trade
+    mock_db.get_open_trades.return_value = [open_trade]
     mock_db.upsert_order_from_alpaca.return_value = UpsertResult(
         order=_order(status="filled", side="sell", filled_price=101.0),
         old_status="submitted", new_status="filled", inserted=False,
