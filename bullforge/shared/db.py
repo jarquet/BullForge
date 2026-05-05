@@ -1546,6 +1546,37 @@ class Database:
             exit_order_id=row["exit_order_id"],
         )
 
+    async def get_open_trades(self, symbol: str) -> list[Trade]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, symbol, side, entry_time, exit_time, entry_price,
+                       exit_price, quantity, pnl, hold_duration_seconds,
+                       entry_order_id, exit_order_id
+                FROM trades
+                WHERE symbol = $1 AND exit_time IS NULL
+                ORDER BY entry_time ASC
+                """,
+                symbol,
+            )
+        return [
+            Trade(
+                id=r["id"],
+                symbol=r["symbol"],
+                side=r["side"],
+                entry_time=r["entry_time"],
+                exit_time=r["exit_time"],
+                entry_price=r["entry_price"],
+                exit_price=r["exit_price"],
+                quantity=r["quantity"],
+                pnl=r["pnl"],
+                hold_duration_seconds=r["hold_duration_seconds"],
+                entry_order_id=r["entry_order_id"],
+                exit_order_id=r["exit_order_id"],
+            )
+            for r in rows
+        ]
+
     async def query_closed_trades(
         self,
         symbol: Optional[str] = None,

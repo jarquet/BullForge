@@ -92,35 +92,14 @@ class ReconcilerCore:
             )
             return
 
-        open_trade = await self._db.get_open_trade(order.symbol)
+        open_trades = await self._db.get_open_trades(order.symbol)
 
-        is_closing = open_trade is not None and (
-            (open_trade.side == "long" and order.side == "sell")
-            or (open_trade.side == "short" and order.side == "buy")
+        is_closing = bool(open_trades) and (
+            (open_trades[0].side == "long" and order.side == "sell")
+            or (open_trades[0].side == "short" and order.side == "buy")
         )
 
-        if is_closing:
-            pnl = (order.filled_price - open_trade.entry_price) * open_trade.quantity
-            if open_trade.side == "short":
-                pnl = -pnl
-            hold_secs = int(
-                (order.filled_at - open_trade.entry_time).total_seconds()
-            )
-            await self._db.update_trade_exit(
-                trade_id=open_trade.id,
-                exit_time=order.filled_at,
-                exit_price=order.filled_price,
-                exit_order_id=order.id,
-                pnl=pnl,
-                hold_duration_seconds=hold_secs,
-            )
-            await self._publish_position_closed(
-                open_trade=open_trade,
-                order=order,
-                pnl=pnl,
-                hold_duration_seconds=hold_secs,
-            )
-        else:
+        if not is_closing:
             trade_side = "long" if order.side == "buy" else "short"
             trade = Trade(
                 symbol=order.symbol,
@@ -131,6 +110,57 @@ class ReconcilerCore:
                 entry_order_id=order.id,
             )
             await self._db.insert_trade(trade)
+            return
+
+        # Closing fill — drain N rows.
+        fq = float(order.filled_quantity or order.quantity)
+        total_open = sum(float(t.quantity) for t in open_trades)
+
+        if fq >= total_open:
+            rows_to_close = list(open_trades)
+            if fq > total_open:
+                await self._publish_counter(
+                    "reconciler_anomalies_total", kind="over_close",
+                )
+                await self._publish("execution:orders:anomaly", order)
+        else:
+            rows_to_close = []
+            running = 0.0
+            for t in open_trades:
+                if running + float(t.quantity) <= fq:
+                    rows_to_close.append(t)
+                    running += float(t.quantity)
+                else:
+                    break
+            residual = fq - running
+            if residual > 0:
+                await self._publish_counter(
+                    "reconciler_anomalies_total",
+                    kind="partial_drain_residual",
+                )
+                await self._publish("execution:orders:anomaly", order)
+
+        for t in rows_to_close:
+            pnl = (order.filled_price - t.entry_price) * t.quantity
+            if t.side == "short":
+                pnl = -pnl
+            hold_secs = int(
+                (order.filled_at - t.entry_time).total_seconds()
+            )
+            await self._db.update_trade_exit(
+                trade_id=t.id,
+                exit_time=order.filled_at,
+                exit_price=order.filled_price,
+                exit_order_id=order.id,
+                pnl=pnl,
+                hold_duration_seconds=hold_secs,
+            )
+            await self._publish_position_closed(
+                open_trade=t,
+                order=order,
+                pnl=pnl,
+                hold_duration_seconds=hold_secs,
+            )
 
     async def _publish(self, channel: str, order: Order) -> None:
         if self._redis is None:

@@ -122,6 +122,12 @@ class FakeDatabase:
                 return t
         return None
 
+    async def get_open_trades(self, symbol: str) -> list[Trade]:
+        return [
+            t for t in self._trades
+            if t.symbol == symbol and getattr(t, "exit_time", None) is None
+        ]
+
 
 # ---------------------------------------------------------------------------
 # Fake broker
