@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from shared.models import Bar, CalendarEvent, CalendarEventType
+from shared.models import Bar, CalendarEvent, CalendarEventType, Order
 
 
 def test_bar_creation():
@@ -72,3 +72,45 @@ def test_calendar_event_fed_has_no_symbol():
     )
     assert event.symbol is None
     assert event.event_type == CalendarEventType.FED_ANNOUNCEMENT
+
+
+def test_order_accepts_manual_replay_reconcile_source():
+    """Locks in the manual_replay value the reconcile_from_alpaca CLI uses.
+
+    Prior bug: the validator was widened in models.py but the DB CHECK
+    constraint and the validator drifted out of sync (the script tripped
+    a CheckViolationError, then once fixed, a ValueError on Order
+    construction). Test pins the validator side so any future narrowing
+    of VALID_ORDER_RECONCILE_SOURCES is caught here, not at production.
+    """
+    order = Order(
+        symbol="BTC/USD",
+        side="sell",
+        quantity=0.0989,
+        order_type="market",
+        submitted_at=datetime(2026, 5, 5, 1, 8, tzinfo=timezone.utc),
+        signal_strength=0.0,
+        alpaca_order_id="alp-replay-1",
+        status="filled",
+        origin="external",
+        reconcile_source="manual_replay",
+    )
+    assert order.reconcile_source == "manual_replay"
+
+
+def test_order_rejects_unknown_reconcile_source():
+    """Counterpart guard: the validator still rejects unknown values."""
+    import pytest
+
+    with pytest.raises(ValueError, match="reconcile_source"):
+        Order(
+            symbol="SPY",
+            side="buy",
+            quantity=1.0,
+            order_type="market",
+            submitted_at=datetime(2026, 5, 5, 14, 0, tzinfo=timezone.utc),
+            signal_strength=0.0,
+            alpaca_order_id="alp-bad-1",
+            status="submitted",
+            reconcile_source="not_a_real_source",
+        )
