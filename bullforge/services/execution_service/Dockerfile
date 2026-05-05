@@ -11,6 +11,7 @@ COPY shared/ /app/shared/
 COPY migrations/ /app/migrations/
 COPY services/__init__.py /app/services/__init__.py
 COPY services/execution_service/ /app/services/execution_service/
+COPY scripts/ /app/scripts/
 
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
