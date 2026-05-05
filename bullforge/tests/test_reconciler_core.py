@@ -444,3 +444,60 @@ async def test_drain_full_close_multiple_longs_emits_per_row_alerts_and_pnls(
         if c.get("counter") == "reconciler_anomalies_total"
     ]
     assert anomaly_kinds == []
+
+
+@pytest.mark.asyncio
+async def test_drain_over_close_closes_all_and_emits_anomaly(
+    mock_db, mock_redis, mock_broker,
+):
+    core = ReconcilerCore(
+        db=mock_db, redis_client=mock_redis, broker=mock_broker,
+    )
+    rows = [
+        Trade(
+            id=200, symbol="ETH/USD", side="long",
+            entry_time=datetime(2026, 5, 5, 1, 0, tzinfo=timezone.utc),
+            entry_price=2_000.0, quantity=1.0, entry_order_id=200,
+        ),
+        Trade(
+            id=201, symbol="ETH/USD", side="long",
+            entry_time=datetime(2026, 5, 5, 1, 1, tzinfo=timezone.utc),
+            entry_price=2_010.0, quantity=1.0, entry_order_id=201,
+        ),
+    ]
+    mock_db.get_open_trades.return_value = rows
+    mock_db.query_closed_trades.return_value = []
+    mock_db.upsert_order_from_alpaca.return_value = UpsertResult(
+        order=_order(status="filled", side="sell", filled_price=2_100.0,
+                     filled_quantity=5.0),
+        old_status="submitted", new_status="filled", inserted=False,
+    )
+    snap = _snapshot(status="filled", side="sell", symbol="ETH/USD")
+    snap["filled_avg_price"] = 2_100.0
+    snap["filled_qty"] = 5.0  # broker reports 5 closed, we only tracked 2
+    snap["qty"] = 5.0
+
+    await core.apply_alpaca_order(snap, source="stream")
+
+    # Both rows closed.
+    assert mock_db.update_trade_exit.await_count == 2
+
+    # Anomaly counter published with kind=over_close.
+    counter_calls = [
+        json.loads(c.args[1])
+        for c in mock_redis.publish.await_args_list
+        if c.args[0] == "monitoring:reconciler"
+    ]
+    over_close_calls = [
+        c for c in counter_calls
+        if c.get("counter") == "reconciler_anomalies_total"
+        and c["labels"].get("kind") == "over_close"
+    ]
+    assert len(over_close_calls) == 1
+
+    # Order-level anomaly publish on execution:orders:anomaly.
+    anomaly_publishes = [
+        c for c in mock_redis.publish.await_args_list
+        if c.args[0] == "execution:orders:anomaly"
+    ]
+    assert len(anomaly_publishes) == 1
