@@ -1577,6 +1577,25 @@ class Database:
             for r in rows
         ]
 
+    async def existing_alpaca_order_ids(
+        self, ids: list[str],
+    ) -> set[str]:
+        """Return the subset of ``ids`` already present in the orders table.
+
+        Used by the replay CLI to skip orders that are already tracked locally;
+        feeding them through ReconcilerCore would re-interpret them against the
+        current DB state, which is wrong for orders that predate local tracking.
+        """
+        if not ids:
+            return set()
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT alpaca_order_id FROM orders "
+                "WHERE alpaca_order_id = ANY($1::text[])",
+                ids,
+            )
+        return {r["alpaca_order_id"] for r in rows}
+
     async def query_closed_trades(
         self,
         symbol: Optional[str] = None,

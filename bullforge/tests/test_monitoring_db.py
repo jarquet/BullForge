@@ -359,3 +359,38 @@ async def test_get_open_trades_empty_when_none_open(settings, mock_pool):
     trades = await db.get_open_trades("BTC/USD")
 
     assert trades == []
+
+
+@pytest.mark.asyncio
+async def test_existing_alpaca_order_ids_returns_known_subset(settings, mock_pool):
+    from shared.db import Database
+
+    pool, conn = mock_pool
+    conn.fetch = AsyncMock(return_value=[
+        {"alpaca_order_id": "alp-1"},
+        {"alpaca_order_id": "alp-3"},
+    ])
+    db = Database(settings)
+    db.pool = pool
+
+    result = await db.existing_alpaca_order_ids(["alp-1", "alp-2", "alp-3"])
+
+    assert result == {"alp-1", "alp-3"}
+    sql = conn.fetch.call_args[0][0]
+    assert "alpaca_order_id = ANY" in sql
+    assert conn.fetch.call_args[0][1] == ["alp-1", "alp-2", "alp-3"]
+
+
+@pytest.mark.asyncio
+async def test_existing_alpaca_order_ids_empty_input_skips_query(settings, mock_pool):
+    from shared.db import Database
+
+    pool, conn = mock_pool
+    conn.fetch = AsyncMock()
+    db = Database(settings)
+    db.pool = pool
+
+    result = await db.existing_alpaca_order_ids([])
+
+    assert result == set()
+    conn.fetch.assert_not_called()

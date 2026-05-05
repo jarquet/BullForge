@@ -62,6 +62,7 @@ def _parse_args() -> argparse.Namespace:
 
 async def reconcile(
     *,
+    db: Database,
     core: ReconcilerCore,
     broker: AlpacaBroker,
     symbols: list[str],
@@ -73,13 +74,21 @@ async def reconcile(
         "symbols": symbols,
         "orders_fetched": 0,
         "orders_dispatched": 0,
+        "skipped_already_known": 0,
         "dry_run": dry_run,
     }
     snaps = await broker.list_closed_orders(since)
-    for snap in snaps:
-        if snap["symbol"] not in symbols:
-            continue
+    in_window = [s for s in snaps if s["symbol"] in symbols]
+    known_ids = await db.existing_alpaca_order_ids([s["id"] for s in in_window])
+    for snap in in_window:
         summary["orders_fetched"] += 1
+        if snap["id"] in known_ids:
+            summary["skipped_already_known"] += 1
+            logger.info(
+                "skipping already-known alpaca_id=%s %s qty=%s filled_at=%s",
+                snap["id"], snap["side"], snap["qty"], snap.get("filled_at"),
+            )
+            continue
         if dry_run:
             logger.info(
                 "[dry-run] would replay alpaca_id=%s %s qty=%s status=%s filled_at=%s",
@@ -110,7 +119,7 @@ async def _main() -> None:
     core = ReconcilerCore(db=db, redis_client=redis, broker=broker)
 
     summary = await reconcile(
-        core=core, broker=broker,
+        db=db, core=core, broker=broker,
         symbols=symbols, since=since, dry_run=args.dry_run,
     )
 
