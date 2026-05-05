@@ -309,3 +309,53 @@ async def test_insert_metric_snapshot(settings, mock_pool):
     conn.execute.assert_called_once()
     call_args = conn.execute.call_args
     assert "INSERT INTO metric_snapshots" in call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_get_open_trades_returns_all_open_rows_fifo(settings, mock_pool):
+    from shared.db import Database
+
+    pool, conn = mock_pool
+    rows = [
+        {
+            "id": 1, "symbol": "BTC/USD", "side": "long",
+            "entry_time": datetime(2026, 5, 5, 0, 57, tzinfo=timezone.utc),
+            "entry_price": 60000.0, "quantity": 0.001, "entry_order_id": 10,
+            "exit_time": None, "exit_price": None, "pnl": None,
+            "hold_duration_seconds": None, "exit_order_id": None,
+        },
+        {
+            "id": 2, "symbol": "BTC/USD", "side": "long",
+            "entry_time": datetime(2026, 5, 5, 0, 58, tzinfo=timezone.utc),
+            "entry_price": 60050.0, "quantity": 0.001, "entry_order_id": 11,
+            "exit_time": None, "exit_price": None, "pnl": None,
+            "hold_duration_seconds": None, "exit_order_id": None,
+        },
+    ]
+    conn.fetch = AsyncMock(return_value=rows)
+    db = Database(settings)
+    db.pool = pool
+
+    trades = await db.get_open_trades("BTC/USD")
+
+    assert len(trades) == 2
+    assert all(isinstance(t, Trade) for t in trades)
+    assert [t.id for t in trades] == [1, 2]  # FIFO oldest-first
+    assert all(t.exit_time is None for t in trades)
+    sql = conn.fetch.call_args[0][0]
+    assert "ORDER BY entry_time ASC" in sql
+    assert "BTC/USD" == conn.fetch.call_args[0][1]
+
+
+@pytest.mark.asyncio
+async def test_get_open_trades_empty_when_none_open(settings, mock_pool):
+    from shared.db import Database
+
+    pool, conn = mock_pool
+    conn.fetch = AsyncMock(return_value=[])
+    db = Database(settings)
+    db.pool = pool
+
+    trades = await db.get_open_trades("BTC/USD")
+
+    assert trades == []
