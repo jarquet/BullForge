@@ -609,3 +609,91 @@ async def test_drain_partial_exact_alignment_no_residual_anomaly(
         if c.args[0] == "execution:orders:anomaly"
     ]
     assert anomaly_publishes == []
+
+
+@pytest.mark.asyncio
+async def test_drain_buy_closes_multiple_shorts_symmetric(
+    mock_db, mock_redis, mock_broker,
+):
+    core = ReconcilerCore(
+        db=mock_db, redis_client=mock_redis, broker=mock_broker,
+    )
+    rows = [
+        Trade(
+            id=500, symbol="SPY", side="short",
+            entry_time=datetime(2026, 5, 5, 16, 0, tzinfo=timezone.utc),
+            entry_price=420.0, quantity=5.0, entry_order_id=500,
+        ),
+        Trade(
+            id=501, symbol="SPY", side="short",
+            entry_time=datetime(2026, 5, 5, 16, 1, tzinfo=timezone.utc),
+            entry_price=421.0, quantity=5.0, entry_order_id=501,
+        ),
+    ]
+    mock_db.get_open_trades.return_value = rows
+    mock_db.query_closed_trades.return_value = []
+    mock_db.upsert_order_from_alpaca.return_value = UpsertResult(
+        order=_order(status="filled", side="buy", filled_price=415.0,
+                     filled_quantity=10.0),
+        old_status="submitted", new_status="filled", inserted=False,
+    )
+    snap = _snapshot(status="filled", side="buy")
+    snap["filled_avg_price"] = 415.0
+    snap["filled_qty"] = 10.0
+    snap["qty"] = 10.0
+
+    await core.apply_alpaca_order(snap, source="stream")
+
+    # Both shorts closed.
+    assert mock_db.update_trade_exit.await_count == 2
+    pnls = [c.kwargs["pnl"] for c in mock_db.update_trade_exit.await_args_list]
+    # Short pnl is negated: (filled - entry) * qty * -1
+    assert pnls[0] == pytest.approx(-(415.0 - 420.0) * 5.0)  # +25
+    assert pnls[1] == pytest.approx(-(415.0 - 421.0) * 5.0)  # +30
+
+
+@pytest.mark.asyncio
+async def test_single_open_trade_drain_path_is_existing_behavior(
+    mock_db, mock_redis, mock_broker,
+):
+    """Single open row + sell of equal qty must close exactly that one row."""
+    core = ReconcilerCore(
+        db=mock_db, redis_client=mock_redis, broker=mock_broker,
+    )
+    open_trade = Trade(
+        id=600, symbol="SPY", side="long",
+        entry_time=datetime(2026, 5, 5, 17, 0, tzinfo=timezone.utc),
+        entry_price=400.0, quantity=2.0, entry_order_id=600,
+    )
+    mock_db.get_open_trades.return_value = [open_trade]
+    mock_db.query_closed_trades.return_value = []
+    mock_db.upsert_order_from_alpaca.return_value = UpsertResult(
+        order=_order(status="filled", side="sell", filled_price=410.0,
+                     filled_quantity=2.0),
+        old_status="submitted", new_status="filled", inserted=False,
+    )
+    snap = _snapshot(status="filled", side="sell")
+    snap["filled_avg_price"] = 410.0
+    snap["filled_qty"] = 2.0
+    snap["qty"] = 2.0
+
+    await core.apply_alpaca_order(snap, source="stream")
+
+    # Exactly one close, no duplicates.
+    assert mock_db.update_trade_exit.await_count == 1
+    assert mock_db.update_trade_exit.await_args.kwargs["trade_id"] == 600
+    # No anomaly on a clean single-row drain.
+    counter_calls = [
+        json.loads(c.args[1])
+        for c in mock_redis.publish.await_args_list
+        if c.args[0] == "monitoring:reconciler"
+    ]
+    anomaly_kinds = [
+        c["labels"].get("kind") for c in counter_calls
+        if c.get("counter") == "reconciler_anomalies_total"
+    ]
+    assert anomaly_kinds == []
+    # Exactly one position_closed alert.
+    alerts = _alert_payloads(mock_redis, "monitoring:alerts")
+    assert len(alerts) == 1
+    assert alerts[0]["trade_id"] == 600
