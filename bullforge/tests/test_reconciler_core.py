@@ -560,3 +560,52 @@ async def test_drain_partial_fifo_closes_oldest_fitting_rows_and_emits_residual_
         if c.args[0] == "execution:orders:anomaly"
     ]
     assert len(anomaly_publishes) == 1
+
+
+@pytest.mark.asyncio
+async def test_drain_partial_exact_alignment_no_residual_anomaly(
+    mock_db, mock_redis, mock_broker,
+):
+    core = ReconcilerCore(
+        db=mock_db, redis_client=mock_redis, broker=mock_broker,
+    )
+    # Four rows of 10 qty each (total 40). Sell of 20 → close oldest 2,
+    # residual exactly 0, no anomaly.
+    rows = [
+        Trade(
+            id=400 + i, symbol="QQQ", side="long",
+            entry_time=datetime(2026, 5, 5, 15, i, tzinfo=timezone.utc),
+            entry_price=350.0 + i, quantity=10.0, entry_order_id=400 + i,
+        )
+        for i in range(4)
+    ]
+    mock_db.get_open_trades.return_value = rows
+    mock_db.query_closed_trades.return_value = []
+    mock_db.upsert_order_from_alpaca.return_value = UpsertResult(
+        order=_order(status="filled", side="sell", filled_price=360.0,
+                     filled_quantity=20.0),
+        old_status="submitted", new_status="filled", inserted=False,
+    )
+    snap = _snapshot(status="filled", side="sell")
+    snap["filled_avg_price"] = 360.0
+    snap["filled_qty"] = 20.0
+    snap["qty"] = 20.0
+
+    await core.apply_alpaca_order(snap, source="stream")
+
+    assert mock_db.update_trade_exit.await_count == 2
+    counter_calls = [
+        json.loads(c.args[1])
+        for c in mock_redis.publish.await_args_list
+        if c.args[0] == "monitoring:reconciler"
+    ]
+    anomaly_kinds = [
+        c["labels"].get("kind") for c in counter_calls
+        if c.get("counter") == "reconciler_anomalies_total"
+    ]
+    assert anomaly_kinds == []
+    anomaly_publishes = [
+        c for c in mock_redis.publish.await_args_list
+        if c.args[0] == "execution:orders:anomaly"
+    ]
+    assert anomaly_publishes == []
