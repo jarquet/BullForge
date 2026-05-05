@@ -372,3 +372,79 @@ async def test_closing_fill_without_broker_skips_alert(mock_db, mock_redis):
 
     await core.apply_alpaca_order(snap, source="stream")
     assert _alert_payloads(mock_redis, "monitoring:alerts") == []
+
+
+@pytest.mark.asyncio
+async def test_drain_full_close_multiple_longs_emits_per_row_alerts_and_pnls(
+    mock_db, mock_redis, mock_broker,
+):
+    core = ReconcilerCore(
+        db=mock_db, redis_client=mock_redis, broker=mock_broker,
+    )
+    # Simulate the BTC/USD incident: four open longs at different entry prices,
+    # one sell fill that aggregates them all.
+    rows = [
+        Trade(
+            id=150, symbol="BTC/USD", side="long",
+            entry_time=datetime(2026, 5, 5, 0, 57, tzinfo=timezone.utc),
+            entry_price=60_000.0, quantity=0.001, entry_order_id=100,
+        ),
+        Trade(
+            id=151, symbol="BTC/USD", side="long",
+            entry_time=datetime(2026, 5, 5, 0, 58, tzinfo=timezone.utc),
+            entry_price=60_050.0, quantity=0.001, entry_order_id=101,
+        ),
+        Trade(
+            id=152, symbol="BTC/USD", side="long",
+            entry_time=datetime(2026, 5, 5, 0, 59, tzinfo=timezone.utc),
+            entry_price=60_100.0, quantity=0.001, entry_order_id=102,
+        ),
+        Trade(
+            id=153, symbol="BTC/USD", side="long",
+            entry_time=datetime(2026, 5, 5, 1, 2, tzinfo=timezone.utc),
+            entry_price=60_200.0, quantity=0.001, entry_order_id=103,
+        ),
+    ]
+    mock_db.get_open_trades.return_value = rows
+    mock_db.query_closed_trades.return_value = []
+    mock_db.upsert_order_from_alpaca.return_value = UpsertResult(
+        order=_order(status="filled", side="sell", filled_price=61_000.0),
+        old_status="submitted", new_status="filled", inserted=False,
+    )
+    snap = _snapshot(status="filled", side="sell", symbol="BTC/USD")
+    snap["filled_avg_price"] = 61_000.0
+    snap["filled_qty"] = 0.004  # exact aggregate of the four rows
+    snap["qty"] = 0.004
+
+    await core.apply_alpaca_order(snap, source="manual_replay")
+
+    # Four update_trade_exit calls, one per row, with per-row pnl.
+    assert mock_db.update_trade_exit.await_count == 4
+    closed_ids = [
+        c.kwargs["trade_id"] for c in mock_db.update_trade_exit.await_args_list
+    ]
+    assert closed_ids == [150, 151, 152, 153]
+    pnls = [c.kwargs["pnl"] for c in mock_db.update_trade_exit.await_args_list]
+    assert pnls[0] == pytest.approx((61_000.0 - 60_000.0) * 0.001)
+    assert pnls[1] == pytest.approx((61_000.0 - 60_050.0) * 0.001)
+    assert pnls[2] == pytest.approx((61_000.0 - 60_100.0) * 0.001)
+    assert pnls[3] == pytest.approx((61_000.0 - 60_200.0) * 0.001)
+
+    # Four position_closed alerts published.
+    alerts = _alert_payloads(mock_redis, "monitoring:alerts")
+    assert len(alerts) == 4
+    assert {a["trade_id"] for a in alerts} == {150, 151, 152, 153}
+    assert all(a["type"] == "position_closed" for a in alerts)
+    assert all(a["exit_price"] == 61_000.0 for a in alerts)
+
+    # No anomaly emitted on exact match.
+    counter_calls = [
+        json.loads(c.args[1])
+        for c in mock_redis.publish.await_args_list
+        if c.args[0] == "monitoring:reconciler"
+    ]
+    anomaly_kinds = [
+        c["labels"].get("kind") for c in counter_calls
+        if c.get("counter") == "reconciler_anomalies_total"
+    ]
+    assert anomaly_kinds == []
