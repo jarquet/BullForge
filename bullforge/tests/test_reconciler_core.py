@@ -501,3 +501,62 @@ async def test_drain_over_close_closes_all_and_emits_anomaly(
         if c.args[0] == "execution:orders:anomaly"
     ]
     assert len(anomaly_publishes) == 1
+
+
+@pytest.mark.asyncio
+async def test_drain_partial_fifo_closes_oldest_fitting_rows_and_emits_residual_anomaly(
+    mock_db, mock_redis, mock_broker,
+):
+    core = ReconcilerCore(
+        db=mock_db, redis_client=mock_redis, broker=mock_broker,
+    )
+    # Four rows of 10 qty each (total 40). Sell of 25 → close oldest 2 rows
+    # (sum 20), residual 5, two newest rows untouched, residual anomaly emitted.
+    rows = [
+        Trade(
+            id=300 + i, symbol="SPY", side="long",
+            entry_time=datetime(2026, 5, 5, 14, i, tzinfo=timezone.utc),
+            entry_price=400.0 + i, quantity=10.0, entry_order_id=300 + i,
+        )
+        for i in range(4)
+    ]
+    mock_db.get_open_trades.return_value = rows
+    mock_db.query_closed_trades.return_value = []
+    mock_db.upsert_order_from_alpaca.return_value = UpsertResult(
+        order=_order(status="filled", side="sell", filled_price=410.0,
+                     filled_quantity=25.0),
+        old_status="submitted", new_status="filled", inserted=False,
+    )
+    snap = _snapshot(status="filled", side="sell")
+    snap["filled_avg_price"] = 410.0
+    snap["filled_qty"] = 25.0
+    snap["qty"] = 25.0
+
+    await core.apply_alpaca_order(snap, source="stream")
+
+    # Two oldest rows closed.
+    assert mock_db.update_trade_exit.await_count == 2
+    closed_ids = [
+        c.kwargs["trade_id"] for c in mock_db.update_trade_exit.await_args_list
+    ]
+    assert closed_ids == [300, 301]
+
+    # Residual anomaly counter.
+    counter_calls = [
+        json.loads(c.args[1])
+        for c in mock_redis.publish.await_args_list
+        if c.args[0] == "monitoring:reconciler"
+    ]
+    residual_calls = [
+        c for c in counter_calls
+        if c.get("counter") == "reconciler_anomalies_total"
+        and c["labels"].get("kind") == "partial_drain_residual"
+    ]
+    assert len(residual_calls) == 1
+
+    # Order-level anomaly publish.
+    anomaly_publishes = [
+        c for c in mock_redis.publish.await_args_list
+        if c.args[0] == "execution:orders:anomaly"
+    ]
+    assert len(anomaly_publishes) == 1
