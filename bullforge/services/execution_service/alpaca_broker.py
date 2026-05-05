@@ -50,6 +50,11 @@ class AlpacaBroker:
     async def list_open_orders(self, after) -> list[dict]:
         return await asyncio.to_thread(self._sync_list_open_orders, after)
 
+    async def list_closed_orders(self, after) -> list[dict]:
+        return await asyncio.to_thread(
+            self._sync_list_orders, QueryOrderStatus.CLOSED, after, 500,
+        )
+
     # --- Sync helpers ---
 
     def _sync_get_account(self) -> dict:
@@ -102,11 +107,12 @@ class AlpacaBroker:
             return None
 
     def _sync_list_open_orders(self, after) -> list[dict]:
-        request = GetOrdersRequest(
-            status=QueryOrderStatus.OPEN,
-            after=after,
-            limit=500,
-        )
+        return self._sync_list_orders(QueryOrderStatus.OPEN, after, 500)
+
+    def _sync_list_orders(
+        self, status: QueryOrderStatus, after, limit: int = 500,
+    ) -> list[dict]:
+        request = GetOrdersRequest(status=status, after=after, limit=limit)
         orders = self._client.get_orders(request)
         return [self._format_order_snapshot(o) for o in orders]
 
