@@ -29,6 +29,31 @@ def test_normalize_trade_update_matches_broker_snapshot_shape():
     assert snap["filled_at"].tzinfo == timezone.utc
 
 
+def _patch_trading_stream(stream):
+    """
+    Helper: returns a `patch` context manager that replaces TradingStream
+    with a fake whose `client.run` is a sync no-op blocking until the
+    stream's stop_event fires. Mirrors the existing reconnect-test pattern;
+    avoids real Alpaca network IO when start() spins up _run().
+    """
+    def _make_client(*args, **kwargs):
+        client = MagicMock()
+
+        def _run():
+            import time
+            while not stream._stop_event.is_set():
+                time.sleep(0.05)
+
+        client.run = _run
+        client.subscribe_trade_updates = MagicMock()
+        return client
+
+    return patch(
+        "services.execution_service.trade_updates_stream.TradingStream",
+        side_effect=_make_client,
+    )
+
+
 @pytest.mark.asyncio
 async def test_handler_forwards_to_core():
     core = AsyncMock()
@@ -36,20 +61,29 @@ async def test_handler_forwards_to_core():
         settings=MagicMock(
             alpaca_api_key="k", alpaca_secret_key="s",
             alpaca_base_url="https://paper-api.alpaca.markets",
+            execution_stream_queue_max=1000,
+            execution_stream_shutdown_drain_s=2.0,
         ),
         core=core,
         on_reconnect=AsyncMock(),
     )
-    event = MagicMock()
-    event.order = MagicMock(
-        id="a", symbol="SPY", side=MagicMock(value="buy"), qty="1",
-        order_type=MagicMock(value="market"),
-        status=MagicMock(value="filled"),
-        submitted_at=datetime.now(timezone.utc),
-        filled_qty="1", filled_avg_price="100",
-        filled_at=datetime.now(timezone.utc),
-    )
-    await stream._handle_event(event)
+    with _patch_trading_stream(stream):
+        await stream.start()
+        try:
+            event = MagicMock()
+            event.order = MagicMock(
+                id="a", symbol="SPY", side=MagicMock(value="buy"), qty="1",
+                order_type=MagicMock(value="market"),
+                status=MagicMock(value="filled"),
+                submitted_at=datetime.now(timezone.utc),
+                filled_qty="1", filled_avg_price="100",
+                filled_at=datetime.now(timezone.utc),
+            )
+            await stream._handle_event(event)
+            # Consumer drains on the main loop; wait for it.
+            await asyncio.wait_for(stream._queue.join(), timeout=2.0)
+        finally:
+            await stream.stop()
     core.apply_alpaca_order.assert_awaited_once()
     args, kwargs = core.apply_alpaca_order.await_args
     assert (kwargs.get("source") or args[1]) == "stream"
@@ -62,13 +96,22 @@ async def test_handler_swallows_malformed_event():
         settings=MagicMock(
             alpaca_api_key="k", alpaca_secret_key="s",
             alpaca_base_url="https://paper-api.alpaca.markets",
+            execution_stream_queue_max=1000,
+            execution_stream_shutdown_drain_s=2.0,
         ),
         core=core,
         on_reconnect=AsyncMock(),
     )
-    bad = MagicMock()
-    bad.order = None
-    await stream._handle_event(bad)
+    with _patch_trading_stream(stream):
+        await stream.start()
+        try:
+            bad = MagicMock()
+            bad.order = None
+            await stream._handle_event(bad)
+            # Give the (empty) queue a tick.
+            await asyncio.sleep(0.05)
+        finally:
+            await stream.stop()
     core.apply_alpaca_order.assert_not_called()
 
 
@@ -99,6 +142,8 @@ def _make_stream_settings():
     s.alpaca_api_key = "key"
     s.alpaca_secret_key = "secret"
     s.alpaca_base_url = "https://paper-api.alpaca.markets"
+    s.execution_stream_queue_max = 1000
+    s.execution_stream_shutdown_drain_s = 2.0
     return s
 
 
