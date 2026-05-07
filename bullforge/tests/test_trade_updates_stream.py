@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -246,9 +247,6 @@ async def test_no_reconnect_counter_on_first_connect():
 
     core.record_stream_reconnect.assert_not_awaited()
     on_reconnect.assert_not_awaited()
-
-
-import threading
 
 
 @pytest.mark.asyncio
@@ -522,3 +520,19 @@ async def test_consumer_continues_after_apply_raises(caplog):
         "stream: apply_alpaca_order failed" in rec.getMessage()
         for rec in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_stop_is_idempotent():
+    """Calling stop() twice must not raise or hang."""
+    stream = TradeUpdatesStream(
+        settings=_make_stream_settings(),
+        core=AsyncMock(),
+        on_reconnect=AsyncMock(),
+        max_backoff_s=0,
+    )
+    with _patch_trading_stream(stream):
+        await stream.start()
+        await stream.stop()
+        # Second stop() must be a no-op, not raise.
+        await stream.stop()

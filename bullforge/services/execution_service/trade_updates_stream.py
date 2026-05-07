@@ -77,7 +77,9 @@ class TradeUpdatesStream:
             return
         loop = self._loop
         if loop is None or self._queue is None:
-            logger.error("trade_stream_dropped_pre_start id=%s", snap.get("id"))
+            # Expected during shutdown: alpaca thread may deliver one more
+            # event between stop() clearing _loop and the websocket closing.
+            logger.warning("trade_stream_dropped_pre_start id=%s", snap.get("id"))
             return
         loop.call_soon_threadsafe(self._enqueue, snap)
 
@@ -116,6 +118,8 @@ class TradeUpdatesStream:
         self._task = asyncio.create_task(self._run())
 
     async def stop(self) -> None:
+        if self._stop_event.is_set() and self._task is None and self._consumer_task is None:
+            return
         self._stop_event.set()
         # Stop accepting new events first.
         if self._task is not None:
