@@ -62,3 +62,27 @@ async def test_health_endpoint_degraded(aiohttp_client, mock_db, mock_redis, moc
     data = await resp.json()
     assert data["db"] == "ok"
     assert "error" in data["alpaca"]
+
+
+@pytest.mark.asyncio
+async def test_health_includes_stream_queue_dropped_when_stream_provided(
+    aiohttp_client, mock_db, mock_redis, mock_broker
+):
+    stream = MagicMock()
+    stream.queue_full_dropped = 7
+    app = create_health_app(mock_db, mock_redis, mock_broker, stream=stream)
+    client = await aiohttp_client(app)
+    resp = await client.get("/health")
+    body = await resp.json()
+    assert body.get("stream_queue_dropped") == 7
+
+
+@pytest.mark.asyncio
+async def test_health_omits_stream_queue_dropped_when_no_stream(
+    aiohttp_client, mock_db, mock_redis, mock_broker
+):
+    app = create_health_app(mock_db, mock_redis, mock_broker)
+    client = await aiohttp_client(app)
+    resp = await client.get("/health")
+    body = await resp.json()
+    assert "stream_queue_dropped" not in body

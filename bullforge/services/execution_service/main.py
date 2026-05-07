@@ -157,7 +157,7 @@ async def main() -> None:
     await broker_relay.start()
     logger.info("BrokerRelay started")
 
-    health_app = create_health_app(db, redis_client, broker)
+    health_app = create_health_app(db, redis_client, broker, stream=stream)
     runner = web.AppRunner(health_app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", 8082)
