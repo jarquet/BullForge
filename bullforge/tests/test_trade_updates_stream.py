@@ -201,3 +201,103 @@ async def test_no_reconnect_counter_on_first_connect():
 
     core.record_stream_reconnect.assert_not_awaited()
     on_reconnect.assert_not_awaited()
+
+
+import threading
+
+
+@pytest.mark.asyncio
+async def test_apply_alpaca_order_runs_on_main_loop_when_event_arrives_from_worker_thread():
+    """
+    Regression: when _handle_event is invoked from a worker thread running its
+    own asyncio loop (loop B'), apply_alpaca_order must execute on the main
+    service loop (loop A) where the asyncpg pool was created.
+
+    On the pre-fix code, _handle_event awaits apply_alpaca_order directly on
+    loop B' -> the captured loop is B' -> the assertion fails.
+    """
+    main_loop = asyncio.get_running_loop()
+    captured_loops: list = []
+
+    async def _capture(*args, **kwargs):
+        captured_loops.append(asyncio.get_running_loop())
+
+    core = MagicMock()
+    core.apply_alpaca_order = AsyncMock(side_effect=_capture)
+    core.record_stream_reconnect = AsyncMock()
+
+    settings = MagicMock(
+        alpaca_api_key="k",
+        alpaca_secret_key="s",
+        alpaca_base_url="https://paper-api.alpaca.markets",
+        execution_stream_queue_max=1000,
+        execution_stream_shutdown_drain_s=2.0,
+    )
+
+    stream = TradeUpdatesStream(
+        settings=settings,
+        core=core,
+        on_reconnect=AsyncMock(),
+    )
+
+    # Fake TradingStream: client.run() is a sync no-op that blocks until
+    # the stream's stop_event is set, mirroring the pattern in the
+    # existing reconnect-counter tests. This avoids real Alpaca network IO.
+    def _make_client(*args, **kwargs):
+        client = MagicMock()
+
+        def _run():
+            # Block in the worker thread until stop_event fires.
+            import time
+            while not stream._stop_event.is_set():
+                time.sleep(0.05)
+
+        client.run = _run
+        client.subscribe_trade_updates = MagicMock()
+        return client
+
+    with patch(
+        "services.execution_service.trade_updates_stream.TradingStream",
+        side_effect=_make_client,
+    ):
+        await stream.start()
+        try:
+            event = MagicMock()
+            event.order = MagicMock(
+                id="alp-loop-1", symbol="SPY",
+                side=MagicMock(value="buy"), qty="1",
+                order_type=MagicMock(value="market"),
+                status=MagicMock(value="filled"),
+                submitted_at=datetime.now(timezone.utc),
+                filled_qty="1", filled_avg_price="100",
+                filled_at=datetime.now(timezone.utc),
+            )
+
+            # Drive _handle_event from a worker thread that runs its own loop -
+            # this models how alpaca-py's TradingStream.run() invokes the
+            # callback.
+            def _drive_in_worker_loop():
+                worker_loop = asyncio.new_event_loop()
+                try:
+                    worker_loop.run_until_complete(stream._handle_event(event))
+                finally:
+                    worker_loop.close()
+
+            t = threading.Thread(target=_drive_in_worker_loop)
+            t.start()
+            t.join(timeout=2.0)
+            assert not t.is_alive(), "worker thread did not finish"
+
+            # Wait for main-loop consumer to drain the queue.
+            for _ in range(200):
+                await asyncio.sleep(0.01)
+                if captured_loops:
+                    break
+        finally:
+            await stream.stop()
+
+    assert captured_loops, "apply_alpaca_order was never called"
+    assert captured_loops[0] is main_loop, (
+        f"apply_alpaca_order ran on {captured_loops[0]!r}, "
+        f"expected main_loop {main_loop!r}"
+    )
