@@ -58,30 +58,70 @@ class TradeUpdatesStream:
         self._on_reconnect = on_reconnect
         self._max_backoff_s = max_backoff_s
         self._task: Optional[asyncio.Task] = None
+        self._consumer_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._queue: Optional[asyncio.Queue] = None
+        self.queue_full_dropped: int = 0
 
     def _backoff_delay(self, attempt: int) -> int:
         return min(2 ** attempt, self._max_backoff_s)
 
     async def _handle_event(self, event) -> None:
+        # Runs on alpaca's worker loop. Must NOT touch the asyncpg pool
+        # and must NOT await anything bound to the main service loop.
         try:
             snap = normalize_trade_update(event)
         except Exception:
             logger.exception("malformed trade update event")
             return
+        loop = self._loop
+        if loop is None or self._queue is None:
+            # Expected during shutdown: alpaca thread may deliver one more
+            # event between stop() clearing _loop and the websocket closing.
+            logger.warning("trade_stream_dropped_pre_start id=%s", snap.get("id"))
+            return
+        loop.call_soon_threadsafe(self._enqueue, snap)
+
+    def _enqueue(self, snap: dict) -> None:
+        # Runs on the main service loop via call_soon_threadsafe.
+        assert self._queue is not None  # set in start()
         try:
-            await self._core.apply_alpaca_order(snap, source="stream")
-        except Exception:
-            logger.exception("stream: apply_alpaca_order failed")
+            self._queue.put_nowait(snap)
+        except asyncio.QueueFull:
+            self.queue_full_dropped += 1
+            logger.error(
+                "trade_stream_queue_full id=%s dropped_total=%d",
+                snap.get("id"), self.queue_full_dropped,
+            )
+
+    async def _consume(self) -> None:
+        assert self._queue is not None
+        while True:
+            snap = await self._queue.get()
+            try:
+                await self._core.apply_alpaca_order(snap, source="stream")
+            except Exception:
+                logger.exception("stream: apply_alpaca_order failed")
+            finally:
+                self._queue.task_done()
 
     async def start(self) -> None:
         if self._task is not None:
             return
         self._stop_event.clear()
+        self._loop = asyncio.get_running_loop()
+        self._queue = asyncio.Queue(
+            maxsize=self._settings.execution_stream_queue_max,
+        )
+        self._consumer_task = asyncio.create_task(self._consume())
         self._task = asyncio.create_task(self._run())
 
     async def stop(self) -> None:
+        if self._stop_event.is_set() and self._task is None and self._consumer_task is None:
+            return
         self._stop_event.set()
+        # Stop accepting new events first.
         if self._task is not None:
             self._task.cancel()
             try:
@@ -89,6 +129,26 @@ class TradeUpdatesStream:
             except asyncio.CancelledError:
                 pass
             self._task = None
+        # Drain whatever is already queued, bounded by configured timeout.
+        if self._queue is not None and self._consumer_task is not None:
+            try:
+                await asyncio.wait_for(
+                    self._queue.join(),
+                    timeout=self._settings.execution_stream_shutdown_drain_s,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "trade_stream_drain_timeout pending=%d",
+                    self._queue.qsize(),
+                )
+            self._consumer_task.cancel()
+            try:
+                await self._consumer_task
+            except asyncio.CancelledError:
+                pass
+            self._consumer_task = None
+        self._queue = None
+        self._loop = None
 
     async def _run(self) -> None:
         attempt = 0

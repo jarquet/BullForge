@@ -136,6 +136,16 @@ class Settings:
             "EXECUTION_RECONCILER_STREAM_ENABLED", "true"
         ).lower() == "true"
     )
+    execution_stream_queue_max: int = field(
+        default_factory=lambda: int(
+            os.getenv("EXECUTION_STREAM_QUEUE_MAX", "1000")
+        )
+    )
+    execution_stream_shutdown_drain_s: float = field(
+        default_factory=lambda: float(
+            os.getenv("EXECUTION_STREAM_SHUTDOWN_DRAIN_S", "5")
+        )
+    )
 
     # Monitoring service
     monitoring_port: int = field(
