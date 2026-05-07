@@ -346,3 +346,179 @@ async def test_apply_alpaca_order_runs_on_main_loop_when_event_arrives_from_work
         f"apply_alpaca_order ran on {captured_loops[0]!r}, "
         f"expected main_loop {main_loop!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_queue_full_increments_counter_and_does_not_block(caplog):
+    """Producer does not block when queue is full; counter and log line fire."""
+    core = AsyncMock()
+    # Block apply_alpaca_order so the consumer cannot drain.
+    consume_gate = asyncio.Event()
+
+    async def _blocked(*args, **kwargs):
+        await consume_gate.wait()
+
+    core.apply_alpaca_order = AsyncMock(side_effect=_blocked)
+
+    stream = TradeUpdatesStream(
+        settings=MagicMock(
+            alpaca_api_key="k", alpaca_secret_key="s",
+            alpaca_base_url="https://paper-api.alpaca.markets",
+            execution_stream_queue_max=2,
+            execution_stream_shutdown_drain_s=0.5,
+        ),
+        core=core,
+        on_reconnect=AsyncMock(),
+    )
+    with _patch_trading_stream(stream):
+        await stream.start()
+        try:
+            snap_template = {
+                "id": "x", "symbol": "SPY", "side": "buy", "qty": 1.0,
+                "order_type": "market", "status": "filled",
+                "submitted_at": datetime.now(timezone.utc),
+                "filled_qty": 1.0, "filled_avg_price": 100.0,
+                "filled_at": datetime.now(timezone.utc),
+            }
+
+            with caplog.at_level("ERROR"):
+                # Consumer pulls one item immediately and blocks on consume_gate;
+                # queue capacity is 2 so the next 2 items fit, the 4th must drop.
+                for i in range(4):
+                    snap = dict(snap_template, id=f"x-{i}")
+                    stream._enqueue(snap)
+                # _enqueue is sync; if it ever blocked, this assertion path
+                # would never be reached. Counter must reflect the drop.
+                assert stream.queue_full_dropped >= 1
+                assert any(
+                    "trade_stream_queue_full" in rec.getMessage()
+                    for rec in caplog.records
+                )
+        finally:
+            consume_gate.set()
+            await stream.stop()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drains_queued_items_within_timeout():
+    """stop() waits for queued items up to drain timeout."""
+    core = AsyncMock()
+    processed: list = []
+
+    async def _slow(snap, *args, **kwargs):
+        await asyncio.sleep(0.05)
+        processed.append(snap["id"])
+
+    core.apply_alpaca_order = AsyncMock(side_effect=_slow)
+
+    stream = TradeUpdatesStream(
+        settings=MagicMock(
+            alpaca_api_key="k", alpaca_secret_key="s",
+            alpaca_base_url="https://paper-api.alpaca.markets",
+            execution_stream_queue_max=1000,
+            execution_stream_shutdown_drain_s=2.0,
+        ),
+        core=core,
+        on_reconnect=AsyncMock(),
+    )
+    with _patch_trading_stream(stream):
+        await stream.start()
+        snap_template = {
+            "id": "x", "symbol": "SPY", "side": "buy", "qty": 1.0,
+            "order_type": "market", "status": "filled",
+            "submitted_at": datetime.now(timezone.utc),
+            "filled_qty": 1.0, "filled_avg_price": 100.0,
+            "filled_at": datetime.now(timezone.utc),
+        }
+        for i in range(5):
+            stream._enqueue(dict(snap_template, id=f"s-{i}"))
+
+        await stream.stop()
+    assert sorted(processed) == [f"s-{i}" for i in range(5)]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_timeout_logs_pending_and_cancels_consumer(caplog):
+    """stop() logs a drain-timeout when work exceeds drain budget."""
+    core = AsyncMock()
+
+    async def _very_slow(*args, **kwargs):
+        await asyncio.sleep(10)
+
+    core.apply_alpaca_order = AsyncMock(side_effect=_very_slow)
+
+    stream = TradeUpdatesStream(
+        settings=MagicMock(
+            alpaca_api_key="k", alpaca_secret_key="s",
+            alpaca_base_url="https://paper-api.alpaca.markets",
+            execution_stream_queue_max=1000,
+            execution_stream_shutdown_drain_s=0.1,
+        ),
+        core=core,
+        on_reconnect=AsyncMock(),
+    )
+    with _patch_trading_stream(stream):
+        await stream.start()
+        snap_template = {
+            "id": "x", "symbol": "SPY", "side": "buy", "qty": 1.0,
+            "order_type": "market", "status": "filled",
+            "submitted_at": datetime.now(timezone.utc),
+            "filled_qty": 1.0, "filled_avg_price": 100.0,
+            "filled_at": datetime.now(timezone.utc),
+        }
+        for i in range(3):
+            stream._enqueue(dict(snap_template, id=f"t-{i}"))
+
+        with caplog.at_level("WARNING"):
+            await stream.stop()
+            assert any(
+                "trade_stream_drain_timeout" in rec.getMessage()
+                for rec in caplog.records
+            )
+
+
+@pytest.mark.asyncio
+async def test_consumer_continues_after_apply_raises(caplog):
+    """One bad event must not stop the consumer."""
+    core = AsyncMock()
+    seen: list = []
+    counter = {"n": 0}
+
+    async def _maybe_fail(snap, *args, **kwargs):
+        counter["n"] += 1
+        if counter["n"] == 3:
+            raise RuntimeError("boom")
+        seen.append(snap["id"])
+
+    core.apply_alpaca_order = AsyncMock(side_effect=_maybe_fail)
+
+    stream = TradeUpdatesStream(
+        settings=MagicMock(
+            alpaca_api_key="k", alpaca_secret_key="s",
+            alpaca_base_url="https://paper-api.alpaca.markets",
+            execution_stream_queue_max=1000,
+            execution_stream_shutdown_drain_s=2.0,
+        ),
+        core=core,
+        on_reconnect=AsyncMock(),
+    )
+    with _patch_trading_stream(stream):
+        await stream.start()
+        snap_template = {
+            "id": "x", "symbol": "SPY", "side": "buy", "qty": 1.0,
+            "order_type": "market", "status": "filled",
+            "submitted_at": datetime.now(timezone.utc),
+            "filled_qty": 1.0, "filled_avg_price": 100.0,
+            "filled_at": datetime.now(timezone.utc),
+        }
+        with caplog.at_level("ERROR"):
+            for i in range(5):
+                stream._enqueue(dict(snap_template, id=f"e-{i}"))
+            await asyncio.wait_for(stream._queue.join(), timeout=2.0)
+        await stream.stop()
+
+    assert sorted(seen) == ["e-0", "e-1", "e-3", "e-4"]
+    assert any(
+        "stream: apply_alpaca_order failed" in rec.getMessage()
+        for rec in caplog.records
+    )
