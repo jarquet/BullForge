@@ -1377,74 +1377,68 @@ class Database:
     ) -> UpsertResult:
         alpaca_id = snapshot["id"]
         canonical_status = _normalize_alpaca_status(snapshot["status"])
-        inserted = False
-        old_status: Optional[str] = None
         async with self.pool.acquire() as conn:
             async with conn.transaction():
+                # SELECT FOR UPDATE captures the pre-image (for old_status
+                # in the returned UpsertResult) and locks any existing row.
+                # On a missing row no lock is taken, so two concurrent
+                # writers can both observe existing=None - the INSERT ...
+                # ON CONFLICT below makes the actual write atomic at the
+                # unique-index level. That is what eliminates the
+                # UniqueViolationError race between OrderExecutor's
+                # submit-side INSERT and the trade-update stream consumer.
                 existing = await conn.fetchrow(
                     "SELECT status, origin FROM orders "
                     "WHERE alpaca_order_id = $1 FOR UPDATE",
                     alpaca_id,
                 )
+                old_status: Optional[str] = (
+                    existing["status"] if existing is not None else None
+                )
                 now_ts = datetime.now(timezone.utc)
-                if existing is None:
-                    row = await conn.fetchrow(
-                        """
-                        INSERT INTO orders
-                          (symbol, side, quantity, order_type, submitted_at,
-                           signal_strength, alpaca_order_id, status,
-                           filled_at, filled_price, filled_quantity,
-                           origin, last_reconciled_at, reconcile_source)
-                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
-                                'external',$12,$13)
-                        RETURNING id, symbol, side, quantity, order_type,
-                                  submitted_at, signal_strength, alpaca_order_id,
-                                  status, filled_at, filled_price, filled_quantity,
-                                  limit_price, origin, last_reconciled_at,
-                                  reconcile_source
-                        """,
-                        snapshot["symbol"],
-                        snapshot["side"],
-                        float(snapshot["qty"]),
-                        snapshot.get("order_type", "market"),
-                        snapshot.get("submitted_at") or now_ts,
-                        0.0,
-                        alpaca_id,
-                        canonical_status,
-                        snapshot.get("filled_at"),
-                        snapshot.get("filled_avg_price"),
-                        snapshot.get("filled_qty"),
-                        now_ts,
-                        source,
-                    )
-                    inserted = True
-
-                else:
-                    old_status = existing["status"]
-                    row = await conn.fetchrow(
-                        """
-                        UPDATE orders
-                        SET status = $2,
-                            filled_at = COALESCE($3, filled_at),
-                            filled_price = COALESCE($4, filled_price),
-                            filled_quantity = COALESCE($5, filled_quantity),
-                            last_reconciled_at = $6,
-                            reconcile_source = $7
-                        WHERE alpaca_order_id = $1
-                        RETURNING id, symbol, side, quantity, order_type,
-                                  submitted_at, signal_strength, alpaca_order_id,
-                                  status, filled_at, filled_price, filled_quantity,
-                                  limit_price, origin, last_reconciled_at,
-                                  reconcile_source
-                        """,
-                        alpaca_id,
-                        canonical_status,
-                        snapshot.get("filled_at"),
-                        snapshot.get("filled_avg_price"),
-                        snapshot.get("filled_qty"),
-                        now_ts,
-                        source,
-                    )
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO orders
+                      (symbol, side, quantity, order_type, submitted_at,
+                       signal_strength, alpaca_order_id, status,
+                       filled_at, filled_price, filled_quantity,
+                       origin, last_reconciled_at, reconcile_source)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
+                            'external',$12,$13)
+                    ON CONFLICT (alpaca_order_id)
+                      WHERE alpaca_order_id IS NOT NULL
+                    DO UPDATE SET
+                        status = EXCLUDED.status,
+                        filled_at = COALESCE(EXCLUDED.filled_at,
+                                             orders.filled_at),
+                        filled_price = COALESCE(EXCLUDED.filled_price,
+                                                orders.filled_price),
+                        filled_quantity = COALESCE(EXCLUDED.filled_quantity,
+                                                   orders.filled_quantity),
+                        last_reconciled_at = EXCLUDED.last_reconciled_at,
+                        reconcile_source = EXCLUDED.reconcile_source
+                    RETURNING id, symbol, side, quantity, order_type,
+                              submitted_at, signal_strength, alpaca_order_id,
+                              status, filled_at, filled_price, filled_quantity,
+                              limit_price, origin, last_reconciled_at,
+                              reconcile_source,
+                              (xmax = 0) AS was_inserted
+                    """,
+                    snapshot["symbol"],
+                    snapshot["side"],
+                    float(snapshot["qty"]),
+                    snapshot.get("order_type", "market"),
+                    snapshot.get("submitted_at") or now_ts,
+                    0.0,
+                    alpaca_id,
+                    canonical_status,
+                    snapshot.get("filled_at"),
+                    snapshot.get("filled_avg_price"),
+                    snapshot.get("filled_qty"),
+                    now_ts,
+                    source,
+                )
+                inserted = bool(row["was_inserted"])
         order = Order(
             id=row["id"], symbol=row["symbol"], side=row["side"],
             quantity=row["quantity"], order_type=row["order_type"],

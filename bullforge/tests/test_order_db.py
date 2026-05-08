@@ -268,10 +268,11 @@ async def test_upsert_inserts_when_no_existing_row(settings, mock_pool):
     tx.__aexit__ = AsyncMock(return_value=False)
     conn.transaction = MagicMock(return_value=tx)
 
-    # Two fetchrow calls: (1) SELECT FOR UPDATE returns None, (2) INSERT RETURNING * row
+    # Two fetchrow calls: (1) SELECT FOR UPDATE returns None,
+    # (2) INSERT ... ON CONFLICT DO UPDATE RETURNING ..., (xmax = 0) AS was_inserted
     conn.fetchrow = AsyncMock(side_effect=[
         None,  # SELECT ... FOR UPDATE — no existing row
-        {  # INSERT ... RETURNING * — returned directly from the transaction
+        {  # INSERT path of the ON CONFLICT statement; xmax=0 so was_inserted=True
             "id": 42, "symbol": "SPY", "side": "buy", "quantity": 3.0,
             "order_type": "market", "submitted_at": now,
             "signal_strength": 0.0, "alpaca_order_id": "alp-new-1",
@@ -279,6 +280,7 @@ async def test_upsert_inserts_when_no_existing_row(settings, mock_pool):
             "filled_price": 420.0, "filled_quantity": 3.0,
             "limit_price": None, "origin": "external",
             "last_reconciled_at": now, "reconcile_source": "startup",
+            "was_inserted": True,
         },
     ])
     db = Database(settings)
@@ -300,7 +302,7 @@ async def test_upsert_inserts_when_no_existing_row(settings, mock_pool):
     assert result.old_status is None
     assert result.new_status == "filled"
     assert result.order.origin == "external"
-    # Exactly 2 fetchrow calls: SELECT FOR UPDATE + INSERT RETURNING *
+    # Exactly 2 fetchrow calls: SELECT FOR UPDATE + INSERT ON CONFLICT RETURNING
     assert conn.fetchrow.await_count == 2
     db.get_order_by_alpaca_id.assert_not_called()
 
@@ -316,10 +318,12 @@ async def test_upsert_updates_existing_row(settings, mock_pool):
     tx.__aexit__ = AsyncMock(return_value=False)
     conn.transaction = MagicMock(return_value=tx)
 
-    # Two fetchrow calls: (1) SELECT FOR UPDATE returns existing row, (2) UPDATE RETURNING * row
+    # Two fetchrow calls: (1) SELECT FOR UPDATE returns existing row,
+    # (2) INSERT ... ON CONFLICT DO UPDATE RETURNING ..., (xmax != 0)
+    # AS was_inserted=False (this is the conflict-update path).
     conn.fetchrow = AsyncMock(side_effect=[
         {"status": "submitted", "origin": "internal"},  # existing SELECT FOR UPDATE
-        {  # UPDATE ... RETURNING * — returned directly from the transaction
+        {  # ON CONFLICT DO UPDATE path; xmax!=0 so was_inserted=False
             "id": 7, "symbol": "SPY", "side": "buy", "quantity": 1.0,
             "order_type": "market", "submitted_at": now,
             "signal_strength": 0.5, "alpaca_order_id": "alp-exist",
@@ -327,6 +331,7 @@ async def test_upsert_updates_existing_row(settings, mock_pool):
             "filled_price": None, "filled_quantity": None,
             "limit_price": None, "origin": "internal",
             "last_reconciled_at": now, "reconcile_source": "poll",
+            "was_inserted": False,
         },
     ])
     db = Database(settings)
@@ -346,7 +351,7 @@ async def test_upsert_updates_existing_row(settings, mock_pool):
     assert result.old_status == "submitted"
     assert result.new_status == "cancelled"  # normalized
     assert result.order.origin == "internal"  # preserved
-    # Exactly 2 fetchrow calls: SELECT FOR UPDATE + UPDATE RETURNING *
+    # Exactly 2 fetchrow calls: SELECT FOR UPDATE + INSERT ON CONFLICT RETURNING
     assert conn.fetchrow.await_count == 2
     db.get_order_by_alpaca_id.assert_not_called()
 
