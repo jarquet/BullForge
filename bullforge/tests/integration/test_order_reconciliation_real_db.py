@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import asyncpg
@@ -108,3 +109,48 @@ async def test_status_check_rejects_garbage(real_db):
                 "WHERE alpaca_order_id=$1",
                 "alp-check",
             )
+
+
+async def test_upsert_handles_concurrent_inserts_for_same_alpaca_id(real_db):
+    """
+    Regression: when OrderExecutor INSERTs an order and the trade-update
+    stream consumer concurrently upserts the same alpaca_order_id, the
+    second writer must not raise UniqueViolationError.
+
+    Pre-fix: SELECT FOR UPDATE on a missing row locks nothing, so two
+    concurrent transactions both see existing=None and both try INSERT;
+    the unique index on alpaca_order_id raises UniqueViolationError on
+    whichever commits second. The race is timing-dependent, so we fire
+    20 concurrent upserts on the same alpaca_id - well over pool max
+    parallelism (10) - so at least one collision is virtually certain
+    if the race exists.
+    """
+    snap = _snapshot(id="alp-race-concurrent", status="new")
+
+    sources = ["submit", "stream"] * 10
+    tasks = [
+        real_db.upsert_order_from_alpaca(snap, source=src)
+        for src in sources
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    errors = [r for r in results if isinstance(r, BaseException)]
+    assert errors == [], (
+        f"upsert raised under concurrent same-alpaca_id calls: "
+        f"{type(errors[0]).__name__}: {errors[0]}"
+    )
+
+    async with real_db.pool.acquire() as conn:
+        count = await conn.fetchval(
+            "SELECT COUNT(*) FROM orders WHERE alpaca_order_id = $1",
+            "alp-race-concurrent",
+        )
+    assert count == 1, "expected exactly one orders row for the alpaca_id"
+
+    inserted_count = sum(
+        1 for r in results
+        if not isinstance(r, BaseException) and r.inserted
+    )
+    assert inserted_count == 1, (
+        f"expected exactly one inserted, got {inserted_count}"
+    )
