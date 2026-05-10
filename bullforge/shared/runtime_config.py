@@ -159,6 +159,19 @@ CONFIG_SCHEMA: dict[str, dict[str, Any]] = {
         ),
         "reference": "https://en.wikipedia.org/wiki/Market_exposure",
     },
+    "execution_hysteresis_bars": {
+        "default": 0, "type": "int", "min": 0, "max": 100,
+        "label": "Direction Hysteresis (bars)",
+        "description": (
+            "Number of consecutive bars a new aggregated direction must "
+            "persist before becoming the emitted direction. 0 disables "
+            "hysteresis (legacy behavior — every bar can flip). With the "
+            "value set to 5, a fresh direction must be confirmed by 5 "
+            "consecutive ticks before the system acts on it. Suppressed "
+            "ticks return no signal, so the existing position simply holds."
+        ),
+        "reference": "https://en.wikipedia.org/wiki/Hysteresis",
+    },
     "label_horizons_1m": {
         "default": [1, 2, 3, 5, 8, 10, 20, 40, 60, 80, 100, 120],
         "type": "json",

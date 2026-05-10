@@ -119,6 +119,7 @@ EXECUTION_KEYS = (
     "execution_max_position_pct",
     "execution_max_positions",
     "execution_max_exposure",
+    "execution_hysteresis_bars",
 )
 
 
@@ -140,6 +141,9 @@ def test_execution_key_defaults_and_bounds():
     assert CONFIG_SCHEMA["execution_max_position_pct"]["default"] == 0.02
     assert CONFIG_SCHEMA["execution_max_positions"]["default"] == 5
     assert CONFIG_SCHEMA["execution_max_exposure"]["default"] == 0.2
+    assert CONFIG_SCHEMA["execution_hysteresis_bars"]["default"] == 0
+    assert CONFIG_SCHEMA["execution_hysteresis_bars"]["min"] == 0
+    assert CONFIG_SCHEMA["execution_hysteresis_bars"]["max"] == 100
 
 
 def test_meta_config_keys_present():
