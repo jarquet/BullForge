@@ -67,6 +67,39 @@ async def test_get_positions(broker, mock_client):
 
 
 @pytest.mark.asyncio
+async def test_get_positions_normalizes_crypto_slash(broker, mock_client):
+    """Alpaca's get_all_positions returns 'BTCUSD'/'ETHUSD' without the slash.
+
+    Without normalization, PositionTracker keys positions by the no-slash
+    symbol while the rest of the pipeline uses 'BTC/USD' — every
+    get_position lookup misses, check_exit is never called, and crypto
+    longs accumulate uncloseably. This test pins the normalization so
+    that regression doesn't return.
+    """
+    btc = MagicMock()
+    btc.symbol = "BTCUSD"
+    btc.qty = "0.025"
+    btc.side = "long"
+    btc.avg_entry_price = "80000.00"
+    btc.current_price = "80100.00"
+    btc.unrealized_pl = "2.50"
+    btc.market_value = "2002.50"
+    eth = MagicMock()
+    eth.symbol = "ETHUSD"
+    eth.qty = "1.5"
+    eth.side = "long"
+    eth.avg_entry_price = "2300.00"
+    eth.current_price = "2320.00"
+    eth.unrealized_pl = "30.00"
+    eth.market_value = "3480.00"
+    mock_client.get_all_positions.return_value = [btc, eth]
+
+    result = await broker.get_positions()
+
+    assert {p["symbol"] for p in result} == {"BTC/USD", "ETH/USD"}
+
+
+@pytest.mark.asyncio
 async def test_get_position_found(broker, mock_client):
     mock_pos = MagicMock()
     mock_pos.symbol = "SPY"

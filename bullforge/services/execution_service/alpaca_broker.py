@@ -10,7 +10,7 @@ from alpaca.trading.requests import MarketOrderRequest, GetOrdersRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 
 from shared.config import Settings
-from shared.symbol_utils import is_crypto
+from shared.symbol_utils import is_crypto, normalize_alpaca_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +132,7 @@ class AlpacaBroker:
             submitted_at = submitted_at.replace(tzinfo=timezone.utc)
         return {
             "id": str(o.id),
-            "symbol": o.symbol,
+            "symbol": normalize_alpaca_symbol(o.symbol),
             "side": side,
             "qty": float(o.qty),
             "order_type": order_type,
@@ -148,7 +148,7 @@ class AlpacaBroker:
     @staticmethod
     def _format_position(p) -> dict:
         return {
-            "symbol": p.symbol,
+            "symbol": normalize_alpaca_symbol(p.symbol),
             "qty": float(p.qty),
             "side": str(p.side),
             "avg_entry_price": float(p.avg_entry_price),
