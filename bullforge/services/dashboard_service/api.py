@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from aiohttp import web
 
 from shared.db import Database
+from shared.halt import is_full_halt_tier
 from shared.time_window import parse_time_window
 
 from services.dashboard_service.backtests_api import register_backtests_routes
@@ -65,7 +66,7 @@ async def _handle_status(request: web.Request) -> web.Response:
             account["timestamp"].isoformat() if account else None
         ),
         "halts": [_serialize_dict(h) for h in halts],
-        "is_halted": len(halts) > 0 and any(h["tier"] == 4 for h in halts),
+        "is_halted": any(is_full_halt_tier(h["tier"]) for h in halts),
         "models": [
             {
                 "model_id": m.model_id,

@@ -254,3 +254,21 @@ async def test_metrics_history_rejects_malformed_from(aiohttp_client, mock_db):
         "/api/metrics/history?category=trading&from=not-a-date",
     )
     assert resp.status == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tier,expected", [(3, False), (4, True), (5, True)])
+async def test_api_status_is_halted_for_full_halt_tiers(
+    client, mock_db, tier, expected,
+):
+    # Tier 5 is a manual /halt; it is a full halt like tier 4.
+    mock_db.get_active_halts = AsyncMock(return_value=[{
+        "id": 1, "tier": tier, "reason": "r", "direction": None,
+        "activated_at": datetime(2026, 4, 13, 14, 0, 0, tzinfo=timezone.utc),
+        "resolved_at": None,
+    }])
+
+    resp = await client.get("/api/status")
+
+    assert resp.status == 200
+    assert (await resp.json())["is_halted"] is expected
