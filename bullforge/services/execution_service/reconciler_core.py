@@ -13,6 +13,13 @@ logger = logging.getLogger(__name__)
 
 TERMINAL_STATUSES = {"filled", "cancelled", "rejected", "expired"}
 
+# Absolute tolerance (per unit of fill quantity) for matching a closing fill
+# against open trade rows. Fractional equity/crypto quantities are floats,
+# and a float sum of open lots can exceed the broker-reported close quantity
+# by ~1e-16 relative (0.1 + 0.2 > 0.3), which used to push an exact full
+# close into the partial-drain branch and strand the last lot as open.
+_QTY_REL_TOL = 1e-9
+
 _MONITORING_CHANNEL = "monitoring:reconciler"
 _ALERTS_CHANNEL = "monitoring:alerts"
 
@@ -42,6 +49,18 @@ class ReconcilerCore:
         new_status = result.new_status
         inserted = result.inserted
         order = result.order
+
+        if old_status in TERMINAL_STATUSES and new_status not in TERMINAL_STATUSES:
+            # Stale snapshot (e.g. a late "accepted" stream event after the
+            # submit path already saw "filled"). The DB layer refuses the
+            # regression; never treat it as a transition here either, or a
+            # later fill event would book the same fill a second time.
+            logger.info(
+                "reconciler ignoring stale snapshot alpaca_id=%s stored=%s "
+                "incoming=%s source=%s",
+                order.alpaca_order_id, old_status, new_status, source,
+            )
+            return
 
         status_changed = old_status != new_status
         if status_changed:
@@ -94,12 +113,15 @@ class ReconcilerCore:
 
         open_trades = await self._db.get_open_trades(order.symbol)
 
-        is_closing = bool(open_trades) and (
-            (open_trades[0].side == "long" and order.side == "sell")
-            or (open_trades[0].side == "short" and order.side == "buy")
-        )
+        # A sell closes longs and a buy closes shorts. Only rows on that side
+        # are candidates: the old check looked at open_trades[0] alone and
+        # then drained every open row regardless of side, so one stray row
+        # of the wrong side (oldest first) flipped a closing fill into a new
+        # entry, or closed a long with a buy.
+        closing_side = "long" if order.side == "sell" else "short"
+        closable = [t for t in open_trades if t.side == closing_side]
 
-        if not is_closing:
+        if not closable:
             trade_side = "long" if order.side == "buy" else "short"
             trade = Trade(
                 symbol=order.symbol,
@@ -112,13 +134,14 @@ class ReconcilerCore:
             await self._db.insert_trade(trade)
             return
 
-        # Closing fill — drain N rows.
+        # Closing fill — drain N rows (FIFO by entry_time).
         fq = float(order.filled_quantity or order.quantity)
-        total_open = sum(float(t.quantity) for t in open_trades)
+        total_open = sum(float(t.quantity) for t in closable)
+        tol = _QTY_REL_TOL * max(1.0, fq)
 
-        if fq >= total_open:
-            rows_to_close = list(open_trades)
-            if fq > total_open:
+        if fq >= total_open - tol:
+            rows_to_close = list(closable)
+            if fq > total_open + tol:
                 await self._publish_counter(
                     "reconciler_anomalies_total", kind="over_close",
                 )
@@ -126,14 +149,14 @@ class ReconcilerCore:
         else:
             rows_to_close = []
             running = 0.0
-            for t in open_trades:
-                if running + float(t.quantity) <= fq:
+            for t in closable:
+                if running + float(t.quantity) <= fq + tol:
                     rows_to_close.append(t)
                     running += float(t.quantity)
                 else:
                     break
             residual = fq - running
-            if residual > 0:
+            if residual > tol:
                 await self._publish_counter(
                     "reconciler_anomalies_total",
                     kind="partial_drain_residual",
