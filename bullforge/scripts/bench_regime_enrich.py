@@ -2,8 +2,7 @@
 
 Settles whether the append_bar docstring claim of "tens of ms" is
 accurate or whether the 30-day rolling median is actually closer to
-hundreds of ms. See TODO.md ("RegimeBuilder._enrich cost on every SPY
-tick") and CLAUDE.md run instructions — invoke via:
+hundreds of ms, a cost paid on every SPY tick. Invoke via:
 
     cd bullforge && bin/test python scripts/bench_regime_enrich.py
 

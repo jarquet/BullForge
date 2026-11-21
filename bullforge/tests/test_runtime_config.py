@@ -209,7 +209,7 @@ def test_meta_inference_enabled_uses_bool_type():
 
 def test_meta_inference_enabled_existing_redis_values_round_trip():
     # Operators set this via `redis-cli HSET bullforge:config
-    # meta_inference_enabled true` (per TODO.md). The new bool _parse
+    # meta_inference_enabled true` (the manual operator step). The new bool _parse
     # path must accept those raw strings without operator action.
     assert _parse("true", "bool") is True
     assert _parse("false", "bool") is False

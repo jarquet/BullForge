@@ -54,7 +54,7 @@ class RegimeBuilder:
         clever" beats a partial update that has to re-derive the
         rolling 30-day vol-regime median from a sliding window; if the
         cost ever surfaces as a real problem, swap to an incremental
-        rewrite (see TODO.md).
+        rewrite.
         """
         if timestamp.tzinfo is None or timestamp.utcoffset() != timedelta(0):
             raise ValueError(
