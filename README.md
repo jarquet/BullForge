@@ -307,7 +307,7 @@ bullforge/
   shared/                  config, db (asyncpg), redis, domain models, runtime config
   migrations/              numbered SQL migrations (applied automatically)
   scripts/                 backtest CLI, Alpaca order replay, benchmarks
-  tests/                   unit tests; integration/ and meta/ need TimescaleDB + Redis
+  tests/                   test_*.py and meta/ (mostly hermetic); integration/ needs TimescaleDB + Redis
   docs/runbooks/           operational runbooks (backtest, model service, reconciliation)
   bin/                     build / up / down / status / test wrappers around docker compose
 docs/
@@ -373,3 +373,9 @@ enforcement of full trading halts:
   has no orchestration, secrets manager, or multi-node story.
 - **Market data and trading depend on Alpaca.** The broker and data clients are
   Alpaca-specific (`alpaca-py`).
+
+## License
+
+Copyright (c) 2026 Jonathan Farro. All rights reserved. The source is published for
+viewing and evaluation only; no license to use, copy, modify, or distribute it is
+granted. See [LICENSE](LICENSE).
