@@ -171,8 +171,9 @@ class TelegramBot:
                     "Manual full halt via Telegram", tier=5,
                 )
                 await query.edit_message_text(
-                    text="[HALTED] All trading has been stopped.\n\n"
-                    "Open positions retain their bracket orders on Alpaca.",
+                    text="[HALTED] New entries are blocked.\n\n"
+                    "Exit signals for open positions still run. "
+                    "Use /resume to lift the halt.",
                 )
                 await query.answer("System halted")
                 logger.critical("Full halt triggered via Telegram")
@@ -357,7 +358,8 @@ async def handle_halt(
     # tier=5 distinguishes manual Telegram halts from automated tier-4 circuit breakers.
     await halt_manager.trigger_halt("Manual halt via Telegram", tier=5)
     await update.message.reply_text(
-        "Trading halted. Use /resume to restart."
+        "Trading halted: new entries are blocked, exits still run. "
+        "Use /resume to lift the halt."
     )
 
 

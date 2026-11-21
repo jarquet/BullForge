@@ -205,3 +205,15 @@ async def test_cmd_start(bot):
     update.message.reply_text.assert_called_once()
     text = update.message.reply_text.call_args[0][0]
     assert "BullForge" in text
+
+
+@pytest.mark.asyncio
+async def test_callback_halt_yes_text_describes_entry_block(bot):
+    update = _make_update("halt_yes")
+
+    await bot._on_callback(update, None)
+
+    text = update.callback_query.edit_message_text.call_args[1]["text"].lower()
+    assert "bracket" not in text
+    assert "entries" in text
+    assert "exit" in text

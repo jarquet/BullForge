@@ -197,3 +197,17 @@ def test_format_position_closed_short_duration():
     # Check the Hold line has no minutes segment.
     hold_line = [l for l in text.splitlines() if l.startswith("Hold:")][0]
     assert "m " not in hold_line
+
+
+def test_full_halt_texts_describe_entry_block():
+    # Orders are plain market orders (no brackets); a halt blocks new
+    # entries and exits keep running through the executor.
+    from services.monitoring_service.telegram_alerts import format_status
+
+    confirm, _ = format_confirmation("full_halt")
+    status = format_status(is_halted=True, model_statuses=[], active_halts=[])
+
+    for text in (confirm, status):
+        assert "bracket" not in text.lower()
+        assert "entries" in text.lower()
+        assert "exit" in text.lower()

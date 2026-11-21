@@ -138,3 +138,11 @@ async def test_models_command(update, context, deps):
     await handle_models(update, context, **deps)
     sent = update.message.reply_text.call_args[0][0]
     assert "SPY" in sent
+
+
+@pytest.mark.asyncio
+async def test_halt_reply_describes_entry_block(update, context, deps):
+    await handle_halt(update, context, **deps)
+    sent = update.message.reply_text.call_args[0][0].lower()
+    assert "entries" in sent
+    assert "exit" in sent

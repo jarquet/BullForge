@@ -137,9 +137,9 @@ def format_alert(alert: dict) -> Tuple[str, ButtonLayout]:
 def format_confirmation(action: str) -> Tuple[str, ButtonLayout]:
     if action == "full_halt":
         text = (
-            "Are you sure you want to halt ALL trading?\n\n"
-            "This will stop all signal processing. "
-            "Open positions keep their bracket orders on Alpaca."
+            "Are you sure you want to halt trading?\n\n"
+            "New entries will be blocked until /resume. "
+            "Exit signals for open positions still run."
         )
         buttons = [
             [("Yes, Halt Everything", "halt_yes"), ("Cancel", "halt_no")],
@@ -161,7 +161,7 @@ def format_status(
     lines = ["BullForge System Status", ""]
 
     if is_halted:
-        lines.append("[HALTED] Trading is stopped")
+        lines.append("[HALTED] New entries blocked; exits still run")
     else:
         lines.append("[ACTIVE] Trading is running")
 
