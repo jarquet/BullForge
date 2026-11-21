@@ -6,6 +6,8 @@ from shared.config import Settings
 from shared.db import Database
 from shared.models import ModelMetadata
 
+pytestmark = pytest.mark.services  # needs TimescaleDB
+
 
 @pytest_asyncio.fixture
 async def db():

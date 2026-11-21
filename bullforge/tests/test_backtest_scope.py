@@ -45,6 +45,7 @@ def _meta(**overrides) -> ModelMetadata:
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_insert_model_metadata_live_writes_nulls():
     settings = Settings()
     live = Database(settings)
@@ -67,6 +68,7 @@ async def test_insert_model_metadata_live_writes_nulls():
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_insert_model_metadata_sandbox_writes_scope():
     settings = Settings()
     live = Database(settings)
@@ -93,6 +95,7 @@ async def test_insert_model_metadata_sandbox_writes_scope():
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_query_all_active_models_scoped_filters_to_run():
     settings = Settings()
     live = Database(settings)
@@ -119,6 +122,7 @@ async def test_query_all_active_models_scoped_filters_to_run():
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_deactivate_models_scoped_does_not_touch_other_runs():
     settings = Settings()
     live = Database(settings)
@@ -150,6 +154,7 @@ from shared.models import Prediction
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_insert_prediction_sandbox_writes_scope():
     settings = Settings()
     live = Database(settings)
@@ -190,6 +195,7 @@ from shared.models import Order
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_insert_order_sandbox_writes_scope():
     settings = Settings()
     live = Database(settings)
@@ -229,6 +235,7 @@ import asyncio
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_concurrent_sandbox_writes_do_not_cross_contaminate():
     """
     Simulates two concurrent backtest runs training a model for the same

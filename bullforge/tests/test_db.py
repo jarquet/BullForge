@@ -31,6 +31,7 @@ async def db():
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_connect_and_disconnect():
     settings = Settings()
     database = Database(settings)
@@ -40,6 +41,7 @@ async def test_connect_and_disconnect():
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_run_migrations(db):
     """After connect, migrations should have created tables."""
     async with db.pool.acquire() as conn:
@@ -66,6 +68,7 @@ async def test_run_migrations(db):
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_ledger_records_all_migrations(db):
     """After connect, schema_migrations contains every .sql filename
     currently in bullforge/migrations/."""
@@ -76,6 +79,7 @@ async def test_ledger_records_all_migrations(db):
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_ledger_skips_already_applied(db, tmp_path):
     """A non-idempotent sentinel migration runs once across two
     _run_migrations calls. If the ledger correctly records and skips,
@@ -123,6 +127,7 @@ async def test_ledger_skips_already_applied(db, tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_cutover_bulk_prepopulate():
     """Production-cutover scenario: a populated DB whose schema_migrations
     table doesn't exist yet (because B1 hasn't shipped). On reconnect,
@@ -174,6 +179,7 @@ async def test_cutover_bulk_prepopulate():
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_insert_and_query_bar(db):
     from datetime import datetime, timezone
     from shared.models import Bar
@@ -197,6 +203,7 @@ async def test_insert_and_query_bar(db):
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_insert_and_query_bar_fractional_volume(db):
     """Round-trip a fractional-volume crypto bar through the schema.
     Regression for BIGINT column: 0.7 round-tripped as 0 before the widening."""
@@ -221,6 +228,7 @@ async def test_insert_and_query_bar_fractional_volume(db):
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_query_bars_accepts_datetime_since(db):
     """asyncpg refuses to coerce str → TIMESTAMPTZ when binding parameters,
     so query_bars must accept a datetime for `since`. Regression: the meta
@@ -249,6 +257,7 @@ async def test_query_bars_accepts_datetime_since(db):
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_insert_bar_upsert_on_duplicate(db):
     """Inserting a bar with the same symbol+timestamp should update, not error."""
     from datetime import datetime, timezone
@@ -270,6 +279,7 @@ async def test_insert_bar_upsert_on_duplicate(db):
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_get_bar_range_empty(db):
     earliest, latest = await db.get_bar_range("XYZ", "1m")
     assert earliest is None
@@ -277,6 +287,7 @@ async def test_get_bar_range_empty(db):
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_get_bar_range_populated(db):
     from datetime import datetime, timezone, timedelta
     from shared.models import Bar
@@ -296,6 +307,7 @@ async def test_get_bar_range_populated(db):
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_get_bar_range_timeframe_isolated(db):
     from datetime import datetime, timezone, timedelta
     from shared.models import Bar

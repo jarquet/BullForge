@@ -1,0 +1,100 @@
+name: tests
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONPATH: .
+  # Settings() reads these; tests never reach Alpaca or Telegram.
+  ALPACA_API_KEY: fake
+  ALPACA_SECRET_KEY: fake
+  ALPACA_BASE_URL: https://paper-api.alpaca.markets
+
+jobs:
+  unit:
+    name: Unit tests (hermetic, no services)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: bullforge
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: bullforge/services/*/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # CPU-only torch keeps the install small; the unit layer never uses a GPU.
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          cat services/*/requirements.txt | sort -u > /tmp/requirements-all.txt
+          pip install -r /tmp/requirements-all.txt pytest pytest-asyncio pytest-aiohttp
+
+      - name: Run hermetic tests
+        run: python -m pytest tests/test_*.py tests/meta -m "not services" -q
+
+  services:
+    name: Service-backed tests (TimescaleDB + Redis)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: bullforge
+    services:
+      timescaledb:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_USER: bullforge
+          POSTGRES_PASSWORD: bullforge_dev
+          POSTGRES_DB: bullforge_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U bullforge"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TIMESCALEDB_HOST: localhost
+      TIMESCALEDB_PORT: "5432"
+      TIMESCALEDB_USER: bullforge
+      TIMESCALEDB_PASSWORD: bullforge_dev
+      TIMESCALEDB_DB: bullforge_test
+      REDIS_HOST: localhost
+      REDIS_PORT: "6379"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: bullforge/services/*/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          cat services/*/requirements.txt | sort -u > /tmp/requirements-all.txt
+          pip install -r /tmp/requirements-all.txt pytest pytest-asyncio pytest-aiohttp
+
+      - name: Run service-backed tests
+        run: python -m pytest tests -m services -q

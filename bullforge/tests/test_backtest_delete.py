@@ -18,7 +18,7 @@ from services.dashboard_service.backtests_api import _delete_run_impl
 from services.dashboard_service.backtests_api import register_backtests_routes
 
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.services]
 
 
 @pytest_asyncio.fixture

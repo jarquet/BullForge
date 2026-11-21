@@ -9,7 +9,7 @@ from shared.db import Database
 from services.backtest_service.results_db import BacktestResultsDB
 
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.services]
 
 
 UTC = timezone.utc

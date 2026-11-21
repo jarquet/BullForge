@@ -125,6 +125,7 @@ pytestmark_db = pytest.mark.asyncio
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_sync_adds_missing_column_to_sandbox():
     """
     Simulates the exact bug from commit 65cb90f: public gets a new column
@@ -182,6 +183,7 @@ async def test_sync_adds_missing_column_to_sandbox():
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_sync_adds_missing_index_to_sandbox():
     settings = Settings()
     live = Database(settings)
@@ -229,6 +231,7 @@ async def test_sync_adds_missing_index_to_sandbox():
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_sync_is_idempotent():
     """Two back-to-back syncs must not error or duplicate anything."""
     settings = Settings()
@@ -244,6 +247,7 @@ async def test_sync_is_idempotent():
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_sync_runs_automatically_on_connect_and_repairs_estimator_type():
     """
     End-to-end: remove the column from backtest, connect a fresh Database,

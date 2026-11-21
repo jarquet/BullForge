@@ -61,6 +61,7 @@ def test_time_based_split_is_chronological():
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_training_data_respects_horizon_cutoff(real_test_db):
     """
     Invariant 2: forward_return label must come from bars at (T, T+H],
@@ -95,6 +96,7 @@ async def test_training_data_respects_horizon_cutoff(real_test_db):
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_query_training_data_requires_as_of(real_test_db):
     """Caller MUST pass as_of — no default allowed."""
     db = real_test_db
@@ -152,6 +154,7 @@ def test_features_exclude_current_bar():
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_trade_features_exclude_open_and_future_trades(real_test_db):
     """
     Invariant 3: Features at timestamp T that derive from trade history must

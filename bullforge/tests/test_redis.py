@@ -23,6 +23,7 @@ async def test_connect_and_disconnect():
 
 
 @pytest.mark.asyncio
+@pytest.mark.services
 async def test_publish_and_subscribe(redis_client):
     received = []
 

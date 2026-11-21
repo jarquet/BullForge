@@ -5,6 +5,8 @@ from shared.config import Settings
 from shared.db import Database
 from shared.models import Order
 
+pytestmark = pytest.mark.services  # needs TimescaleDB
+
 
 @pytest.mark.asyncio
 async def test_sandbox_order_writes_to_backtest_schema():

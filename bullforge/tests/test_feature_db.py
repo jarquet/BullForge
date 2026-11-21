@@ -5,6 +5,8 @@ from shared.config import Settings
 from shared.db import Database
 from shared.models import FeatureRow, Label
 
+pytestmark = pytest.mark.services  # needs TimescaleDB
+
 
 @pytest_asyncio.fixture
 async def db():

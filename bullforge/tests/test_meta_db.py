@@ -5,6 +5,8 @@ from shared.config import Settings
 from shared.db import Database
 from shared.models import MetaFeatureRow
 
+pytestmark = pytest.mark.services  # needs TimescaleDB
+
 
 def _ts(minute: int = 0):
     return datetime(2026, 4, 28, 14, minute, 0, tzinfo=timezone.utc)
