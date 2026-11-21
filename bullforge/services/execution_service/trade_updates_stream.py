@@ -8,6 +8,7 @@ from typing import Awaitable, Callable, Optional
 from alpaca.trading.stream import TradingStream
 
 from shared.config import Settings
+from shared.symbol_utils import normalize_alpaca_symbol
 from services.execution_service.reconciler_core import ReconcilerCore
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,10 @@ def normalize_trade_update(event) -> dict:
 
     return {
         "id": str(o.id),
-        "symbol": o.symbol,
+        # Same canonical BASE/QUOTE form AlpacaBroker snapshots use; if the
+        # stream wins the insert race, a slashless "ETHUSD" row would never
+        # match the "ETH/USD" trades opened by the submit path.
+        "symbol": normalize_alpaca_symbol(o.symbol),
         "side": _enum(o.side),
         "qty": float(o.qty),
         "order_type": _enum(o.order_type),

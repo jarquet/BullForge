@@ -30,6 +30,20 @@ def test_normalize_trade_update_matches_broker_snapshot_shape():
     assert snap["filled_at"].tzinfo == timezone.utc
 
 
+def test_normalize_trade_update_restores_crypto_slash():
+    # Alpaca strips the slash on crypto pairs; trades are keyed "ETH/USD".
+    event = MagicMock()
+    event.order = MagicMock(
+        id="alp-43", symbol="ETHUSD",
+        side=MagicMock(value="sell"), qty="1.5",
+        order_type=MagicMock(value="market"), status=MagicMock(value="filled"),
+        submitted_at=datetime(2026, 5, 8, tzinfo=timezone.utc),
+        filled_qty="1.5", filled_avg_price="3000",
+        filled_at=datetime(2026, 5, 8, 14, 0, 1, tzinfo=timezone.utc),
+    )
+    assert normalize_trade_update(event)["symbol"] == "ETH/USD"
+
+
 def _patch_trading_stream(stream):
     """
     Helper: returns a `patch` context manager that replaces TradingStream
