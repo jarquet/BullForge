@@ -89,13 +89,47 @@ async def test_check_entry_flat_signal():
 
 
 @pytest.mark.asyncio
-async def test_check_entry_short_allowed():
+async def test_check_entry_short_allowed_and_floored_to_whole_shares():
+    # Alpaca rejects fractional equity shorts (code 42210000), so the
+    # notional-sized 23.8 shares becomes 23.
     rm = RiskManager(runtime_config=_rc())
     approved, reason, qty = await rm.check_entry(
         _signal(direction=-1, hour_utc=16), _account(), [], current_price=420.0,
     )
     assert approved is True
-    assert qty == pytest.approx(100_000.0 * 0.10 / 420.0)
+    assert qty == 23.0
+
+
+@pytest.mark.asyncio
+async def test_check_entry_rejects_short_below_one_whole_share():
+    rm = RiskManager(runtime_config=_rc())
+    approved, reason, qty = await rm.check_entry(
+        _signal(direction=-1, hour_utc=16), _account(equity=1_000.0), [],
+        current_price=420.0,  # 1000 * 0.10 / 420 = 0.24 shares -> 0
+    )
+    assert approved is False
+    assert "whole share" in reason
+    assert qty == 0
+
+
+@pytest.mark.asyncio
+async def test_check_entry_long_equity_keeps_fractional_qty():
+    rm = RiskManager(runtime_config=_rc())
+    approved, _reason, qty = await rm.check_entry(
+        _signal(direction=1, hour_utc=16), _account(equity=1_000.0), [],
+        current_price=420.0,
+    )
+    assert approved is True
+    assert qty == pytest.approx(1_000.0 * 0.10 / 420.0)
+
+
+def test_broker_feasible_qty():
+    from services.execution_service.risk_manager import broker_feasible_qty
+    assert broker_feasible_qty("MSFT", -1, 4.79) == 4.0
+    assert broker_feasible_qty("MSFT", -1, 4.9999999999) == 5.0  # float noise
+    assert broker_feasible_qty("MSFT", -1, 0.6) == 0.0
+    assert broker_feasible_qty("MSFT", 1, 4.79) == 4.79
+    assert broker_feasible_qty("BTC/USD", 1, 0.0123) == 0.0123
 
 
 @pytest.mark.asyncio

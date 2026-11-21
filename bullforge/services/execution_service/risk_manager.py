@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from typing import Optional, Tuple
 
 from shared.models import TradingSignal
@@ -9,6 +10,22 @@ from shared.symbol_utils import is_crypto
 from shared.trading_window import is_trading_allowed
 
 logger = logging.getLogger(__name__)
+
+
+def broker_feasible_qty(symbol: str, direction: int, qty: float) -> float:
+    """Round a sized quantity to something Alpaca will accept.
+
+    Alpaca rejects fractional short sales on equities
+    (``{"code":42210000,"message":"fractional orders cannot be sold short"}``),
+    and notional-based sizing (equity * pct / price) is almost always
+    fractional. Equity shorts are therefore floored to whole shares; a
+    result of 0 means the short cannot be placed at this size. Longs and
+    crypto keep their fractional quantity.
+    """
+    if direction == -1 and not is_crypto(symbol):
+        # The epsilon keeps 4.9999999999 (float noise) from flooring to 4.
+        return float(math.floor(qty + 1e-9))
+    return qty
 
 
 class RiskManager:
@@ -81,6 +98,9 @@ class RiskManager:
 
         max_position_pct = await self._param("max_position_pct")
         qty = (equity * max_position_pct) / current_price
+        qty = broker_feasible_qty(signal.symbol, signal.direction, qty)
+        if qty <= 0:
+            return False, "Short below one whole share (Alpaca rejects fractional shorts)", 0
         if qty * current_price < 1.0:
             # Alpaca rejects orders below $1 notional on both crypto and
             # fractional-equity paths. Guarding here avoids a wasted submit.

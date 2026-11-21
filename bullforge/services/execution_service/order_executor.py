@@ -9,7 +9,9 @@ from shared.db import Database
 from shared.models import BacktestScope, Order, TradingSignal
 from services.execution_service.alpaca_broker import AlpacaBroker
 from services.execution_service.reconciler_core import ReconcilerCore
-from services.execution_service.risk_manager import RiskManager
+from services.execution_service.risk_manager import (
+    RiskManager, broker_feasible_qty,
+)
 from services.execution_service.position_tracker import PositionTracker
 
 logger = logging.getLogger(__name__)
@@ -59,10 +61,15 @@ class OrderExecutor:
             return None
 
         if max_qty_cap is not None and qty > max_qty_cap:
-            qty = max_qty_cap
-            if qty * current_price < 1.0:
+            # Re-apply the broker rounding: a fractional volume cap would
+            # otherwise reintroduce a fractional equity short.
+            qty = broker_feasible_qty(
+                signal.symbol, signal.direction, max_qty_cap,
+            )
+            if qty <= 0 or qty * current_price < 1.0:
                 logger.info(
-                    "Entry capped below $1 notional for %s; skipping submit",
+                    "Entry capped below $1 notional (or one whole share "
+                    "for an equity short) for %s; skipping submit",
                     signal.symbol,
                 )
                 return None

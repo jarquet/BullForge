@@ -329,6 +329,37 @@ async def test_max_qty_cap_skips_when_cap_below_one_dollar_notional(
 
 
 @pytest.mark.asyncio
+async def test_max_qty_cap_floors_equity_short_to_whole_shares(
+    mock_broker, mock_risk, mock_tracker, mock_db, mock_core,
+):
+    mock_risk.check_entry = AsyncMock(return_value=(True, "Approved", 10.0))
+    executor = OrderExecutor(
+        broker=mock_broker, risk_manager=mock_risk,
+        position_tracker=mock_tracker, db=mock_db, core=mock_core,
+    )
+    await executor.process_signal(
+        _signal(direction=-1), current_price=420.0, max_qty_cap=2.5,
+    )
+    mock_broker.submit_market_order.assert_awaited_once_with("SPY", 2.0, "sell")
+
+
+@pytest.mark.asyncio
+async def test_max_qty_cap_skips_equity_short_capped_below_one_share(
+    mock_broker, mock_risk, mock_tracker, mock_db, mock_core,
+):
+    mock_risk.check_entry = AsyncMock(return_value=(True, "Approved", 10.0))
+    executor = OrderExecutor(
+        broker=mock_broker, risk_manager=mock_risk,
+        position_tracker=mock_tracker, db=mock_db, core=mock_core,
+    )
+    result = await executor.process_signal(
+        _signal(direction=-1), current_price=420.0, max_qty_cap=0.7,
+    )
+    assert result is None
+    mock_broker.submit_market_order.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_max_qty_cap_no_op_when_risk_qty_already_below_cap(
     mock_broker, mock_risk, mock_tracker, mock_db, mock_core,
 ):
