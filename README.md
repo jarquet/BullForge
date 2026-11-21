@@ -6,7 +6,7 @@ trains per-symbol models, turns their predictions into orders on an Alpaca **pap
 account, and keeps the local order and trade ledger reconciled with the broker. A
 walk-forward backtester replays the same pipeline over history. A monitoring service
 compares each model's live accuracy with its hold-out accuracy, disables models that
-drift, and raises tiered halt alerts.
+drift, and enforces a tiered halt policy that can stop new entries.
 
 > [!IMPORTANT]
 > **Paper-trading research platform. Not investment advice.** BullForge was built
@@ -39,12 +39,12 @@ engineering portfolio project. Active development stopped on 2026-05-09; see
   trade-updates stream, and a polling sweeper) converge on one idempotent upsert. It
   ingests orphan orders, pairs fills into round-trip trades, and emits anomaly counters.
 - **Monitoring and halts.** It compares each model's live accuracy with its
-  hold-out accuracy, disables models that drift, evaluates a 4-tier halt policy, and sends operator alerts and
-  commands through Telegram.
+  hold-out accuracy, disables models that drift, evaluates a 4-tier halt policy (a full
+  halt blocks new entries), and sends operator alerts and commands through Telegram.
 - **Live runtime config.** Thresholds, symbols, retrain schedule, and model
   hyperparameters live in a Redis hash with a typed schema. The dashboard edits them
   without restarting anything.
-- **Tests:** 1,084 tests. 964 are hermetic, and 120 run against a real TimescaleDB and
+- **Tests:** 1,148 tests. 1,028 are hermetic, and 120 run against a real TimescaleDB and
   Redis. CI runs both sets.
 
 ## Architecture
@@ -101,7 +101,7 @@ Alpaca ─► data_pipeline ─► feature_engine ─► model_service ─► ex
 | `data_pipeline` | 18080 | Alpaca historical backfill and websocket bar stream. Writes `bars_1m` / `bars_daily` and publishes `market:ticks`. Hot-reloads its symbol set on `config:symbols_changed`. |
 | `feature_engine` | – | Registry-driven feature calculators (price, technical, volume, calendar) and forward-return label generation. Subscribes to `market:ticks` and publishes `feature:updates`. |
 | `model_service` | 18081 | Trains one model per symbol × horizon × timeframe × model type: scikit-learn gradient boosting, logistic regression, and a PyTorch LSTM. Retrains nightly in subprocesses and runs inference on `feature:updates`. Also trains stacked **meta-models** (baseline, LightGBM, and PyTorch MLP estimators) that run in shadow mode only. |
-| `execution_service` | 18082 | `SignalAggregator` ensembles predictions (with direction hysteresis), `RiskManager` applies position, exposure, trading-window, and broker-feasibility gates, and `OrderExecutor` submits orders. `ReconcilerCore`, `TradeUpdatesStream`, and `PollingSweeper` keep the order and trade ledger in sync with Alpaca. |
+| `execution_service` | 18082 | `SignalAggregator` ensembles predictions (with direction hysteresis), `RiskManager` applies position, exposure, trading-window, and broker-feasibility gates, and `OrderExecutor` submits orders (no new entries during a full halt). `ReconcilerCore`, `TradeUpdatesStream`, and `PollingSweeper` keep the order and trade ledger in sync with Alpaca. |
 | `monitoring_service` | 18083 | Fidelity tracker (live accuracy vs. hold-out accuracy per model), `HaltManager` (4-tier halts), and a Telegram bot for alerts and operator commands. Queries the broker through Redis RPC. |
 | `dashboard_service` | 18084 | aiohttp REST API plus a plain-JS single-page app (no bundler). Tabs: Overview, Trading, Models, Trades, Orders, Halts, Symbols, Freshness, Config, Backtests. |
 | `backtest_service` | – | Walk-forward engine, `WalkForwardSplitter`, `FillModel`, `SimulatedBroker`. Runs as a one-off CLI (`scripts/backtest.py`) or as queue workers on the `backtest_jobs` table. |
@@ -124,7 +124,8 @@ subscribe call.
 | `feature:updates` | feature_engine → model_service | Features written; run inference. |
 | `model:predictions` | model_service → execution_service | Per-model predictions for signal aggregation. |
 | `model:meta_signals` | model_service → execution_service | Meta-model shadow decisions. Logged only; they never gate orders. |
-| `models:status` | monitoring_service → execution_service | Model active/warned/disabled state, or a full halt. |
+| `models:status` | monitoring_service → execution_service | Per-model active/warned/disabled state. |
+| `trading:halt` | monitoring_service → execution_service | Full-halt on/off. Execution blocks new entries while halted. |
 | `request:broker` / `response:broker:{id}` | monitoring ↔ execution | RPC for account and position queries. |
 | `monitoring:alerts` | monitoring, execution → Telegram bot | Halt alerts and `position_closed` round-trip summaries. |
 | `config:symbols_changed` | dashboard → data_pipeline | Add or remove a traded symbol at runtime. |
@@ -226,18 +227,31 @@ drawdown. Alerts fire on edges, not levels, so an ongoing condition doesn't re-n
 |---|---|---|---|
 | 1 | `model_warned` | Live accuracy below hold-out accuracy by the warning margin | Alert on Redis |
 | 2 | `model_disabled` | Live accuracy below hold-out accuracy by the critical margin | `execution_service` drops that model from the ensemble |
-| 3 | `direction_halt` | Half or more of all models disabled | Halt event recorded and Telegram alert |
-| 4 | `drawdown_halt` / `majority_halt` | Drawdown at or past the threshold (default 10%), or more than half of all models disabled | Halt event recorded, Telegram alert, monitoring enters a halted state |
+| 3 | `direction_halt` | Half or more of all models disabled | Halt event recorded and Telegram alert. Entries continue. |
+| 4 | `drawdown_halt` / `majority_halt` | Drawdown at or past the threshold (default 10%), or more than half of all models disabled | **Full halt:** halt event recorded, Telegram alert, new entries blocked until `/resume` |
+| 5 | – | Manual `/halt` from Telegram | **Full halt**, same as tier 4 |
 
 Halt events are stored in `halt_events` and shown on the dashboard's Halts tab. The
 Telegram bot delivers tier-3/4 alerts and `position_closed` summaries, and handles
 operator commands (`/status`, `/positions`, `/trades`, `/models`, `/halt`, `/resume`).
-Tier-1/2 alerts are suppressed in Telegram but still published on Redis. Note that
-tier-3/4 halts don't yet block new orders; see [Known limitations](#known-limitations).
+Tier-1/2 alerts are suppressed in Telegram but still published on Redis.
+
+A full halt is enforced in `execution_service`. `HaltManager` publishes an on/off
+message on `trading:halt`, and `OrderExecutor` skips new entries while the halt is on.
+Exit signals for open positions still run: orders are plain market orders, so nothing
+else would close a position. A full halt stays on until `/resume`, which resolves the
+`halt_events` rows and then publishes "off". Redis pub/sub drops messages a subscriber
+misses, so monitoring re-publishes the halt on every tick while it lasts. On startup,
+`execution_service` subscribes first and then reads unresolved tier-4+ rows from
+`halt_events`, so a halt survives a restart of either service. If that read fails,
+execution starts halted, and `/resume` clears it. Tier 3 only alerts: disabled models
+are already out of the ensemble, and tier 4 stops entries one disabled model later. The
+message format and ordering rules are in
+[docs/architecture/redis-pubsub.md](docs/architecture/redis-pubsub.md#full-halt-protocol-tradinghalt).
 
 ## Running it
 
-The suite has 1,084 tests. 964 are hermetic: they use fakes and mocks for the DB,
+The suite has 1,148 tests. 1,028 are hermetic: they use fakes and mocks for the DB,
 Redis, and Alpaca. The other 120 (`tests/integration/` plus the tests marked
 `@pytest.mark.services`) need a real TimescaleDB and Redis.
 
@@ -314,7 +328,8 @@ spec describes the original two-node plan; the code as built runs on one host.
 BullForge was built from 2026-04-10 to 2026-05-09 and paper-traded a small default
 universe (SPY, QQQ, AAPL, MSFT, NVDA, BTC/USD, ETH/USD) on 1-minute and daily bars. It
 is no longer under active development. This public copy adds this README, the CI
-workflow, and fixes for the two trade-ledger bugs that were open when work stopped:
+workflow, fixes for the two trade-ledger bugs that were open when work stopped, and
+enforcement of full trading halts:
 
 - **Trade pairing.** Stale order snapshots could move an order from `filled` back to
   `submitted`. The sweeper then saw a second fill and booked it into `trades` again. That
@@ -329,15 +344,20 @@ workflow, and fixes for the two trade-ledger bugs that were open when work stopp
   notional sizing almost always produced fractional quantities, so every short was
   rejected each minute. `RiskManager` now rounds equity shorts down to whole shares and
   skips the entry if that leaves zero.
+- **Full halts didn't stop execution.** Tier-4 halts and a manual `/halt` recorded a
+  halt event and alerted, but `execution_service` never read the halt state. Its
+  `models:status` handler raised on the `{"_halt": "full"}` message, and the error was
+  only logged. Halts now travel on their own `trading:halt` channel, and `OrderExecutor`
+  blocks new entries while one is active (see [Monitoring and halts](#monitoring-and-halts)).
+  Tests are in `tests/test_halt_manager.py`, `tests/test_halt_gate.py`, and
+  `tests/test_order_executor.py`.
 
 ## Known limitations
 
-- **Tier-3/4 halts alert but don't stop execution.** `execution_service` acts only on
-  per-model statuses: a disabled model is dropped from the ensemble. Nothing in
-  execution reads the full-halt state. A drawdown or majority halt, or a manual `/halt`
-  from Telegram, records a halt event and alerts the operator, but new entries are not
-  blocked. Enforcing it would mean a halted flag in `execution_service` that gates
-  `OrderExecutor`, plus a matching resume message.
+- **`/resume` during an ongoing drawdown re-trips the halt.** The drawdown peak lives in
+  `monitoring_service` memory, so the next tick after `/resume` halts again while equity
+  is still past the threshold. Restarting `monitoring_service` resets the peak, though
+  an active halt itself survives the restart.
 - **The fixes above have not run against a live paper account.** Hermetic regression
   tests cover them. The new real-database tests for the status guard run in CI's
   service-backed job. Neither replaces a trading session.
