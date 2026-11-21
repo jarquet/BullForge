@@ -40,7 +40,12 @@ def test_settings_parses_trading_window(monkeypatch):
     assert settings.trading_window_end.minute == 0
 
 
-def test_model_service_defaults(settings):
+def test_model_service_defaults(monkeypatch):
+    # Defaults only: ignore any MODEL_* overrides in the caller's environment.
+    monkeypatch.delenv("MODEL_ARTIFACTS_DIR", raising=False)
+    monkeypatch.delenv("MODEL_MIN_SAMPLES", raising=False)
+    from shared.config import Settings
+    settings = Settings()
     assert settings.model_artifacts_dir == "/app/models/artifacts"
     assert settings.model_min_samples == 500
 
