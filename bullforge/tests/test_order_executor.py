@@ -372,3 +372,81 @@ async def test_max_qty_cap_no_op_when_risk_qty_already_below_cap(
         _signal(), current_price=420.0, max_qty_cap=5.0,
     )
     mock_broker.submit_market_order.assert_awaited_once_with("SPY", 1.0, "buy")
+
+
+# ── Full halt: block new entries, keep exits ─────────────────────────
+
+from services.execution_service.halt_gate import HaltGate  # noqa: E402
+from shared.halt import HaltState  # noqa: E402
+
+
+def _gate(halted):
+    gate = HaltGate()
+    gate.apply(HaltState(halted=halted, tier=4 if halted else None, reason="t"))
+    return gate
+
+
+def _executor_with_gate(gate, mock_broker, mock_risk, mock_tracker, mock_db, mock_core):
+    return OrderExecutor(
+        broker=mock_broker, risk_manager=mock_risk,
+        position_tracker=mock_tracker, db=mock_db, core=mock_core,
+        halt_gate=gate,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("direction", [1, -1])
+async def test_halt_blocks_new_entry(
+    direction, mock_broker, mock_risk, mock_tracker, mock_db, mock_core,
+):
+    executor = _executor_with_gate(
+        _gate(True), mock_broker, mock_risk, mock_tracker, mock_db, mock_core,
+    )
+
+    order = await executor.process_signal(
+        _signal(direction=direction), current_price=420.0,
+    )
+
+    assert order is None
+    mock_risk.check_entry.assert_not_awaited()
+    mock_broker.submit_market_order.assert_not_awaited()
+    mock_db.insert_order_if_new.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_halt_still_allows_exit(
+    mock_broker, mock_risk, mock_tracker, mock_db, mock_core,
+):
+    # A halt stops new risk. Exits reduce it, and nothing else manages them
+    # (orders are plain market orders, not brackets), so they still run.
+    mock_tracker.get_position = MagicMock(
+        return_value={"symbol": "SPY", "qty": 10.0, "market_value": 4200.0},
+    )
+    mock_risk.check_exit = MagicMock(return_value=(True, "Opposing signal"))
+    executor = _executor_with_gate(
+        _gate(True), mock_broker, mock_risk, mock_tracker, mock_db, mock_core,
+    )
+
+    order = await executor.process_signal(_signal(direction=-1), current_price=420.0)
+
+    assert order is not None
+    assert order.side == "sell"
+    mock_broker.close_position.assert_awaited_once_with("SPY")
+    mock_broker.submit_market_order.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_entry_resumes_after_halt_lifted(
+    mock_broker, mock_risk, mock_tracker, mock_db, mock_core,
+):
+    gate = _gate(True)
+    executor = _executor_with_gate(
+        gate, mock_broker, mock_risk, mock_tracker, mock_db, mock_core,
+    )
+    assert await executor.process_signal(_signal(), current_price=420.0) is None
+
+    gate.apply(HaltState(halted=False))
+    order = await executor.process_signal(_signal(), current_price=420.0)
+
+    assert order is not None
+    mock_broker.submit_market_order.assert_awaited_once_with("SPY", 10, "buy")

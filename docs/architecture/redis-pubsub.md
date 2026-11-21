@@ -10,7 +10,8 @@ All channels flow through the shared `RedisClient` in [bullforge/shared/redis.py
 |---|---|---|---|---|
 | `model:predictions` | `services/model_service/main.py` | `services/execution_service/main.py` (`on_prediction`) | `{symbol, timeframe, predictions: [...]}` | Per-model predictions fan out to execution for signal aggregation. |
 | `model:meta_signals` | `services/model_service/main.py` | `services/execution_service/main.py` (`MetaShadowWriter`) | `{symbol, timeframe, timestamp, feature_vector: dict[str, float], signals: [{direction, estimator_type, model_id, entry_probability, kelly_fraction, pair_index, target_pct, stop_pct}]}` | Meta-model shadow decisions per prediction event. Phase 1: log only, never gates execution. `feature_vector` is the assembled L2 dict (`base_*_dir/conf/rolling_acc/cal_err/disabled`, `regime_*`, time/calendar, `sym_*`) that the meta estimator was scored against — `MetaShadowWriter` persists it verbatim into `meta_features.feature_vector`. Empty dicts are dropped on the writer side with a warning rather than masked by a placeholder. |
-| `models:status` | `services/monitoring_service/halt_manager.py` | `services/execution_service/main.py` (`on_model_status`) | `{model_id: "active"|"warned"|"disabled", ...}` or `{"_halt": "full"}` | Model enable/disable state; execution filters signals from disabled models. |
+| `models:status` | `services/monitoring_service/halt_manager.py` (`publish_status`, every monitoring tick) | `services/execution_service/main.py` (`on_model_status`) | `{model_id: "active"|"warned"|"disabled", ...}` | Per-model enable/disable snapshot; execution filters signals from disabled models. Every key is a model id. Halt state is **not** carried here (it used to be, as `{"_halt": "full"}`, which the subscriber could not parse); see `trading:halt`. |
+| `trading:halt` | `services/monitoring_service/halt_manager.py` (`evaluate` on a tier-4 trip and on every tick while halted; `trigger_halt`; `resolve_halt`) | `services/execution_service/halt_gate.py` (`HaltGate.handle_message`) | `{halted: bool, tier: int|null, reason: str, ts: ISO-8601 UTC}`. Schema in [bullforge/shared/halt.py](../../bullforge/shared/halt.py). | Full-halt on/off. While `halted` is true, `OrderExecutor` skips new entries; exits still run. See [Full-halt protocol](#full-halt-protocol-tradinghalt). |
 | `model:retrained` | `services/model_service/scheduler.py` | `services/model_service/main.py` (`on_model_retrained`) | `{as_of, completed_at, ok, errors, skipped, results: [...]}` | Retrain-cycle summary. The model_service subscriber reloads its in-memory `_models` and `_meta_models` so out-of-process retrains (`retrain_now.py`) refresh the live container without a restart. |
 | `market:ticks` | `services/data_pipeline/stream.py` | `services/feature_engine/main.py`; `services/model_service/main.py` (`on_market_tick`, SPY-only) | Bar payload (symbol, timeframe, timestamp, OHLCV) | Live bar updates trigger reactive feature computation. The model_service also subscribes to keep its in-memory `RegimeBuilder` fresh from SPY bars — without this, after `meta_regime_max_staleness_hours` the SPY-derived regime context silently zeros out and corrupts every `meta_features.feature_vector` row. |
 | `feature:updates` | `services/feature_engine/engine.py` | `services/model_service/main.py` | `{symbol, timeframe}` | Feature write completion triggers inference. |
@@ -22,6 +23,36 @@ All channels flow through the shared `RedisClient` in [bullforge/shared/redis.py
 | `request:broker` | `services/monitoring_service/broker_client.py` | `services/execution_service/broker_relay.py` | `{id, method, params}` | RPC request: broker queries from monitoring → execution. Correlation id is `id`. |
 | `response:broker:{correlation_id}` | `services/execution_service/broker_relay.py` | `services/monitoring_service/broker_client.py` (one-shot per request) | `{ok: true, result}` or `{ok: false, error}` | RPC response matched by correlation id. |
 | `config:symbols_changed` | `services/dashboard_service/symbols_api.py` | `services/data_pipeline/main.py` (`_on_symbols_changed`) | `{action: "add"|"remove", kind: "equity"|"crypto", symbol}` | Live trading-symbol list change from the dashboard UI. |
+
+## Full-halt protocol (`trading:halt`)
+
+A **full halt** is tier 4 (automated: drawdown at or past `drawdown_halt_threshold`, or more than half of all models disabled) or tier 5 (manual Telegram `/halt`). The durable record is `halt_events`: a full halt is active while an unresolved row with `tier >= 4` exists. `trading:halt` is the low-latency signal to `execution_service`.
+
+Messages:
+
+```json
+{"halted": true,  "tier": 4,    "reason": "Drawdown 12.00% exceeds threshold 10.00%", "ts": "2026-04-12T14:00:00+00:00"}
+{"halted": false, "tier": null, "reason": "Resumed by operator",                     "ts": "2026-04-12T15:30:00+00:00"}
+```
+
+`halted` is required and must be a JSON boolean. `tier` is an int or null. A message that fails these checks is logged and ignored; it never changes state.
+
+Publisher rules (`HaltManager`):
+
+- **On:** published when tier 4 trips in `evaluate`, and by `trigger_halt` (the row is inserted first; the message goes out even if the insert fails).
+- **Re-asserted:** published again at the end of every `evaluate` tick while halted. Pub/sub is at-most-once, so a subscriber that missed the transition catches up within one monitoring interval.
+- **Off:** published only by `resolve_halt` (Telegram `/resume`), after every active `halt_events` row is resolved. It is sent even when no rows were active, so a repeated `/resume` also clears a subscriber stuck halted. Monitoring never sends "off" on its own.
+- A full halt latches. It stays on after the triggering condition clears, until `/resume`. If the condition still holds after `/resume`, the next tick trips it again.
+- `evaluate`, `trigger_halt`, and `resolve_halt` hold one `asyncio.Lock`, so a `/resume` cannot interleave with a tick that is recording a new halt.
+- On startup, `restore_state()` reloads an active tier-4+ row, so a monitoring restart keeps re-asserting the halt.
+
+Subscriber rules (`HaltGate` in `execution_service`):
+
+- `OrderExecutor.process_signal` blocks **new entries only**. Exit and close signals for open positions still run: orders are plain market orders with no broker-side brackets, so nothing else would close them.
+- On startup it subscribes first and then reads `get_active_halts()`, before subscribing to `model:predictions`. If a `trading:halt` message arrives during that read, the message wins (it is newer than the snapshot). If the read fails, the service starts **halted** (fail closed) until an "off" message arrives or a restart reads the table successfully.
+- Backtests construct `OrderExecutor` without a gate and are never halted.
+
+Tier 3 (`direction_halt`, half or more of all models disabled) records a `halt_events` row and alerts, but does not block entries. Disabled models are already out of the ensemble (tier 2), and blocking at "half" would make tier 4's "more than half" trigger redundant. The original design's per-direction halt needs long/short model metadata the system doesn't have.
 
 ## Alert types on `monitoring:alerts`
 

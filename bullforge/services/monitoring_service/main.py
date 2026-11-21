@@ -165,6 +165,9 @@ async def main() -> None:
     metrics_computer = MetricsComputer()
     fidelity_tracker = FidelityTracker(db, settings)
     halt_manager = HaltManager(db, redis_client, settings)
+    # An unresolved tier-4+ halt survives a monitoring restart; the first
+    # tick re-asserts it on trading:halt.
+    await halt_manager.restore_state()
     runtime_config = RuntimeConfig(redis_client)
     broker_client = BrokerClient(redis_client=redis_client, timeout=10.0)
 

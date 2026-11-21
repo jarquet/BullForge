@@ -8,6 +8,7 @@ from typing import Optional
 from shared.db import Database
 from shared.models import BacktestScope, Order, TradingSignal
 from services.execution_service.alpaca_broker import AlpacaBroker
+from services.execution_service.halt_gate import HaltGate
 from services.execution_service.reconciler_core import ReconcilerCore
 from services.execution_service.risk_manager import (
     RiskManager, broker_feasible_qty,
@@ -27,6 +28,7 @@ class OrderExecutor:
         core: ReconcilerCore,
         *,
         scope: Optional[BacktestScope] = None,
+        halt_gate: Optional[HaltGate] = None,
     ):
         self._broker = broker
         self._risk = risk_manager
@@ -34,6 +36,8 @@ class OrderExecutor:
         self._db = db
         self._core = core
         self._scope = scope
+        # None (backtests) never halts.
+        self._halt = halt_gate
 
     async def process_signal(
         self, signal: TradingSignal, current_price: float,
@@ -49,6 +53,14 @@ class OrderExecutor:
             return None
 
         if signal.direction == 0:
+            return None
+
+        # Full halt: exits above still run; only new entries are blocked.
+        if self._halt is not None and self._halt.halted:
+            logger.info(
+                "Entry blocked for %s: trading halted (%s)",
+                signal.symbol, self._halt.state.reason,
+            )
             return None
 
         account = self._tracker.account

@@ -10,6 +10,7 @@ from aiohttp import web
 
 from shared.config import Settings
 from shared.db import Database
+from shared.halt import HALT_CHANNEL
 from shared.redis import RedisClient
 from shared.runtime_config import RuntimeConfig
 from services.execution_service.alpaca_broker import AlpacaBroker
@@ -18,6 +19,7 @@ from services.execution_service.risk_manager import RiskManager
 from services.execution_service.position_tracker import PositionTracker
 from services.execution_service.order_executor import OrderExecutor
 from services.execution_service.broker_relay import BrokerRelay
+from services.execution_service.halt_gate import HaltGate
 from services.execution_service.health import create_health_app
 from services.execution_service.reconciler_core import ReconcilerCore
 from services.execution_service.polling_sweeper import PollingSweeper
@@ -53,12 +55,14 @@ async def main() -> None:
     risk_manager = RiskManager(runtime_config=runtime_config)
     position_tracker = PositionTracker(broker)
     core = ReconcilerCore(db=db, redis_client=redis_client, broker=broker)
+    halt_gate = HaltGate()
     executor = OrderExecutor(
         broker=broker,
         risk_manager=risk_manager,
         position_tracker=position_tracker,
         db=db,
         core=core,
+        halt_gate=halt_gate,
     )
 
     sweeper = PollingSweeper(
@@ -123,6 +127,12 @@ async def main() -> None:
                 )
         except Exception:
             logger.exception("Error processing prediction message")
+
+    # Know the halt state before the first prediction can open a position.
+    await halt_gate.start(db, redis_client)
+    logger.info(
+        "Subscribed to %s (halted=%s)", HALT_CHANNEL, halt_gate.halted,
+    )
 
     await redis_client.subscribe("model:predictions", on_prediction)
     logger.info("Subscribed to model:predictions")
