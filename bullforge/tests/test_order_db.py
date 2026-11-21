@@ -357,6 +357,49 @@ async def test_upsert_updates_existing_row(settings, mock_pool):
 
 
 @pytest.mark.asyncio
+async def test_upsert_reports_stored_status_when_snapshot_is_stale(settings, mock_pool):
+    """A late 'accepted' snapshot after 'filled' must not read as a change.
+
+    The SQL keeps the stored status (see the CASE guard); the result must
+    report what the row holds so the reconciler sees filled -> filled.
+    """
+    from shared.db import Database
+    pool, conn = mock_pool
+    now = datetime.now(timezone.utc)
+
+    tx = MagicMock()
+    tx.__aenter__ = AsyncMock()
+    tx.__aexit__ = AsyncMock(return_value=False)
+    conn.transaction = MagicMock(return_value=tx)
+    conn.fetchrow = AsyncMock(side_effect=[
+        {"status": "filled", "origin": "internal"},
+        {
+            "id": 9, "symbol": "MSFT", "side": "sell", "quantity": 4.0,
+            "order_type": "market", "submitted_at": now,
+            "signal_strength": 0.7, "alpaca_order_id": "alp-stale",
+            "status": "filled", "filled_at": now,
+            "filled_price": 410.0, "filled_quantity": 4.0,
+            "limit_price": None, "origin": "internal",
+            "last_reconciled_at": now, "reconcile_source": "submit",
+            "was_inserted": False,
+        },
+    ])
+    db = Database(settings)
+    db.pool = pool
+
+    snapshot = {
+        "id": "alp-stale", "symbol": "MSFT", "side": "sell", "qty": 4.0,
+        "order_type": "market", "submitted_at": now, "status": "accepted",
+    }
+    result = await db.upsert_order_from_alpaca(snapshot, source="submit")
+
+    assert result.old_status == "filled"
+    assert result.new_status == "filled"
+    sql = conn.fetchrow.await_args_list[1].args[0]
+    assert "THEN orders.status" in sql  # stale-snapshot guard present
+
+
+@pytest.mark.asyncio
 async def test_insert_order_if_new_returns_id_on_first_insert(settings, mock_pool):
     from shared.db import Database
 

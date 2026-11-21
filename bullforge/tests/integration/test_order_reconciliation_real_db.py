@@ -154,3 +154,47 @@ async def test_upsert_handles_concurrent_inserts_for_same_alpaca_id(real_db):
     assert inserted_count == 1, (
         f"expected exactly one inserted, got {inserted_count}"
     )
+
+
+async def test_stale_snapshot_does_not_regress_filled_order(real_db):
+    """A late "accepted" snapshot after "filled" keeps the row filled.
+
+    Pre-fix the row regressed to "submitted", the sweeper re-polled it, and
+    the reconciler booked the same fill into `trades` a second time.
+    """
+    await _insert_submitted(real_db, alpaca_id="alp-stale")
+    filled_at = datetime.now(timezone.utc)
+    await real_db.upsert_order_from_alpaca(
+        _snapshot(id="alp-stale", status="filled", filled_at=filled_at,
+                  filled_avg_price=150.0, filled_qty=10.0),
+        source="stream",
+    )
+    stale = await real_db.upsert_order_from_alpaca(
+        _snapshot(id="alp-stale", status="accepted"), source="submit",
+    )
+    assert stale.old_status == "filled"
+    assert stale.new_status == "filled"
+    assert stale.order.status == "filled"
+    assert stale.order.filled_price == 150.0
+    non_terminal = await real_db.query_non_terminal_orders(
+        within=timedelta(hours=1),
+    )
+    assert "alp-stale" not in {o.alpaca_order_id for o in non_terminal}
+
+
+async def test_stale_partial_fill_does_not_shrink_filled_quantity(real_db):
+    await _insert_submitted(real_db, alpaca_id="alp-partial")
+    now = datetime.now(timezone.utc)
+    await real_db.upsert_order_from_alpaca(
+        _snapshot(id="alp-partial", status="filled", filled_at=now,
+                  filled_avg_price=150.0, filled_qty=10.0),
+        source="stream",
+    )
+    late = await real_db.upsert_order_from_alpaca(
+        _snapshot(id="alp-partial", status="partially_filled", filled_at=now,
+                  filled_avg_price=149.0, filled_qty=4.0),
+        source="poll",
+    )
+    assert late.order.status == "filled"
+    assert late.order.filled_quantity == 10.0
+    assert late.order.filled_price == 150.0

@@ -72,6 +72,51 @@ def _normalize_alpaca_status(raw: str) -> str:
     return mapped
 
 
+# Order lifecycle rank. A canonical status may only be replaced by one of
+# equal or higher rank. Snapshots reach upsert_order_from_alpaca from three
+# writers (submit path, trade-updates stream, polling sweeper) with no
+# ordering guarantee, so a stale "new"/"accepted" snapshot can land after a
+# "filled" one. Without this rule the row regressed to "submitted", the
+# sweeper re-polled it, and the reconciler saw a second submitted->filled
+# transition: the same fill was booked into `trades` twice, which is what
+# left phantom-open rows and shifted entry/exit pairing by one round-trip.
+# Terminal -> terminal (e.g. filled -> cancelled) is still applied so the
+# reconciler's filled_reverted anomaly path keeps working.
+_STATUS_RANK = {
+    "pending": 0,
+    "submitted": 0,
+    "partially_filled": 1,
+    "filled": 2,
+    "cancelled": 2,
+    "rejected": 2,
+    "expired": 2,
+}
+
+
+def merge_order_status(stored: Optional[str], incoming: str) -> str:
+    """Return the status a row should hold after applying ``incoming``."""
+    if stored is None:
+        return incoming
+    if _STATUS_RANK.get(stored, 0) > _STATUS_RANK.get(incoming, 0):
+        return stored
+    return incoming
+
+
+def _sql_status_rank(column: str) -> str:
+    """SQL CASE expression mirroring _STATUS_RANK for ``column``."""
+    whens = " ".join(
+        f"WHEN '{status}' THEN {rank}"
+        for status, rank in _STATUS_RANK.items() if rank
+    )
+    return f"(CASE {column} {whens} ELSE 0 END)"
+
+
+_STALE_SNAPSHOT_SQL = (
+    f"{_sql_status_rank('orders.status')} > "
+    f"{_sql_status_rank('EXCLUDED.status')}"
+)
+
+
 def _scope_filter(
     scope: Optional[BacktestScope], *, next_arg: int,
 ) -> tuple[str, tuple]:
@@ -1396,8 +1441,13 @@ class Database:
                     existing["status"] if existing is not None else None
                 )
                 now_ts = datetime.now(timezone.utc)
+                # The stale-snapshot guard lives in SQL (not only in Python
+                # off the SELECT above) because the no-existing-row case
+                # takes no lock: a concurrent writer can insert "filled"
+                # between our SELECT and this INSERT, and the ON CONFLICT
+                # branch must still refuse to regress it.
                 row = await conn.fetchrow(
-                    """
+                    f"""
                     INSERT INTO orders
                       (symbol, side, quantity, order_type, submitted_at,
                        signal_strength, alpaca_order_id, status,
@@ -1408,13 +1458,21 @@ class Database:
                     ON CONFLICT (alpaca_order_id)
                       WHERE alpaca_order_id IS NOT NULL
                     DO UPDATE SET
-                        status = EXCLUDED.status,
-                        filled_at = COALESCE(EXCLUDED.filled_at,
-                                             orders.filled_at),
-                        filled_price = COALESCE(EXCLUDED.filled_price,
-                                                orders.filled_price),
-                        filled_quantity = COALESCE(EXCLUDED.filled_quantity,
-                                                   orders.filled_quantity),
+                        status = CASE WHEN {_STALE_SNAPSHOT_SQL}
+                                      THEN orders.status
+                                      ELSE EXCLUDED.status END,
+                        filled_at = CASE WHEN {_STALE_SNAPSHOT_SQL}
+                                         THEN orders.filled_at
+                                         ELSE COALESCE(EXCLUDED.filled_at,
+                                                       orders.filled_at) END,
+                        filled_price = CASE WHEN {_STALE_SNAPSHOT_SQL}
+                                            THEN orders.filled_price
+                                            ELSE COALESCE(EXCLUDED.filled_price,
+                                                          orders.filled_price) END,
+                        filled_quantity = CASE WHEN {_STALE_SNAPSHOT_SQL}
+                                               THEN orders.filled_quantity
+                                               ELSE COALESCE(EXCLUDED.filled_quantity,
+                                                             orders.filled_quantity) END,
                         last_reconciled_at = EXCLUDED.last_reconciled_at,
                         reconcile_source = EXCLUDED.reconcile_source
                     RETURNING id, symbol, side, quantity, order_type,
@@ -1452,9 +1510,12 @@ class Database:
             last_reconciled_at=row["last_reconciled_at"],
             reconcile_source=row["reconcile_source"],
         )
+        # Report the status the row actually holds, not the snapshot's: when
+        # a stale snapshot was refused above, the reconciler must see "no
+        # change" rather than a phantom filled->submitted transition.
         return UpsertResult(
             order=order, old_status=old_status,
-            new_status=canonical_status, inserted=inserted,
+            new_status=row["status"], inserted=inserted,
         )
 
     # ── Trade methods ──────────────────────────────────────────────
